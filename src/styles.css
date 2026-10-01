@@ -1812,6 +1812,18 @@ input[type="range"]::-moz-range-thumb {
   gap: var(--space-xs);
   margin-block: var(--space-xs);
 }
+.voice-creation { margin-top: var(--space-md); }
+.enhancement-session-list { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-block: var(--space-md); }
+.enhancement-session-list .selected { color: var(--color-accent); background: var(--color-input); }
+.enhancement-session-list button { text-align: left; overflow-wrap: anywhere; }
+.library-toolbar { flex-wrap: wrap; }
+.voice-creation .voice-card .button { margin-block: var(--space-sm); }
+.unit-member-list { padding-left: var(--space-lg); }
+.unit-member-list li { margin-block: var(--space-xs); }
+.unit-panel { border-top: 1px solid var(--color-rule); padding-top: var(--space-md); }
+.unit-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.script-row[data-group-playing="true"] { background: var(--color-input); border-left-color: var(--color-accent); }
+.enhancement-mode-tabs { margin-top: var(--space-md); }
 @media (pointer: coarse) {
   input:not([type="checkbox"]):not([type="range"]):not([type="file"]),
   .select-trigger {

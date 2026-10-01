@@ -2,8 +2,9 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fail, same, text, uid } from "./store.mjs";
 import { storedAudioUnavailable } from "./audio.mjs";
-import { compile, templateOf, templateCatalog, listTemplates } from "./templates.mjs";
+import { compile, templateOf, templateCatalog, listTemplates, listUnitTemplates } from "./templates.mjs";
 export { compile } from "./templates.mjs";
+import { createEnhancement, defaultFeatures } from "./enhancement.mjs";
 
 export const defaultConfig = templateOf("dry-v1").defaults;
 export const active = (j) => ["queued", "running"].includes(j.status);
@@ -273,9 +274,12 @@ export function createDomain(store) {
         s.config[key] > max
       )
         fail("音频数值设置超出允许范围");
+    const target = templateOf(s.template);
+    if (target.scope && target.scope !== "single") fail("此模板属于增强目标，不能用于旧单条片段");
     compile(s);
   }
-  return {
+  let enhancement;
+  const api = {
     list,
     previewTemplate(p) {
       const c = editable(p.chapterId,p.revision), s = store.get("segments",p.id);
@@ -383,6 +387,8 @@ export function createDomain(store) {
     },
     mutate(action, p) {
       return store.transaction(() => {
+        enhancement.assertStructural(action, p);
+        const apply = () => {
         if (action === "settings.update") {
           const previous = store.maybe("settings", "models") || {
             id: "models",
@@ -399,7 +405,11 @@ export function createDomain(store) {
           const gap = p.defaultGap ?? previous.defaultGap ?? 0.5;
           if (!Number.isFinite(gap) || gap < 0 || gap > 10)
             fail("默认间隔应为 0～10 秒");
+          const features = { ...defaultFeatures, ...previous.features, ...p.features };
+          if (Object.keys(features).some(k => !Object.hasOwn(defaultFeatures, k) || typeof features[k] !== "boolean")) fail("增强功能开关必须是明确的开关值");
           return store.put("settings", {
+            ...previous,
+            features,
             id: "models",
             revision: (previous.revision ?? 1) + 1,
             textModel: name,
@@ -989,7 +999,35 @@ export function createDomain(store) {
           return s;
         }
         fail("未知操作");
+        };
+        const result = apply();
+        enhancement.syncLegacy();
+        return result;
       });
     },
   };
+  enhancement = createEnhancement(store, { ...api, inputOf, basisOf, coverage, performanceIssues });
+  api.enhancement = enhancement;
+  const originalMutate = api.mutate, originalSnapshot = api.snapshot, originalChapter = api.chapter;
+  api.mutate = (action, p) => /^(voice-session|voice-candidate|unit|event)\./.test(action)
+    ? store.transaction(() => enhancement.mutate(action, p)) : originalMutate(action, p);
+  api.snapshot = () => {
+    enhancement.syncLegacy();
+    const result = originalSnapshot();
+    return { ...result, ...enhancement.snapshot(), enhancementTemplates:listUnitTemplates(), jobs: result.jobs.map(j => { if (!['voice-create','unit-generate'].includes(j.kind)) return j; const a=store.all('attempts',j.id).find(a=>a.status==='success' && store.maybe('audios',a.id)); return {...j,...(a?{resultAudioId:a.id,resultNotSelected:a.adopted===false}:{})}; }), chapters: result.chapters.map(c => {
+      const task = result.jobs.find(j => j.chapterId === c.id && active(j));
+      const rows = enhancement.resolve(c.id);
+      const base = ['待整理','全已排除','待校对','待确认'].includes(c.productionStatus);
+      const unknown = rows.some(r => enhancement.getUnit(r.s.id).variants[r.s.mode].latest === 'unknown');
+      return { ...c, productionStatus: task ? c.productionStatus : base ? c.productionStatus : unknown ? '结果待核对' : rows.some(r => r.validity === 'missing') ? '待生成' : rows.some(r => r.validity !== 'matched') ? '待更新' : rows.some(r => r.review === 'rework') ? '需返工' : rows.every(r => r.review === 'passed') ? '已检查' : '待检查' };
+    }) };
+  };
+  api.chapter = id => {
+    enhancement.syncLegacy();
+    const result = originalChapter(id), rows = enhancement.resolve(id), reviewItems = rows.map(r => ({ id: r.s.id, audioId: r.a?.id || null, basis: r.basis }));
+    const exportReady = rows.length > 0 && result.coverage.valid && result.segments.filter(s => !s.excluded).every(s => s.roleConfirmed && s.identityConfirmed) && rows.every(r => r.validity === 'matched' && r.review === 'passed');
+    const units = store.all('units', id).filter(u => u.state !== 'retired').map(enhancement.view);
+    return { ...result, units, events: units.flatMap(u => u.events), reviewItems, playbackItems: rows.map(r => ({ id: r.s.id, unitId: r.s.id, members: r.s.members, mode: r.s.mode, audioId: r.a?.id || null, basis: r.basis, validity: r.validity, review: r.review })), segments: result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, ...(group ? {groupId:group.id} : {}) }; }), exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && same(e.confirmation?.reviewItems, reviewItems) })) };
+  };
+  return api;
 }

@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
-import { existsSync, createWriteStream } from "node:fs";
+import { existsSync, createWriteStream, statSync } from "node:fs";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
@@ -19,14 +19,64 @@ import { fail, same, uid } from "./store.mjs";
 import { templateCatalog, templateOf } from "./templates.mjs";
 
 export function createWorker(store, domain, config) {
+  if (config.callLimit !== undefined && (!Number.isSafeInteger(config.callLimit) || config.callLimit < 1)) fail("本地调用额度应为正整数");
+  const quotaScope = config.usageScope || "audio-calls-v1";
+  if (typeof quotaScope !== "string" || !quotaScope || quotaScope.length > 100) fail("调用额度范围无效");
   let running = false,
-    closing = false,
-    routeBlocked = !!store.maybe("settings", "audio-route")?.blocked;
-  const setRouteBlocked = (blocked) => {
-    routeBlocked = blocked;
-    store.put("settings", { id: "audio-route", blocked });
+    closing = false;
+  const routeBlocked = () => !!store.maybe("settings", "audio-route")?.blocked;
+  const setRouteBlocked = blocked => store.put("settings", { id: "audio-route", blocked });
+  const requestOf = p => JSON.parse(JSON.stringify({ ...p, kind: p.kind || "generate" }));
+  const existingCommand = p => {
+    if (typeof p?.commandId !== "string" || !p.commandId || p.commandId.length > 100) fail("生成命令标识缺失");
+    const existing = store.all("jobs").find(j => j.commandId === p.commandId);
+    if (existing?.request && !same(existing.request, requestOf(p))) fail("相同命令标识的请求内容不同，请核对后使用新命令", 409);
+    if (existing && !existing.request) {
+      const kind = p.kind || "generate", attempt = store.all("attempts", existing.id)[0];
+      let matches = kind === existing.kind;
+      if (kind === "voice-test") matches &&= same([p.voiceId, p.text, p.entityRevision], [existing.voiceId, attempt?.input.text, existing.voiceRevision]);
+      else {
+        matches &&= p.chapterId === existing.chapterId && p.revision === existing.revision;
+        if (kind === "generate") matches &&= Array.isArray(p.ids) && same([...p.ids].sort(), [...existing.ids].sort());
+        if (kind === "export") matches &&= p.format === existing.format && p.arrangement === existing.arrangement && same(p.reviewItems, existing.confirmation?.reviewItems);
+      }
+      if (!matches) fail("旧命令的实际目标或内容不同，请使用新命令", 409);
+    }
+    return existing;
   };
   const setJob = (j) => store.put("jobs", j, j.chapterId || "");
+  const referenceIds = a => a.input.referenceVoiceIds || (a.input.voiceId ? [a.input.voiceId] : []);
+  async function inspectReference(v) {
+    const file = join(store.directory, v.path), bytes = statSync(file).size;
+    if (!bytes || bytes > 10 * 1024 * 1024) fail("参考声音应为 1 字节～10 MB，本次未发送");
+    const meta = await inspect(file);
+    if (meta.duration > 30 || !/^(wav|mp3)$/.test(meta.format)) fail("参考声音须为 WAV/MP3 且不超过 30 秒，本次未发送");
+  }
+  function reserve(attempts) {
+    if (config.callLimit === undefined || !attempts.length) return;
+    const id = `audio-usage:${quotaScope}`;
+    const usage = store.maybe("settings", id) || { id, scope: quotaScope, limit: config.callLimit, reserved: 0, used: 0 };
+    if (usage.limit !== config.callLimit) fail("调用额度范围已使用其他上限，请使用明确的新额度范围", 409);
+    if (usage.used + usage.reserved + attempts.length > usage.limit) fail("本地授权调用额度不足；结果不明和在途请求仍占用额度");
+    usage.reserved += attempts.length;
+    store.put("settings", usage);
+    for (const a of attempts) a.quota = { scope: quotaScope, state: "reserved" };
+  }
+  function moveQuota(a, state) {
+    if (a.quota?.state !== "reserved") return;
+    const usage = store.get("settings", `audio-usage:${a.quota.scope}`);
+    usage.reserved--;
+    if (state === "used") usage.used++;
+    a.quota = { ...a.quota, state };
+    store.put("settings", usage);
+  }
+  function saveAttempt(a, jobId) {
+    store.transaction(() => {
+      if (["stopped", "failed"].includes(a.status)) moveQuota(a, "released");
+      store.put("attempts", a, jobId);
+      domain.enhancement?.setAttemptStatus(store.get("jobs", jobId), a, a.status);
+    });
+  }
   function preflight(c, ids, whole = false) {
     if (!Array.isArray(ids) || new Set(ids).size !== ids.length) fail("生成片段列表无效");
     const all = domain.list(c.id),
@@ -55,23 +105,35 @@ export function createWorker(store, domain, config) {
         fail("提示超过 3000 字符，请拆分片段");
       domain.validate(s, c);
     }
+    domain.enhancement?.assertLegacyGeneration?.(c, selected);
     return selected;
   }
   function enqueue(p) {
     return store.transaction(() => {
-      if (
-        typeof p.commandId !== "string" ||
-        p.commandId.length > 100 ||
-        !p.commandId
-      )
-        fail("生成命令标识缺失");
-      const existing = store
-        .all("jobs")
-        .find((j) => j.commandId === p.commandId);
+      const existing = existingCommand(p);
       if (existing) return existing;
+      if (["voice-create", "unit-generate"].includes(p.kind)) {
+        if (!config.key) fail("请先配置 Kunpo API Key");
+        if (routeBlocked() && !p.resumeRoute) fail("接口已暂停，请核对配置后重新启用");
+        const prepared = domain.enhancement.prepare(p, config);
+        const job = { ...prepared.job, id: uid(), commandId: p.commandId, request: requestOf(p), kind: p.kind, chapterId: prepared.job.chapterId || "", status: "queued", done: 0, total: prepared.attempts.length, stop: false, createdAt: new Date().toISOString() };
+        const attempts = prepared.attempts.map(a => ({ ...a, id: uid(), jobId: job.id, status: "queued", prompt: compile(a.input), model: a.input.model }));
+        for (const a of attempts) {
+          if (Array.from(a.prompt).length > 3000) fail("提示超过 3000 字符，请拆组或缩减说明");
+          if (referenceIds(a).length > 3 || new Set(referenceIds(a)).size !== referenceIds(a).length) fail("参考声音最多三份且应去重");
+        }
+        reserve(attempts);
+        setJob(job);
+        for (const a of attempts) {
+          store.put("attempts", a, job.id);
+          domain.enhancement.setAttemptStatus(job, a, "queued");
+        }
+        setRouteBlocked(false);
+        return job;
+      }
       if (p.kind === "voice-test") {
         if (!config.key) fail("请先配置 Kunpo API Key");
-        if (routeBlocked && !p.resumeRoute)
+        if (routeBlocked() && !p.resumeRoute)
           fail("接口已暂停，请核对配置后重新启用");
         const v = store.get("voices", p.voiceId);
         checkEntityRevision(v, p.entityRevision);
@@ -104,6 +166,9 @@ export function createWorker(store, domain, config) {
           commandId: p.commandId,
           chapterId: "",
           kind: "voice-test",
+          targetKind: "voice-test",
+          targetId: v.id,
+          request: requestOf(p),
           voiceId: v.id,
           status: "queued",
           voiceRevision: v.revision ?? 1,
@@ -113,18 +178,17 @@ export function createWorker(store, domain, config) {
           createdAt: new Date().toISOString(),
         };
         setJob(job);
-        store.put(
-          "attempts",
-          {
-            id: uid(),
-            jobId: job.id,
-            input,
-            prompt: compile(input),
-            status: "queued",
-            model: config.model,
-          },
-          job.id,
-        );
+        const attempt = {
+          id: uid(),
+          jobId: job.id,
+          input,
+          prompt: compile(input),
+          status: "queued",
+          model: config.model,
+          targetKind: "voice-test", targetId: v.id,
+        };
+        reserve([attempt]);
+        store.put("attempts", attempt, job.id);
         return job;
       }
       const c = domain.editable(p.chapterId, p.revision);
@@ -133,9 +197,10 @@ export function createWorker(store, domain, config) {
         fail("任务类型无效");
       const all = domain.list(c.id).filter((s) => !s.excluded);
       let selected = all;
+      let preparedRender;
       if (kind === "generate") {
         if (!config.key) fail("请先在服务端配置 Kunpo API Key");
-        if (routeBlocked && !p.resumeRoute)
+        if (routeBlocked() && !p.resumeRoute)
           fail("上次调用发生共享接口错误，请检查配置后选择重新启用接口");
         if (!Array.isArray(p.ids) || new Set(p.ids).size !== p.ids.length)
           fail("生成片段列表无效");
@@ -143,6 +208,9 @@ export function createWorker(store, domain, config) {
         if (selected.some((s) => s.latest === "unknown") && !p.retryUnknown)
           fail("所选包含结果不明的请求，需明确确认可能重复计费");
         setRouteBlocked(false);
+      } else if (domain.enhancement?.prepareRender) {
+        preparedRender = domain.enhancement.prepareRender(p, c);
+        selected = preparedRender.rows.map(row => row.s);
       } else {
         if (!all.length) fail("章节没有有效朗读片段");
         if (all.some((s) => segmentStatus(store, s).validity !== "matched"))
@@ -193,6 +261,9 @@ export function createWorker(store, domain, config) {
         id: uid(),
         chapterId: c.id,
         commandId: p.commandId,
+        request: requestOf(p),
+        targetKind: kind === "generate" ? "single" : "chapter",
+        targetId: c.id,
         kind,
         status: "queued",
         revision: c.revision,
@@ -203,13 +274,15 @@ export function createWorker(store, domain, config) {
         total: selected.length,
         stop: false,
         createdAt: new Date().toISOString(),
-        ...(kind === "export" ? { confirmation: { arrangement: c.arrangement, reviewItems: p.reviewItems, at: new Date().toISOString() } } : {}),
+        ...(kind === "export" ? { confirmation: preparedRender?.confirmation || { arrangement: c.arrangement, reviewItems: p.reviewItems, at: new Date().toISOString() } } : {}),
       };
       setJob(job);
-      if (kind === "generate")
+      if (kind === "generate") {
+        const attempts = [];
         for (const s of selected) {
           s.latest = "queued";
           store.put("segments", s, c.id);
+          domain.enhancement?.syncLegacySegment(s);
           const attempt = {
             id: uid(),
             jobId: job.id,
@@ -221,9 +294,13 @@ export function createWorker(store, domain, config) {
             roleId: s.roleId,
             status: "queued",
             model: inputOf(s).model,
+            targetKind: "single", targetId: s.id,
           };
-          store.put("attempts", attempt, job.id);
+          attempts.push(attempt);
         }
+        reserve(attempts);
+        for (const a of attempts) store.put("attempts", a, job.id);
+      }
       return job;
     });
   }
@@ -234,7 +311,7 @@ export function createWorker(store, domain, config) {
         ? store.get("segments", attempt.segmentId)
         : null;
       const j = store.get("jobs", attempt.jobId);
-      const c = s ? store.get("chapters", s.chapterId) : null;
+      const c = (s?.chapterId || j.chapterId) ? store.get("chapters", s?.chapterId || j.chapterId) : null;
       const audio = {
         id: attempt.id,
         path: `audio/${attempt.id}.wav`,
@@ -242,15 +319,24 @@ export function createWorker(store, domain, config) {
         basis: attempt.basis,
         prompt: attempt.prompt,
         model: attempt.model,
-        slot: {
+        targetKind: attempt.targetKind || (s ? "single" : "voice-test"),
+        targetId: attempt.targetId || s?.id || attempt.input.voiceId,
+        ...(attempt.input.slots ? { slots: attempt.input.slots, memberIds: attempt.input.members.map(m => m.id), mode: attempt.mode } : {}),
+        ...(["candidate", "unit"].includes(attempt.targetKind) ? { referenceVoiceIds: referenceIds(attempt) } : { slot: {
           speaker: "A",
           roleId: attempt.roleId,
           voiceId: attempt.input.voiceId,
-        },
+        } }),
         ...meta,
         createdAt: new Date().toISOString(),
       };
       store.put("audios", audio, c?.id || "");
+      if (["candidate", "unit"].includes(attempt.targetKind)) {
+        attempt.adopted = domain.enhancement.register(j, attempt, audio);
+        attempt.status = "success";
+        store.put("attempts", attempt, j.id);
+        return;
+      }
       if (!s) {
         const v = store.get("voices", attempt.input.voiceId);
         const history = store.all("attempts");
@@ -280,6 +366,7 @@ export function createWorker(store, domain, config) {
         s.latest = "success";
         s.review = null;
         store.put("segments", s, c.id);
+        domain.enhancement?.syncLegacySegment(s);
         domain.touch(c, false);
       }
       attempt.status = "success";
@@ -293,33 +380,44 @@ export function createWorker(store, domain, config) {
       if (!active(fresh)) break;
       if (store.get("attempts", a.id).status !== "queued") continue;
       let s = a.segmentId ? store.get("segments", a.segmentId) : null;
-      if (fresh.stop || routeBlocked || closing) {
+      if (fresh.stop || routeBlocked() || closing) {
         a.status = "stopped";
         if (s) {
           s.latest = "stopped";
           store.put("segments", s, job.chapterId);
+          domain.enhancement?.syncLegacySegment(s);
         }
-        store.put("attempts", a, job.id);
+        saveAttempt(a, job.id);
         continue;
       }
       try {
-        const reference = store.get("voices", a.input.voiceId);
-        if (
-          reference.path &&
-          !["stopped", "deleted"].includes(reference.state)
-        ) {
-          try {
-            await inspect(join(store.directory, reference.path));
-          } catch {
-            fail("参考声音损坏或不可解码，本条未发送");
+        for (const id of referenceIds(a)) {
+          const reference = store.get("voices", id);
+          if (reference.path && !["stopped", "deleted"].includes(reference.state)) {
+            try {
+              await inspectReference(reference);
+            } catch (e) {
+              if (e.status) throw e;
+              fail("参考声音损坏或不可解码，本条未发送");
+            }
           }
         }
+        const references = await Promise.all(referenceIds(a).map(async id => {
+          const voice = store.get("voices", id);
+          if (!["active", "archived"].includes(voice.state) || voice.deletePending || !voice.path)
+            throw Object.assign(new Error("参考已停用，尚未发送的请求已停止"), { status: 400, stopped: true });
+          const data = await readFile(join(store.directory, voice.path));
+          if (!data.length || data.length > 10 * 1024 * 1024) fail("参考声音读取后超出 10 MB 规格，本次未发送");
+          return { audio_data: data.toString("base64") };
+        }));
         const dispatch = store.transaction(() => {
           const latest = store.get("jobs", job.id);
           if (!active(latest) || store.get("attempts", a.id).status !== "queued") return false;
-          if (latest.stop || closing || routeBlocked || store.maybe("settings", "audio-route")?.blocked)
+          if (latest.stop || closing || routeBlocked())
             throw Object.assign(new Error("尚未提交的请求已停止"), { status: 400, stopped: true });
-          if (s) {
+          if (["candidate", "unit"].includes(a.targetKind)) {
+            domain.enhancement.validateDispatch(latest, a);
+          } else if (s) {
             preflight(store.get("chapters", job.chapterId), [s.id]);
             if (store.get("chapters", job.chapterId).revision !== job.revision)
               fail("章节修订已改变", 409);
@@ -334,18 +432,24 @@ export function createWorker(store, domain, config) {
                 stopped: true,
               });
           }
+          for (const id of referenceIds(a)) {
+            const v = store.get("voices", id);
+            if (!["active", "archived"].includes(v.state) || v.deletePending || !v.path || !existsSync(join(store.directory, v.path)))
+              throw Object.assign(new Error("参考已停用，尚未发送的请求已停止"), { status: 400, stopped: true });
+          }
           a.status = "sending";
+          moveQuota(a, "used");
           a.createdAt = new Date().toISOString();
           store.put("attempts", a, job.id);
+          domain.enhancement?.setAttemptStatus(latest, a, "running");
           if (s) {
             s.latest = "running";
             store.put("segments", s, job.chapterId);
+            domain.enhancement?.syncLegacySegment(s);
           }
           return true;
         });
         if (!dispatch) continue;
-        const voice = store.get("voices", a.input.voiceId);
-        const data = await readFile(join(store.directory, voice.path));
         const response = await fetch(config.audioUrl, {
           method: "POST",
           headers: {
@@ -355,7 +459,7 @@ export function createWorker(store, domain, config) {
           body: JSON.stringify({
             model: a.model,
             text_prompt: a.prompt,
-            references: [{ audio_data: data.toString("base64") }],
+            ...(references.length ? { references } : {}),
             audio_config: {
               format: "wav",
               sample_rate: 48000,
@@ -405,18 +509,22 @@ export function createWorker(store, domain, config) {
         await rename(file + ".part", file);
         register(a, meta);
       } catch (e) {
-        const unknown = ["sending", "unknown"].includes(store.get("attempts", a.id).status) && !e.known;
+        const persisted = store.get("attempts", a.id);
+        a.quota = persisted.quota;
+        a.createdAt = persisted.createdAt;
+        const unknown = ["sending", "unknown"].includes(persisted.status) && !e.known;
         a.status = unknown ? "unknown" : e.stopped ? "stopped" : "failed";
         a.error = e.status
           ? e.message
           : e.known
             ? e.message
             : "本次音频未能完整确认，保留记录，请核对后手动处理";
-        store.put("attempts", a, job.id);
+        saveAttempt(a, job.id);
         if (s && active(store.get("jobs", job.id))) {
           s = store.get("segments", a.segmentId);
           s.latest = a.status;
           store.put("segments", s, job.chapterId);
+          domain.enhancement?.syncLegacySegment(s);
         }
         job.error = a.error;
         if (unknown) job.stop = true;
@@ -439,9 +547,9 @@ export function createWorker(store, domain, config) {
   async function render(job) {
     const c = store.get("chapters", job.chapterId);
     const isCurrent = () => active(store.get("jobs", job.id)) && store.get("chapters", c.id).arrangement === job.arrangement;
-    for (const s of domain.list(c.id).filter(s => !s.excluded)) {
-      const a = s.current && store.maybe("audios", s.current);
-      if (!a || !await validateStoredAudio(store, a)) fail(`第 ${s.order + 1} 条音频损坏或缺失，请先恢复文件`);
+    const rows = domain.enhancement?.resolve(c.id) || domain.list(c.id).filter(s => !s.excluded).map(s => ({s,a:s.current && store.maybe("audios",s.current)}));
+    for (const [index,{s,a}] of rows.entries()) {
+      if (!a || !await validateStoredAudio(store, a)) fail(`第 ${(s.order ?? index) + 1} 条音频损坏或缺失，请先恢复文件`);
     }
     let master = store
       .all("masters", c.id)
@@ -464,11 +572,7 @@ export function createWorker(store, domain, config) {
     }
     if (!master) {
       const id = uid();
-      const segments = domain
-        .list(c.id)
-        .filter((s) => !s.excluded)
-        .map((s) => ({ s, a: segmentStatus(store, s).audio }));
-      const info = await buildMaster(store, segments, c.gap, id);
+      const info = await buildMaster(store, rows, c.gap, id);
       master = {
         id,
         jobId: job.id,
@@ -515,7 +619,7 @@ export function createWorker(store, domain, config) {
     job.status = "running";
     setJob(job);
     try {
-      if (["generate", "voice-test"].includes(job.kind)) await generate(job);
+      if (["generate", "voice-test", "voice-create", "unit-generate"].includes(job.kind)) await generate(job);
       else await render(job);
     } catch (e) {
       job.status = "failed";
@@ -543,14 +647,19 @@ export function createWorker(store, domain, config) {
             continue;
           } catch {}
         }
-        if (!interrupted) continue;
+        if (!interrupted) {
+          if (a.quota?.state === "reserved" && ["queued", "failed", "stopped"].includes(a.status))
+            store.transaction(() => { moveQuota(a, "released"); store.put("attempts", a, j.id); });
+          continue;
+        }
         if (["queued", "sending"].includes(a.status)) {
           a.status = a.status === "sending" ? "unknown" : "stopped";
-          store.put("attempts", a, j.id);
+          saveAttempt(a, j.id);
           if (a.segmentId) {
             const s = store.get("segments", a.segmentId);
             s.latest = a.status;
             store.put("segments", s, j.chapterId);
+            domain.enhancement?.syncLegacySegment(s);
           }
         }
       }
@@ -573,7 +682,7 @@ export function createWorker(store, domain, config) {
   return {
     enqueue,
     async submit(p) {
-      const existing = store.all("jobs").find(j => j.commandId === p.commandId);
+      const existing = existingCommand(p);
       if (existing) return existing;
       // Decode every required file before accepting the batch; enqueue rechecks revisions and locks after awaits.
       if (p.kind === "voice-test" || !p.kind || p.kind === "generate") {
@@ -581,15 +690,23 @@ export function createWorker(store, domain, config) {
         for (const id of new Set(rows.map(s => s.voiceId))) {
           const v = store.get("voices", id);
           if (["stopped", "deleted"].includes(v.state) || !v.path) fail("参考声音已停用或删除");
-          try { await inspect(join(store.directory, v.path)); }
-          catch { fail(`参考声音「${v.name || id}」损坏或缺失，本批尚未入队`); }
+          try { await inspectReference(v); }
+          catch { fail(`参考声音「${v.name || id}」损坏或缺失，或不符合 30 秒/10 MB 规格；本批尚未入队`); }
+        }
+      } else if (p.kind === "unit-generate") {
+        const prepared = domain.enhancement.prepare(p, config, true);
+        for (const id of new Set(prepared.attempts.flatMap(referenceIds))) {
+          const v = store.get("voices", id);
+          if (["stopped", "deleted"].includes(v.state) || !v.path) fail("参考声音已停用或删除");
+          try { await inspectReference(v); }
+          catch { fail(`参考声音「${v.name || id}」损坏或缺失，或不符合 30 秒/10 MB 规格；本批尚未入队`); }
         }
       } else if (["master", "export"].includes(p.kind)) {
         const c = domain.editable(p.chapterId, p.revision);
-        for (const s of domain.list(c.id).filter(s => !s.excluded)) {
-          const a = segmentStatus(store, s).audio;
-          if (!a) fail(`第 ${s.order + 1} 条没有音频`);
-          if (!await validateStoredAudio(store, a)) fail(`第 ${s.order + 1} 条音频损坏或缺失，请恢复备份或明确重做；本批未提交`);
+        const rows = domain.enhancement?.resolve(c.id) || domain.list(c.id).filter(s => !s.excluded).map(s => ({s,a:segmentStatus(store,s).audio}));
+        for (const [index,{s,a}] of rows.entries()) {
+          if (!a) fail(`第 ${(s.order ?? index) + 1} 条没有音频`);
+          if (!await validateStoredAudio(store, a)) fail(`第 ${(s.order ?? index) + 1} 条音频损坏或缺失，请恢复备份或明确重做；本批未提交`);
         }
       }
       return enqueue(p);
@@ -601,11 +718,12 @@ export function createWorker(store, domain, config) {
       for (const j of store.all("jobs").filter((j) => j.status === "queued")) {
         for (const a of store.all("attempts", j.id)) {
           a.status = "stopped";
-          store.put("attempts", a, j.id);
+          saveAttempt(a, j.id);
           if (a.segmentId) {
             const s = store.get("segments", a.segmentId);
             s.latest = "stopped";
             store.put("segments", s, j.chapterId);
+            domain.enhancement?.syncLegacySegment(s);
           }
         }
         j.status = "stopped";
@@ -617,7 +735,7 @@ export function createWorker(store, domain, config) {
       return running;
     },
     get routeBlocked() {
-      return routeBlocked;
+      return routeBlocked();
     },
   };
 }

@@ -35,6 +35,24 @@ async function verify(dir) {
     }
     if (Object.values(db.prepare("PRAGMA integrity_check").get())[0] !== "ok")
       throw new Error("数据库完整性检查失败");
+    const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name));
+    const records = table => tables.has(table) ? db.prepare(`SELECT data FROM ${table}`).all().map(r => JSON.parse(r.data)) : [];
+    const schema = records('settings').find(v => v.id === 'data-schema');
+    if (schema?.version > 2) throw new Error('数据模式高于此维护版本，请使用匹配版本');
+    if (schema?.version === 2) {
+      for (const table of ['voiceSessions','units','events']) if (!tables.has(table)) throw new Error(`增强数据表缺失：${table}`);
+      const segments = new Set(records('segments').map(v => v.id)), audios = new Set(records('audios').map(v => v.id)), sessions = new Set(records('voiceSessions').map(v => v.id)), units = new Set(records('units').map(v => v.id));
+      for (const u of records('units')) {
+        if (!Array.isArray(u.members) || !u.members.length || u.members.some(id => !segments.has(id))) throw new Error('生成单元成员引用缺失');
+        for (const v of Object.values(u.variants || {})) for (const id of [v.current,v.previous,v.approved]) if (id && !audios.has(id)) throw new Error('生成单元版本音频引用缺失');
+      }
+      for (const e of records('events')) if (!units.has(e.unitId)) throw new Error('声音事件单元引用缺失');
+      for (const a of records('audios')) {
+        if (a.input?.targetKind === 'candidate' && !sessions.has(a.input.sessionId)) throw new Error('候选声音会话引用缺失');
+        if (a.input?.targetKind === 'unit' && !units.has(a.input.unitId)) throw new Error('音频生成单元引用缺失');
+      }
+      for (const v of records('voices')) if (v.sourceAudioId && !audios.has(v.sourceAudioId)) throw new Error('音色来源候选引用缺失');
+    }
     const retained = new Set();
     for (const table of ["voices", "audios", "masters", "exports"])
       for (const row of db.prepare(`SELECT data FROM ${table}`).all()) {
@@ -54,9 +72,13 @@ async function verify(dir) {
     if (mode === "cleanup") {
       // ponytail: 保留所有尝试及 .part；以后需人工判定未知结果，不能靠年龄自动回收。
       for (const row of db.prepare("SELECT data FROM attempts").all())
-        retained.add(resolve(dir, `audio/${JSON.parse(row.data).id}.wav`));
+        { const a = JSON.parse(row.data); retained.add(resolve(dir, a.path || `audio/${a.id}.wav`)); }
       const candidates = [];
-      for (const folder of ["voices", "audio", "masters", "exports"]) {
+      const folders = ['voices', 'audio', 'masters', 'exports'];
+      for (const p of records('projects')) if (p.folder) for (const kind of ['audio','masters','exports']) folders.push(join(p.folder,kind));
+      for (const folder of folders) {
+        const rel = relative(dir, resolve(dir, folder));
+        if (rel.startsWith('..') || isAbsolute(rel)) throw new Error('项目目录越界，拒绝清理');
         const base = join(dir, folder);
         if (!existsSync(base) || !(await lstat(base)).isDirectory()) continue;
         for (const entry of await readdir(base, { withFileTypes: true })) {

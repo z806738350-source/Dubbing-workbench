@@ -11,6 +11,31 @@ export interface Voice {
   sampleAudioId?: string;
   deletePending?: boolean;
   deleteError?: string;
+  sourceCandidateId?: string;
+}
+export interface VoiceCandidate {
+  id: string;
+  jobId: string;
+  status: string;
+  error?: string;
+  audioId?: string;
+  savedVoiceId?: string;
+  referenceEligible?: boolean;
+  discarded?: boolean;
+  late?: boolean;
+  input?: {description?: string};
+  prompt?: string;
+}
+export interface VoiceSession {
+  id: string;
+  description: string;
+  text: string;
+  model: string;
+  template: string;
+  config: Segment["config"];
+  revision: number;
+  state: "active" | "abandoned";
+  candidates: VoiceCandidate[];
 }
 export interface AliasSource {
   name: string;
@@ -106,7 +131,10 @@ export interface Master {
   duration: number;
   sampleRate: number;
   mapping: {
-    segmentId: string;
+    segmentId?: string;
+    unitId?: string;
+    members?: string[];
+    mode?: "dry" | "scene";
     audioId: string;
     startFrame: number;
     endFrame: number;
@@ -121,6 +149,7 @@ export interface ExportRecord {
   createdAt: string;
 }
 export interface Job {
+  commandId?: string;
   resultAudioId?: string;
   resultNotSelected?: boolean;
   ids?: string[];
@@ -130,6 +159,10 @@ export interface Job {
   currentSegmentId?: string;
   elapsedSeconds?: number;
   voiceId?: string;
+  sessionId?: string;
+  unitIds?: string[];
+  unitId?: string;
+  mode?: "dry" | "scene";
   id: string;
   chapterId: string;
   kind: string;
@@ -140,8 +173,52 @@ export interface Job {
   stop: boolean;
   createdAt: string;
 }
+export interface SoundEvent {
+  unitRevision?: number;
+  chapterRevision?: number;
+  id: string;
+  unitId: string;
+  kind: "environment" | "effect" | "music";
+  description: string;
+  memberId: string;
+  position: "before" | "during" | "after";
+  startMemberId?: string;
+  endMemberId?: string;
+  startPosition?: "before" | "during" | "after";
+  endPosition?: "before" | "during" | "after";
+  state: "draft" | "adopted" | "removed";
+  validity: "valid" | "needsReview";
+  revision?: number;
+  evidence: {kind: string; quote?: string; quotes?: string[]; reason?: string};
+}
+export interface UnitVariant {
+  history?: {id:string;prompt:string;matched:boolean;selected:boolean}[];
+  guidance?: string;
+  current: string | null;
+  previous: string | null;
+  approved: string | null;
+  latest: string;
+  revision: number;
+  template?: string;
+  status: {validity: string; review: string; audio: AudioRecord | null; prompt: string; promptIssues: string[]; basis: Record<string, unknown>;input?:{template:string}|null};
+}
+export interface GenerationUnit {
+  chapterRevision?: number;
+  id: string;
+  chapterId: string;
+  kind: "single" | "group";
+  members: string[];
+  state: "active" | "pending" | "dissolved";
+  revision: number;
+  mode: "dry" | "scene";
+  guidance: string;
+  variants: {dry: UnitVariant; scene: UnitVariant};
+}
 export interface ChapterDetail extends Chapter {
-  playbackItems: {id: string; audioId: string | null; basis: Record<string, unknown>; validity: string}[];
+  reviewItems?: {id:string;audioId:string|null;basis:Record<string,unknown>}[];
+  playbackItems: {id: string; unitId?: string; members?: string[]; mode?: "dry" | "scene"; audioId: string | null; basis: Record<string, unknown>; validity: string; review?: string}[];
+  units?: GenerationUnit[];
+  events?: SoundEvent[];
   knownRoles: Role[];
   segments: Segment[];
   coverage: { valid: boolean; gaps: number; overlaps: number };
@@ -150,11 +227,13 @@ export interface ChapterDetail extends Chapter {
   suggestions: unknown[];
 }
 export interface State {
+  enhancementTemplates?: {id:string;name:string;description?:string;mode:string;scope:string}[];
   templates: {id: string; name: string; description: string; current: boolean}[];
   projects: Project[];
   chapters: Chapter[];
   roles: Role[];
   voices: Voice[];
+  voiceSessions?: VoiceSession[];
   jobs: Job[];
   settings: {
     revision: number;
@@ -164,5 +243,6 @@ export interface State {
     routeBlocked: boolean;
     textModel: string;
     defaultGap: number;
+    features?: {voiceCreation?: boolean; groups?: boolean; scenes?: boolean};
   };
 }

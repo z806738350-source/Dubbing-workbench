@@ -77,7 +77,7 @@ export default function AnalysisDialog({
     [checked, setChecked] = useState<string[]>([]),
     [ack, setAck] = useState(false);
   const model = modelOverride ?? defaultModel;
-  const drafts = chapter.suggestions as Suggestion[];
+  const drafts = (chapter.suggestions as Suggestion[]).filter(d=>d.kind !== "scene");
   const [viewId, setViewId] = useState("");
   const [editing, setEditing] = useState<DraftItem | null>(null);
   const [confirmRoles, setConfirmRoles] = useState(false);

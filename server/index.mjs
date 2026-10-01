@@ -8,6 +8,7 @@ import { createDomain, textModel } from "./domain.mjs";
 import { createWorker } from "./worker.mjs";
 import {
   uploadVoice,
+  saveCandidateVoice,
   toolsAvailable,
   drainReferenceDeletes,
   validateStoredAudio,
@@ -29,6 +30,8 @@ export function settings() {
     audioUrl: base.replace(/\/v1$/, "") + "/v1/audio/speech",
     baseUrl: base.replace(/\/v1$/, "") + "/v1",
     model: process.env.KUNPO_TTS_MODEL || "seed-audio-1.0",
+    ...(process.env.KUNPO_AUDIO_CALL_LIMIT ? { callLimit: Number(process.env.KUNPO_AUDIO_CALL_LIMIT) } : {}),
+    usageScope: process.env.KUNPO_AUDIO_USAGE_SCOPE || "audio-calls-v1",
   };
 }
 export async function startServer({
@@ -51,14 +54,22 @@ export async function startServer({
   await writeFile(runtime, JSON.stringify({ pid: process.pid, port }), {
     flag: "wx",
   });
-  const store = openStore(directory),
-    domain = createDomain(store),
-    worker = createWorker(store, domain, config),
+  let store, domain, worker, analysis, audioTools;
+  try {
+    store = openStore(directory);
+    domain = createDomain(store);
+    worker = createWorker(store, domain, config);
     analysis = createAnalysis(store, domain, config);
-  await worker.recover();
-  analysis.recover();
-  const audioTools = await toolsAvailable();
-  if (audioTools) for (const a of store.all("audios")) await validateStoredAudio(store, a);
+    await worker.recover();
+    analysis.recover();
+    audioTools = await toolsAvailable();
+    if (audioTools) for (const a of store.all("audios")) await validateStoredAudio(store, a);
+  } catch (e) {
+    if (analysis) await analysis.close();
+    store?.close();
+    await rm(runtime, { force: true });
+    throw e;
+  }
   const send = (res, status, data) => {
     res.writeHead(status, {
       "Content-Type": "application/json; charset=utf-8",
@@ -137,15 +148,17 @@ export async function startServer({
             routeBlocked: worker.routeBlocked,
             textModel: textModel(store),
             defaultGap: store.maybe("settings", "models")?.defaultGap ?? 0.5,
+            features: domain.enhancement.features(),
+            schemaVersion: 2,
+            audioUsage: (() => { const u = store.maybe("settings", `audio-usage:${config.usageScope || "audio-calls-v1"}`); return { limit: u?.limit ?? config.callLimit, reserved: u?.reserved || 0, used: u?.used || 0 }; })(),
           },
         });
       if (req.method === "GET" && /^\/api\/voices\/[^/]+\/usage$/.test(path))
         return send(res, 200, domain.voiceUsage(path.split("/")[3]));
       if (req.method === "GET" && path.startsWith("/api/chapters/")) {
         const id = path.split("/").pop();
-        if (audioTools) for (const s of domain.list(id)) {
-          const a = s.current && store.maybe("audios", s.current);
-          if (a) await validateStoredAudio(store, a);
+        if (audioTools) for (const row of domain.enhancement.resolve(id)) {
+          if (row.a) await validateStoredAudio(store, row.a);
         }
         return send(res, 200, domain.chapter(id));
       }
@@ -153,6 +166,10 @@ export async function startServer({
         return send(res, 200, store.all("attempts", path.split("/").pop()));
       if (req.method === "GET" && path.startsWith("/api/audio-record/"))
         return send(res, 200, store.get("audios", path.split("/").pop()));
+      if (req.method === "POST" && path === "/api/enhancement-preview")
+        return send(res, 200, domain.enhancement.preview(await body(req)));
+      if (req.method === "POST" && path === "/api/voices/candidate")
+        return send(res, 200, await saveCandidateVoice(store, await body(req)));
       if (req.method === "POST" && path === "/api/templates/preview")
         return send(res,200,domain.previewTemplate(await body(req)));
       if (req.method === "POST" && path === "/api/analysis")
@@ -165,7 +182,7 @@ export async function startServer({
         return send(res, 200, analysis.resume(await body(req)));
       if (req.method === "POST" && path === "/api/action") {
         const p = await body(req);
-        if (p.action === "segment.review") {
+        if (["segment.review", "unit.review", "unit.restore", "unit.select-result"].includes(p.action)) {
           if (!audioTools) fail("请先配置音频处理程序以核对文件");
           const a = store.get("audios", p.audioId);
           if (!await validateStoredAudio(store, a)) fail("音频损坏或缺失，不能记录检查通过");

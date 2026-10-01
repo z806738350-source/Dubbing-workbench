@@ -40,6 +40,8 @@ import { api, action } from "./api";
 import { readDraft, writeDraft, clearDraft, hasDraft, listDrafts, recoverDraft, discardDraft, finishDraftSave } from "./drafts";
 import type { DraftRecord } from "./drafts";
 import AnalysisDialog from "./AnalysisDialog";
+import VoiceCreation from "./VoiceCreation";
+import UnitPanel, { CreateGroup, unitHasDraft } from "./UnitPanel";
 import { Dialog, Empty, ErrorBanner, ErrorContext, Field, Form, Select, Status } from "./components";
 import type {
   State,
@@ -52,6 +54,8 @@ import type {
   Master,
   Project,
   AudioRecord,
+  VoiceSession,
+  GenerationUnit,
 } from "./types";
 
 const names: Record<string, string> = {
@@ -91,6 +95,7 @@ const time = (n: number) =>
     .padStart(2, "0")}`;
 const active = (s: string) => ["queued", "running"].includes(s);
 const connectionMessage = "无法连接本地工作区，已暂停试听。连接恢复后将先核对版本。";
+type UnitPlayback = {id:string;mode:"dry"|"scene";audioId:string;basis:Record<string,unknown>;state:string};
 type Modal =
   | "project"
   | "project-rename"
@@ -107,6 +112,8 @@ type Modal =
 
 export default function App() {
   const [rebindOpen, setRebindOpen] = useState(false);
+  const [unitPanelId, setUnitPanelId] = useState<string|null>(null);
+  const [currentMembers, setCurrentMembers] = useState<string[]>([]);
   const [draftIds,setDraftIds] = useState<string[]>([]);
   const [,setDraftSignal] = useState(0);
   const onDraftChange = useCallback((id:string,dirty:boolean)=>setDraftIds(prev=>dirty ? (prev.includes(id) ? prev : [...prev,id]) : prev.filter(x=>x!==id)),[]);
@@ -152,6 +159,7 @@ export default function App() {
       playbackItems?: ChapterDetail["playbackItems"];
       master?: Master;
       resumeAt?: number;
+      unitSession?: UnitPlayback;
     } | null>(null),
     [playing, setPlaying] = useState(false),
     [position, setPosition] = useState(0),
@@ -202,7 +210,9 @@ export default function App() {
       } else if (pendingPlay.current && pendingPlay.current !== id)
         pendingPlay.current = null;
       const p = playerRef.current;
-      if (p?.chapterId === id && (p.arrangement !== c.arrangement || JSON.stringify(p.playbackItems) !== JSON.stringify(c.playbackItems) || s.jobs.some(j => j.chapterId === id && active(j.status)))) {
+      const selectedUnit = p?.unitSession && c.units?.find(u=>u.id === p.unitSession!.id);
+      const unitChanged = p?.unitSession && (!selectedUnit || selectedUnit.state !== p.unitSession.state || selectedUnit.variants[p.unitSession.mode].current !== p.unitSession.audioId || JSON.stringify(selectedUnit.variants[p.unitSession.mode].status.basis) !== JSON.stringify(p.unitSession.basis));
+      if (p?.chapterId === id && (p.arrangement !== c.arrangement || JSON.stringify(p.playbackItems) !== JSON.stringify(c.playbackItems) || unitChanged || s.jobs.some(j => j.chapterId === id && active(j.status)))) {
         audio.current?.pause();
         setPlayer(null);
         setCurrentSegment("");
@@ -275,6 +285,10 @@ export default function App() {
     }
   };
   const mutate = async (name: string, data: Record<string, unknown> = {}) => {
+    if(name === "segment.review") {
+      const unit=chapter?.units?.find(u=>u.state === "active" && (u.kind === "group" || u.mode === "scene") && u.members.includes(String(data.id)));
+      if(unit){setUnitPanelId(unit.id);throw new Error("请在声音版本面板核对实际单元音频后提交检查。");}
+    }
     if (name === "segment.review" && !connectionReady) throw new Error(connectionMessage);
     const result = await action(name, {
       chapterId: chapter?.id,
@@ -294,6 +308,9 @@ export default function App() {
       (j) => j.chapterId === chapterId && active(j.status),
     ),
     locked = !!job;
+  const selectedUnit = chapter?.units?.find(u=>u.kind === "group" && u.state === "active" && u.members.includes(selected)) || chapter?.units?.find(u=>u.kind === "single" && u.members.includes(selected));
+  const openMember = (id:string) => { setUnitPanelId(null); setSelected(id); if(window.innerWidth < 1216)setInspectorOpen(true); };
+  const effectiveStatus = (s:Segment) => chapter?.playbackItems.find(item=>item.id === s.id || item.members?.includes(s.id)) || s;
   const visible = segments.filter((s) => {
     if (
       search &&
@@ -301,19 +318,19 @@ export default function App() {
     )
       return false;
     if (filter === "confirm") return !s.roleConfirmed || !s.identityConfirmed;
-    if (filter === "generate") return !s.excluded && s.validity !== "matched";
+    if (filter === "generate") return !s.excluded && effectiveStatus(s).validity !== "matched";
     if (filter === "failed") return ["failed", "unknown"].includes(s.latest);
     if (filter === "pending")
-      return s.validity === "matched" && s.review === "pending";
-    if (filter === "rework") return s.review === "rework";
+      return effectiveStatus(s).validity === "matched" && effectiveStatus(s).review === "pending";
+    if (filter === "rework") return effectiveStatus(s).review === "rework";
     return true;
   });
-  const currentHidden = !!currentSegment && !visible.some(s=>s.id === currentSegment);
-  const ready = segments.filter(
+  const currentHidden = !!currentSegment && !visible.some(s=>s.id === currentSegment || currentMembers.includes(s.id));
+  const ready = chapter?.playbackItems ? chapter.playbackItems.filter(item=>item.validity === "matched").flatMap(item=>item.members || [item.id]).length : segments.filter(
       (s) => !s.excluded && s.validity === "matched",
     ).length,
     total = segments.filter((s) => !s.excluded).length,
-    passed = segments.filter(
+    passed = chapter?.playbackItems ? chapter.playbackItems.filter(item=>item.review === "passed").flatMap(item=>item.members || [item.id]).length : segments.filter(
       (s) => !s.excluded && s.review === "passed",
     ).length;
   const pickChapter = (id: string) => {
@@ -332,6 +349,15 @@ export default function App() {
       throw new Error("没有可生成的待办。需返工片段请先勾选；结果不明项请单独核对后重试。");
     if (ids.some(id=>draftIds.includes(id) || hasDraft(id)))
       throw new Error("所选片段有未保存草稿，请先保存或明确放弃后再生成。");
+    const units = chapter?.units?.filter(u=>u.state === "active" && u.members.some(id=>ids.includes(id))) || [];
+    if(units.some(u=>unitHasDraft(u, chapter?.events || []))) {
+      setUnitPanelId(units.find(u=>unitHasDraft(u,chapter?.events || []))!.id);
+      throw new Error("所选生成单元有指导或事件草稿，请在已打开的面板逐份处理。");
+    }
+    if(units.some(u=>u.kind === "group" || u.mode === "scene")) {
+      setUnitPanelId(units.find(u=>u.kind === "group" || u.mode === "scene")!.id);
+      throw new Error("所选范围包含对戏或场景单元，请核对整单元的成员及费用后明确生成。");
+    }
     if (
       !options.confirmed &&
       (state?.settings.routeBlocked ||
@@ -382,6 +408,7 @@ export default function App() {
     title: string,
     master?: Master,
     standalone = false,
+    unitSession?: UnitPlayback,
   ) => {
     if (!connectionReady) { setError(connectionMessage); return; }
     if (kind !== "voices" && !standalone && chapter) {
@@ -390,7 +417,9 @@ export default function App() {
         const now = await api<State>("/state");
         const existing = playerRef.current;
         const expected = existing?.chapterId === chapter.id && existing.kind === kind && existing.id === id ? existing.playbackItems : chapter.playbackItems;
-        if (fresh.arrangement !== chapter.arrangement || JSON.stringify(fresh.playbackItems) !== JSON.stringify(expected) || now.jobs.some(j => j.chapterId === chapter.id && active(j.status))) {
+        const target = unitSession && fresh.units?.find(u=>u.id === unitSession.id);
+        const unitChanged = unitSession && (!target || target.state !== unitSession.state || target.variants[unitSession.mode].current !== unitSession.audioId || JSON.stringify(target.variants[unitSession.mode].status.basis) !== JSON.stringify(unitSession.basis));
+        if (fresh.arrangement !== chapter.arrangement || JSON.stringify(fresh.playbackItems) !== JSON.stringify(expected) || unitChanged || now.jobs.some(j => j.chapterId === chapter.id && active(j.status))) {
           await refresh();
           setError("章节版本或任务状态已变化，请核对后重新选择试听。");
           return;
@@ -409,7 +438,7 @@ export default function App() {
       return;
     }
     const bookmark = bookmarks.current[chapterId];
-    if (master && bookmark && !master.mapping.some(x => x.segmentId === bookmark)) {
+    if (master && bookmark && !master.mapping.some(x => x.segmentId === bookmark || x.unitId === bookmark || x.members?.includes(bookmark))) {
       delete bookmarks.current[chapterId];
       setNotice("原断点片段已拆分、合并或移除。请重新选择片段；再次点击试听将从开头播放。");
       return;
@@ -422,19 +451,21 @@ export default function App() {
       kind,
       id,
       title,
+      unitSession,
       chapterId: kind === "voices" || standalone ? undefined : chapterId,
       arrangement: chapter?.arrangement,
       playbackItems: chapter?.playbackItems,
       master,
       resumeAt: master
         ? (master.mapping.find(
-            (x) => x.segmentId === bookmarks.current[chapterId],
+            (x) => x.segmentId === bookmarks.current[chapterId] || x.unitId === bookmarks.current[chapterId] || x.members?.includes(bookmarks.current[chapterId]),
           )?.startFrame || 0) / master.sampleRate
         : 0,
     });
   };
   useEffect(() => {
     if (!player) {
+      setCurrentMembers([]);
       audio.current?.pause();
       setPlaying(false);
       setPosition(0);
@@ -606,6 +637,8 @@ export default function App() {
                       run={run}
                       generate={(ids) => generate(ids)}
                       onRoles={() => setModal("roles")}
+                      unit={selectedUnit}
+                      onUnit={()=>selectedUnit && setUnitPanelId(selectedUnit.id)}
                     />
       ) : <div className="inspector-scroll">
         <div className="inspector-section">
@@ -859,6 +892,7 @@ export default function App() {
                   {checked.length > 0 && (
                     <div className="selection-bar" role="group" aria-label="所选片段操作">
                       <span>已选 {checked.length} 条</span>
+                      <button className="text-button" disabled={locked || checked.length < 2 || state?.settings.features?.groups === false} onClick={()=>setUnitPanelId("create")}>创建连续对戏组 · 实验</button>
                       <button
                         className="text-button"
                         disabled={locked}
@@ -891,6 +925,7 @@ export default function App() {
                       </button>
                     </div>
                   )}
+                  <button className="text-button" onClick={()=>setUnitPanelId("list")}>对戏组与声音版本</button>
                   <div className="script-column-head">
                     <input
                       aria-label="选择可见片段"
@@ -914,6 +949,7 @@ export default function App() {
                   </div>
                   <div
                     className="script-list"
+                    data-unit-members={currentMembers.join(",")}
                     ref={listRef}
                     onWheel={() => setFollow(false)}
                     onTouchMove={() => setFollow(false)}
@@ -923,9 +959,14 @@ export default function App() {
                     {visible.map((s) => {
                       const role = roles.find((r) => r.id === s.roleId),
                         voice = voices.find((v) => v.id === s.voiceId);
+                      const grouped = chapter.units?.find(u=>u.kind === "group" && u.state === "active" && u.members.includes(s.id));
+                      const rowUnit = grouped || chapter.units?.find(u=>u.kind === "single" && u.state === "active" && u.id === s.id);
+                      const rowAudio = rowUnit?.variants[rowUnit.mode].current || s.current;
+                      const rowStatus = effectiveStatus(s);
                       return (
                         <article
                           id={"segment-" + s.id}
+                          data-group-playing={currentMembers.includes(s.id)}
                           key={s.id}
                           className={`script-row ${selected === s.id ? "selected" : ""} ${currentSegment === s.id ? "playing" : ""} ${s.excluded ? "excluded" : ""}`}
                         >
@@ -972,6 +1013,7 @@ export default function App() {
                               )}
                             </span>
                             <span className="spoken-text">{s.text}</span>
+                            {grouped && <span className="performance">来自对戏组 · {grouped.members.length} 条共同生成 · {grouped.mode === "scene" ? "场景版本" : "干声版本"}</span>}
                             {s.performance && (
                               <span className="performance">
                                 <SlidersHorizontal size={12} />
@@ -986,18 +1028,18 @@ export default function App() {
                               <>
                                 <Status
                                   kind={
-                                    s.review === "passed"
+                                    rowStatus.review === "passed"
                                       ? "success"
-                                      : s.validity !== "matched"
+                                      : rowStatus.validity !== "matched"
                                         ? "neutral"
-                                        : s.review === "rework"
+                                        : rowStatus.review === "rework"
                                           ? "warning"
                                           : ""
                                   }
                                 >
-                                  {s.validity === "matched"
-                                    ? names[s.review]
-                                    : names[s.validity]}
+                                  {rowStatus.validity === "matched"
+                                    ? names[rowStatus.review || "pending"]
+                                    : names[rowStatus.validity]}
                                 </Status>
                                 <span className="attempt-state">{[
                                   "failed",
@@ -1008,9 +1050,15 @@ export default function App() {
                                 <div className="row-actions">
                                   <button
                                     className="icon"
-                                    aria-label={`试听第 ${s.order + 1} 条${s.validity === "stale" ? "旧版" : ""}`}
-                                    disabled={!connectionReady || !s.current || s.validity === "broken" || locked}
+                                    aria-label={`试听第 ${s.order + 1} 条${rowStatus.validity === "stale" ? "旧版" : ""}`}
+                                    disabled={!connectionReady || !rowAudio || rowStatus.validity === "broken" || locked}
                                     onClick={() => {
+                                      if(rowUnit && (rowUnit.kind === "group" || rowUnit.mode === "scene")) {
+                                        const audioId=rowUnit.variants[rowUnit.mode].current;
+                                        if(audioId){setCurrentMembers(rowUnit.kind === "group" ? rowUnit.members : []);setCurrentSegment(rowUnit.members[0]);void startPlay("audios",audioId,(rowUnit.kind === "group" ? "对戏组 · " + rowUnit.members.length + " 条" : "单条") + (rowUnit.mode === "scene" ? " · 场景版本" : " · 干声版本"),undefined,false,{id:rowUnit.id,mode:rowUnit.mode,audioId,basis:rowUnit.variants[rowUnit.mode].status.basis,state:rowUnit.state});}
+                                        return;
+                                      }
+                                      setCurrentMembers([]);
                                       setCurrentSegment(s.id);
                                       // A spot-check must not replace an existing chapter resume point.
                                       bookmarks.current[chapterId] ??= s.id;
@@ -1030,7 +1078,7 @@ export default function App() {
                                     className="icon"
                                     aria-label={`检查通过第 ${s.order + 1} 条`}
                                     disabled={
-                                      !connectionReady || s.validity !== "matched" || locked
+                                      !connectionReady || rowStatus.validity !== "matched" || locked
                                     }
                                     onClick={() =>
                                       run(() =>
@@ -1248,14 +1296,31 @@ export default function App() {
                   t < m.mapping[i + 1].startFrame / m.sampleRate),
             );
             if (current) {
-              setCurrentSegment(current.segmentId);
+              setCurrentSegment(current.members?.[0] || current.segmentId || "");
+              setCurrentMembers(current.members && current.members.length > 1 ? current.members : []);
               setTransitioning(t >= current.endFrame / m.sampleRate && current !== m.mapping.at(-1));
               if (player.chapterId)
-                bookmarks.current[player.chapterId] = (t >= current.endFrame / m.sampleRate ? m.mapping.find(x => x.startFrame > current.endFrame)?.segmentId : current.segmentId) || current.segmentId;
+                bookmarks.current[player.chapterId] = (t >= current.endFrame / m.sampleRate ? m.mapping.find(x => x.startFrame > current.endFrame)?.unitId || m.mapping.find(x => x.startFrame > current.endFrame)?.segmentId : current.unitId || current.segmentId) || current.members?.[0] || current.segmentId || "";
             }
           }
         }}
       />
+      {unitPanelId === "create" && chapter && <CreateGroup chapter={chapter} ids={checked} roles={roles} enabled={!locked && state?.settings.features?.groups !== false} refresh={refresh} close={()=>setUnitPanelId(null)} open={openMember} created={(unit,warning)=>{
+        if(chapterRef.current !== unit.chapterId)return;
+        setChapter(c=>c && c.id === unit.chapterId ? {...c,revision:unit.chapterRevision || c.revision,units:[...(c.units || []).filter(u=>u.id !== unit.id),unit]} : c);
+        setUnitPanelId(unit.id);
+        if(warning)setError(warning);
+      }}/>}
+      {unitPanelId === "list" && chapter && <Dialog title="对戏组与声音版本" onClose={()=>setUnitPanelId(null)} wide>
+        <p className="hint">组级操作覆盖全部成员。场景版本按单元管理，切换已有版本仅做本地处理。</p>
+        {(chapter.units || []).map(unit=><button className="nav-item" key={unit.id} onClick={()=>setUnitPanelId(unit.id)}>
+          {unit.kind === "group" ? "对戏组" : "单条"} · 第 {unit.members.map(id=>(chapter.segments.find(s=>s.id === id)?.order ?? -1)+1).join("、")} 条 · {unit.state === "pending" ? "待生成，未启用" : unit.state === "dissolved" ? "已解除 · 历史保留" : "已启用"} · {unit.mode === "scene" ? "场景" : "干声"}
+        </button>)}
+      </Dialog>}
+      {unitPanelId && chapter && state && chapter.units?.find(u=>u.id === unitPanelId) && <UnitPanel key={unitPanelId} unit={chapter.units.find(u=>u.id === unitPanelId)!}
+        chapter={chapter} roles={roles} state={state} locked={locked} connected={connectionReady} refresh={refresh} close={()=>setUnitPanelId(null)} open={openMember}
+        play={(id,title,historical)=>{const unit=chapter.units!.find(u=>u.id === unitPanelId)!;const mode=unit.variants.scene.current === id ? "scene" : "dry";setCurrentMembers(unit.kind === "group" && !historical ? unit.members : []);
+          void startPlay("audios",id,title,undefined,!!historical,historical ? undefined : {id:unit.id,mode,audioId:id,basis:unit.variants[mode].status.basis,state:unit.state});}}/>}
       {generationConfirm && (
         <Dialog
           title="核对后重新生成"
@@ -1449,6 +1514,11 @@ export default function App() {
       {modal === "voices" && (
         <VoiceLibrary
           voices={voices}
+          sessions={state?.voiceSessions || []}
+          creationEnabled={state?.settings.features?.voiceCreation !== false}
+          configured={!!state?.settings.configured}
+          audioTools={!!state?.settings.audioTools}
+          onBind={project ? () => setModal("roles") : undefined}
           jobs={state?.jobs || []}
           playingId={playing ? player?.id : undefined}
           routeBlocked={state?.settings.routeBlocked || false}
@@ -1522,6 +1592,12 @@ export default function App() {
             </p>
           )}
           <div className="section-rule">
+            <h3>增强功能</h3><p className="hint">关闭只停止新建和生成，已有候选、对戏组、场景版本仍可查看、恢复和本地切换。</p>
+            {([["voiceCreation","声音创建"],["groups","多人干声对戏 · 实验"],["scenes","场景生成 · 实验"]] as const).map(([key,label])=><label className="check-label" key={key}>
+              <input type="checkbox" checked={state?.settings.features?.[key] !== false} disabled={busy} onChange={e=>void run(async()=>{await action("settings.update",{entityRevision:state?.settings.revision,features:{[key]:e.target.checked}});})}/>{label}
+            </label>)}
+          </div>
+          <div className="section-rule">
             <h3>文本分析模型</h3>
             <Form
               successMessage="默认模型已保存；本轮手动指定的模型保持不变。"
@@ -1590,9 +1666,15 @@ export default function App() {
                           ? "准备试听"
                           : j.kind === "voice-test"
                             ? "音色试音"
+                            : j.kind === "voice-create"
+                              ? "声音创建"
+                              : j.kind === "unit-generate"
+                                ? j.mode === "scene" ? "场景版本生成" : "对戏干声生成"
                             : "导出成品"}{" "}
                       ·{" "}
-                      {j.kind === "voice-test"
+                      {j.kind === "voice-create"
+                        ? state.voiceSessions?.find(s=>s.id === j.sessionId)?.description.slice(0, 32)
+                        : j.kind === "voice-test"
                         ? voices.find((v) => v.id === j.voiceId)?.name
                         : state.chapters.find((c) => c.id === j.chapterId)
                             ?.title}
@@ -1602,7 +1684,7 @@ export default function App() {
                       {new Date(j.createdAt).toLocaleString("zh-CN")}
                     </p>
                     {j.error && <p className="error-inline">{j.error}</p>}
-                    {j.resultAudioId && <button className="text-button" onClick={() => void startPlay("audios", j.resultAudioId!, "本次试音结果", undefined, true)}>{j.resultNotSelected ? "试听本次结果 · 已保留，未替换当前样音" : "试听本次样音"}</button>}
+                    {j.resultAudioId && <button className="text-button" onClick={() => void startPlay("audios", j.resultAudioId!, j.kind === "voice-test" ? "本次试音结果" : "本次生成结果", undefined, true)}>{j.resultNotSelected ? "试听本次结果 · 已保留，未替换当前版本" : j.kind === "voice-test" ? "试听本次样音" : j.kind === "voice-create" ? "试听本次声音候选" : "试听本次单元结果"}</button>}
                     {j.kind === "generate" && j.chapterId === chapterId && !active(j.status) && ["failed", "stopped", "unknown"].includes(j.status) && <button className="text-button" disabled={locked || busy} onClick={() => void run(async () => {
                       const current = await api<ChapterDetail>("/chapters/" + j.chapterId);
                       const remaining = current.segments.filter(s => j.ids?.includes(s.id) && !s.excluded && s.latest !== "unknown" && (s.validity !== "matched" || s.review === "rework"));
@@ -1747,6 +1829,11 @@ function ImportChapter({
 
 function VoiceLibrary({
   voices,
+  sessions,
+  creationEnabled,
+  configured,
+  audioTools,
+  onBind,
   playingId,
   jobs,
   routeBlocked,
@@ -1756,6 +1843,11 @@ function VoiceLibrary({
   play,
 }: {
   voices: Voice[];
+  sessions: VoiceSession[];
+  creationEnabled: boolean;
+  configured: boolean;
+  audioTools: boolean;
+  onBind?: () => void;
   playingId?: string;
   jobs: Job[];
   routeBlocked: boolean;
@@ -1771,6 +1863,7 @@ function VoiceLibrary({
   const [libraryError, setLibraryError] = useState("");
   const [testCommand, setTestCommand] = useState(crypto.randomUUID());
   const [accepted, setAccepted] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [upload, setUpload] = useState(false),
     [file, setFile] = useState<File | null>(null),
     [query, setQuery] = useState("");
@@ -1792,7 +1885,11 @@ function VoiceLibrary({
           {libraryError}
         </p>
       )}
-      {testing ? (
+      {creating ? <>
+        <button className="text-button" onClick={()=>setCreating(false)}>返回参考音色列表</button>
+        <VoiceCreation sessions={sessions} voices={voices} jobs={jobs} enabled={creationEnabled} configured={configured} audioTools={audioTools}
+          routeBlocked={routeBlocked} playingId={playingId} play={(id, title)=>playSample({id, sampleAudioId:id, name:title} as Voice)} refresh={onRefresh} bind={onBind}/>
+      </> : testing ? (
         <Form
           label="生成测试样音"
           onSubmit={async (f) => {
@@ -1900,6 +1997,7 @@ function VoiceLibrary({
               <Plus size={16} />
               添加参考
             </button>
+            <button className="button secondary" disabled={!creationEnabled && !sessions.length} onClick={()=>setCreating(true)}>描述声音</button>
           </div>
           <p className="hint">
             保存参考声音，跨项目复用。绑定角色前可以先试听素材。
@@ -2336,6 +2434,8 @@ function Editor({
   run,
   generate,
   onRoles,
+  unit,
+  onUnit,
 }: {
   segment: Segment;
   templates: State["templates"];
@@ -2349,7 +2449,11 @@ function Editor({
   run: (fn: () => Promise<unknown>) => Promise<void>;
   generate: (ids: string[]) => Promise<void>;
   onRoles: () => void;
+  unit?: GenerationUnit;
+  onUnit: () => void;
 }) {
+  const enhancedUnit = unit && (unit.kind === "group" || unit.mode === "scene") ? unit : null;
+  const activeVariant = enhancedUnit?.variants[enhancedUnit.mode];
   const cached = (() => {
     try {
       return readDraft<Segment>(s.id);
@@ -2445,6 +2549,7 @@ function Editor({
         <span>第 {s.order + 1} 条</span>
         <button className="text-button" onClick={() => run(async () => setDraftList(await listDrafts<Segment>(s.id)))}>查看本机草稿</button>
       </div>
+      {unit && <div className="inspector-section"><button className="text-button" onClick={onUnit}>打开{unit.kind === "group" ? "对戏组" : "单条"}干声 / 场景版本</button>{unit.kind === "group" && <p className="hint">本条属于活动对戏组，修改将影响整组。结构编辑或排除前先解除分组。</p>}</div>}
       <div className="inspector-tabs tabs">
         {[
           ["settings", "声音与表演"],
@@ -2681,38 +2786,39 @@ function Editor({
             </details>
             <div className="inspector-section">
               <h3>音频版本</h3>
+              {enhancedUnit && <p className="hint">当前编排来自{enhancedUnit.kind === "group" ? "整组" : "单条"}{enhancedUnit.mode === "scene" ? "场景" : "干声"}版本。检查和返工以该单元的实际音频为准。</p>}
               <dl className="details-list">
                 <div>
                   <dt>最近尝试</dt>
-                  <dd>{names[s.latest]}</dd>
+                  <dd>{names[activeVariant?.latest || s.latest]}</dd>
                 </div>
                 <div>
                   <dt>当前音频</dt>
-                  <dd>{names[s.validity]}</dd>
+                  <dd>{names[activeVariant?.status.validity || s.validity]}</dd>
                 </div>
                 <div>
                   <dt>人工检查</dt>
-                  <dd>{names[s.review]}</dd>
+                  <dd>{names[activeVariant?.status.review || s.review]}</dd>
                 </div>
               </dl>
               <div className="button-row">
                 <button
                   className="button small"
-                  disabled={!s.previous || locked || dirty}
-                  onClick={() => setRestore(s.previous)}
+                  disabled={!(activeVariant ? activeVariant.previous : s.previous) || locked || dirty}
+                  onClick={() => enhancedUnit ? onUnit() : setRestore(s.previous)}
                 >
                   <RotateCcw size={13} />
                   上一版
                 </button>
                 <button
                   className="button small"
-                  disabled={!s.approved || locked || dirty}
-                  onClick={() => setRestore(s.approved)}
+                  disabled={!(activeVariant ? activeVariant.approved : s.approved) || locked || dirty}
+                  onClick={() => enhancedUnit ? onUnit() : setRestore(s.approved)}
                 >
                   最近通过版
                 </button>
               </div>
-              {s.validity === "matched" && (
+              {enhancedUnit ? <button className="text-button" onClick={onUnit}>查看单元检查与返工</button> : s.validity === "matched" && (
                 <button
                   className="text-button warning"
                   disabled={!connectionReady || locked || dirty}
@@ -2756,7 +2862,8 @@ function Editor({
           </div>
         ) : (
           <div className="inspector-section">
-            <h3>实际生成提示</h3>
+            <h3>{enhancedUnit ? "本片段干声提示" : "实际生成提示"}</h3>
+            {enhancedUnit && <p className="hint">这份片段提示用于干声设置；当前编排的完整请求在声音版本面板。<button className="text-button" onClick={onUnit}>查看当前单元实际提示</button></p>}
             <p className="hint">模板 {s.template} · 仅显示已保存设置</p>
             <button className="button small" disabled={locked || dirty} onClick={()=>setTemplateOpen(true)}>查看与切换模板</button>
             {!!s.promptIssues?.length && <p className="error-inline">{s.promptIssues.join("；")}</p>}
@@ -2798,7 +2905,7 @@ function Editor({
           onClick={() => run(() => generate([s.id]))}
         >
           <AudioLines size={15} />
-          {s.current ? "重新生成" : "生成本条"}
+          {unit?.kind === "group" ? "打开对戏组生成" : unit?.mode === "scene" ? "打开场景版本生成" : s.current ? "重新生成" : "生成本条"}
         </button>
       </div>
       {draftList && <Dialog title="本机草稿" onClose={() => setDraftList(null)}>
@@ -3073,7 +3180,7 @@ function ExportDialog({
             commandId: crypto.randomUUID(),
             format,
             confirm: true,
-            reviewItems: confirmation.segments
+            reviewItems: confirmation.reviewItems || confirmation.segments
               .filter((s) => !s.excluded)
               .map((s) => ({ id: s.id, audioId: s.current, basis: basis(s) })),
           });

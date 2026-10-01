@@ -8,10 +8,11 @@ import {
   rm,
   writeFile,
   appendFile,
+  copyFile,
 } from "node:fs/promises";
-import { constants, existsSync, rmSync, statSync } from "node:fs";
+import { constants, existsSync, rmSync, statSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import { fail, uid } from "./store.mjs";
+import { fail, uid, text } from "./store.mjs";
 const exec = promisify(execFile);
 export const ffmpeg =
   process.env.FFMPEG_PATH ||
@@ -135,6 +136,48 @@ export async function uploadVoice(store, p) {
     throw e;
   }
 }
+// Candidate and reference have separate paths: deleting either resource cannot
+// remove the other. The source audio primary key makes save retries idempotent.
+export async function saveCandidateVoice(store, p) {
+  const audio = store.get("audios", p.audioId);
+  if (audio.targetKind !== "candidate" && audio.input?.targetKind !== "candidate") fail("请选择声音创建的真实候选");
+  const existing = store.maybe("voices", audio.id);
+  if (existing) {
+    if (existing.sourceAudioId !== audio.id) fail("候选身份冲突，请保留原文件并检查", 409);
+    return existing;
+  }
+  const name = text(p.name, "音色名称", 100).trim();
+  const attempt = store.get("attempts", audio.id);
+  if (attempt.discarded || attempt.status !== "success") fail("候选已放弃或尚未完整确认");
+  const source = join(store.directory, audio.path), sourceVersion = fileVersion(source);
+  const bytes = statSync(source).size;
+  if (!bytes || bytes > 10 * 1024 * 1024) fail("候选参考应为 1 字节～10 MB；请重新生成较短候选");
+  const info = await inspect(source);
+  if (info.duration > 30 || !/^(wav|mp3)$/.test(info.format)) fail("候选不符合 WAV/MP3、最长 30 秒参考规格；原候选已保留");
+  const path = `voices/${audio.id}.${info.format === "mp3" ? "mp3" : "wav"}`;
+  await mkdir(join(store.directory, "voices"), { recursive: true });
+  const temp = join(store.directory, path + `.${uid()}.part`);
+  try {
+    await copyFile(source, temp);
+    if (fileVersion(source) !== sourceVersion || statSync(temp).size !== bytes) fail("候选文件已变化，请重新核对", 409);
+    await inspect(temp);
+    return store.transaction(() => {
+      const saved = store.maybe("voices", audio.id);
+      if (saved) {
+        if (saved.sourceAudioId !== audio.id) fail("候选身份冲突", 409);
+        return saved;
+      }
+      const current = store.get("audios", audio.id), latest = store.get("attempts", audio.id);
+      if (current.path !== audio.path || current.invalid || latest.discarded || latest.status !== "success" || fileVersion(source) !== sourceVersion) fail("候选已变化，请重新试听确认", 409);
+      // Rename and DB registration are separate durable steps. A crash between
+      // them leaves only this fixed-path copy; the same save safely replaces it.
+      renameSync(temp, join(store.directory, path));
+      return store.put("voices", { id: audio.id, name, path, state: "active", revision: 1, tested: false, ...info, bytes, sourceAudioId: audio.id, sourceSessionId: audio.input.sessionId || latest.targetId, source: { description: audio.input.description, text: audio.input.text, prompt: audio.prompt, model: audio.model || audio.input.model, template: audio.input.template, input: audio.input }, createdAt: new Date().toISOString() });
+    });
+  } finally {
+    await rm(temp, { force: true });
+  }
+}
 export async function buildMaster(store, segments, gap, id) {
   await mkdir(join(store.directory, "masters"), { recursive: true });
   const base = join(store.directory, "masters", id);
@@ -168,7 +211,8 @@ export async function buildMaster(store, segments, gap, id) {
         const frames = raw.length / 2;
         await appendFile(pcm, raw);
         mapping.push({
-          segmentId: s.id,
+          ...(s.kind === "group" ? {} : {segmentId: s.members?.[0] || s.id}),
+          ...(s.unitId ? { unitId: s.unitId, memberIds: s.members, mode: s.mode } : {}),
           audioId: a.id,
           startFrame: cursor,
           endFrame: cursor + frames,
@@ -261,7 +305,7 @@ export function drainReferenceDeletes(store, reading = new Map()) {
       reading.get(v.id) ||
       store
         .all("attempts")
-        .some((a) => a.input.voiceId === v.id && a.status === "sending")
+        .some((a) => (a.input.referenceVoiceIds || (a.input.voiceId ? [a.input.voiceId] : [])).includes(v.id) && a.status === "sending")
     )
       continue;
     try {
