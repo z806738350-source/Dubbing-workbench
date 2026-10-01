@@ -205,6 +205,7 @@ export function createDomain(store) {
     if (arrangement) c.arrangement++;
     c.updatedAt = new Date().toISOString();
     store.put("chapters", c, c.projectId);
+    enhancement?.invalidateEvents(c.id);
   }
   function context(projectId) {
     const p = store.get("projects", projectId);

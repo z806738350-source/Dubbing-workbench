@@ -129,14 +129,20 @@ test('EX03 请求等效角色纠正保留声音匹配但不沿用组检查',t=>{
   assert.throws(()=>mutateUnit('unit.review',current,{mode:'dry',audioId:done.audio.id,basis:done.a.basis,state:'passed'}),{status:409});
 });
 
-test('SC03/SC04/SC05 明确ID锚点及双边界复核，改名不失效，改目标角色/文字失效',t=>{
+test('SC03/SC04/SC05 双边界修改后复原仍需显式复核，显示名不锁存失效',t=>{
   const {store,d,c,e,role,edit}=setup(t),ids=d.list(c.id).map(s=>s.id),u=edit('unit.create',{ids:ids.slice(0,2)});
   const event=(data={})=>edit('event.create',{unitId:u.id,entityRevision:store.get('units',u.id).revision,kind:'environment',description:'持续轻风',startMemberId:ids[0],endMemberId:ids[1],state:'adopted',...data});
   assert.throws(()=>event({endMemberId:ids[2]}),/边界/);const sound=event();assert.equal(sound.validity,'valid');
   edit('role.update',{id:role.id,entityRevision:store.get('roles',role.id).revision??1,name:'改显示名'});assert.equal(e.events(store.get('units',u.id))[0].validity,'valid');
-  edit('segment.update',{id:ids[1],text:'改变终点。'});assert.equal(e.events(store.get('units',u.id))[0].validity,'needsReview');
-  assert.throws(()=>e.prepare({kind:'unit-generate',chapterId:c.id,revision:store.get('chapters',c.id).revision,unitId:u.id,mode:'scene'},{model:'seed-audio-1.0'}),/失效/);
-  const renewed=edit('event.reconfirm',{unitId:u.id,id:sound.id,entityRevision:store.get('units',u.id).revision,eventRevision:sound.revision});assert.equal(renewed.revision,sound.revision+1);assert.equal(renewed.validity,'valid');
+  assert.equal(store.get('events',sound.id).needsReview,false);
+  for (const id of ids.slice(0,2)) {
+    const original=store.get('segments',id).text;
+    edit('segment.update',{id,text:'改变边界。'});assert.equal(store.get('events',sound.id).needsReview,true);
+    edit('segment.update',{id,text:original});assert.equal(e.events(store.get('units',u.id))[0].validity,'needsReview');
+    assert.throws(()=>e.prepare({kind:'unit-generate',chapterId:c.id,revision:store.get('chapters',c.id).revision,unitId:u.id,mode:'scene'},{model:'seed-audio-1.0'}),/失效/);
+    const previous=store.get('events',sound.id);
+    const renewed=edit('event.reconfirm',{unitId:u.id,id:sound.id,entityRevision:store.get('units',u.id).revision,eventRevision:previous.revision});assert.equal(renewed.revision,previous.revision+1);assert.equal(renewed.validity,'valid');assert.equal(store.get('events',sound.id).needsReview,false);
+  }
 });
 
 test('SC06/SC07/SC08 干场景引用与指导分开，空切换零请求，恢复不能撤销身份',t=>{
@@ -174,11 +180,11 @@ test('事件创建不能覆盖其他单元记录，指导回执精确且另一�
   assert.throws(()=>edit('unit.update',{id:single1.id,entityRevision:before.revision,mode:'scene',guidance:'旧稿'}),{status:409});assert.throws(()=>mutateUnit('unit.update',saved,{mode:'dry',guidance:'无效组指导'}),/片段编辑/);
 });
 
-test('SC04 失效已采用事件改描述不能自动复核，明确重新确认才恢复资格',t=>{
+test('SC04 失效已采用事件改描述或锚点不能自动复核，明确重新确认才恢复资格',t=>{
   const {store,d,c,e,edit}=setup(t),ids=d.list(c.id).map(s=>s.id),u=edit('unit.create',{ids:ids.slice(0,2)});
   const event=edit('event.create',{unitId:u.id,entityRevision:u.revision,kind:'effect',description:'轻敲一次',memberId:ids[1],position:'after',state:'adopted'});
   edit('segment.update',{id:ids[1],text:'目标文字已改。'});
-  const updated=edit('event.update',{unitId:u.id,id:event.id,entityRevision:store.get('units',u.id).revision,eventRevision:event.revision,description:'更轻的敲声'});
+  const updated=edit('event.update',{unitId:u.id,id:event.id,entityRevision:store.get('units',u.id).revision,eventRevision:event.revision,description:'更轻的敲声',memberId:ids[0]});
   assert.equal(updated.validity,'needsReview');assert.equal(updated.revision,event.revision+1);
   assert.throws(()=>e.input(store.get('units',u.id),'scene'),/失效/);
   const verified=edit('event.reconfirm',{unitId:u.id,id:event.id,entityRevision:store.get('units',u.id).revision,eventRevision:updated.revision});assert.equal(verified.validity,'valid');

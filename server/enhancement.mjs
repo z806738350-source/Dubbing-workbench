@@ -35,6 +35,7 @@ export function createEnhancement(store, d) {
     const schema = store.maybe('settings', 'data-schema');
     if (schema && schema.version > 2) fail('数据模式高于此版本，请使用匹配版本或恢复对应备份');
     syncLegacy();
+    invalidateEvents();
     if (!schema || schema.version < 2) store.put('settings', { id: 'data-schema', version: 2, migratedAt: stamp(), migrations: [...(schema?.migrations || []), { version: 2, at: stamp(), singleUnits: store.all('units').length }] });
     store.protectSchema();
   });
@@ -59,6 +60,14 @@ export function createEnhancement(store, d) {
     let valid = false;
     try { valid = u.state !== 'dissolved' && same(e.basis, eventBasis(u, e)); } catch { /* deleted anchors remain reviewable history */ }
     return { ...e, validity: valid && !e.needsReview ? 'valid' : 'needsReview' };
+  }
+  function invalidateEvents(chapterId) {
+    for (const u of store.all('units', chapterId)) for (const e of store.all('events', u.id)) {
+      if (!e.needsReview && eventView(e, u).validity === 'needsReview') {
+        e.needsReview = true;
+        store.put('events', e, u.id);
+      }
+    }
   }
   const events = u => store.all('events', u.id).map(e => eventView(e, u));
   function buildInput(u, mode = u.mode, model, forGeneration = false) {
@@ -337,7 +346,7 @@ export function createEnhancement(store, d) {
       revision(old, p.eventRevision);
       const next = action === 'event.remove' ? { ...old, state: 'removed', revision: old.revision + 1 } : validateEvent(u, { ...old, ...p, id: old.id, revision: old.revision + 1 });
       if (!['event.update','event.remove','event.reconfirm'].includes(action)) fail('未知声音事件操作');
-      if (action === 'event.update' && eventView(old,u).validity === 'needsReview' && same([old.memberId,old.position,old.startMemberId,old.endMemberId,old.startPosition,old.endPosition],[next.memberId,next.position,next.startMemberId,next.endMemberId,next.startPosition,next.endPosition])) { next.basis = old.basis; next.needsReview = true; }
+      if (action === 'event.update' && eventView(old,u).validity === 'needsReview') { next.basis = old.basis; next.needsReview = true; }
       store.put('events', next, u.id); u.variants.scene.revision++;
     } else if (action === 'unit.update') {
       if (p.guidance !== undefined) { if (u.kind === 'single' && (p.mode || u.mode) === 'dry') fail('单条干声表演请使用片段编辑，不能保存未生效的组指导'); if (typeof p.guidance !== 'string' || p.guidance.length > 2000) fail('组指导最多 2000 字'); const mode = p.mode || u.mode; if (!['dry','scene'].includes(mode)) fail('目标类型无效'); u.variants[mode].guidance = p.guidance; u.variants[mode].revision++; if (mode === 'dry') u.guidance = p.guidance; }
@@ -400,5 +409,5 @@ export function createEnhancement(store, d) {
     const blocked = store.all('units', c.id).filter(u => u.kind === 'group' && u.state === 'active' || u.kind === 'single' && u.mode === 'scene');
     if (selected.some(s => blocked.some(u => u.members.includes(s.id)))) fail('当前片段属于活动组或场景单元，请按单元生成或明确切回干声', 409);
   }
-  return { history, assertLegacyGeneration, syncLegacy, syncLegacySegment, features, getUnit, members, input: buildInput, basis, status, view, resolve, events, eventBasis, addEvents, snapshot, prepare, prepareRender, validateDispatch, register, setAttemptStatus, preview, mutate, assertStructural };
+  return { invalidateEvents, history, assertLegacyGeneration, syncLegacy, syncLegacySegment, features, getUnit, members, input: buildInput, basis, status, view, resolve, events, eventBasis, addEvents, snapshot, prepare, prepareRender, validateDispatch, register, setAttemptStatus, preview, mutate, assertStructural };
 }
