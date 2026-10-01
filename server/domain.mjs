@@ -822,7 +822,7 @@ export function createDomain(store) {
           validate(s, c);
           store.put("segments", s, c.id);
           touch(c, true, wasExcluded !== s.excluded);
-          return s;
+          return { ...s, chapterRevision: c.revision };
         }
         if (action === "segment.split") {
           if (s.performance && (!Array.isArray(p.performance) || p.performance.length !== 2 || p.performance.some(x => typeof x !== "string"))) fail("请明确分配拆分后两条的表演指导");

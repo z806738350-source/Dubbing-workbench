@@ -60,6 +60,28 @@ test("章节改名保留音频编排，但旧编辑保存仍冲突", t => {
   assert.equal(after.revision, before.revision + 1);
   assert.throws(() => d.mutate("chapter.update", {chapterId:c.id,revision:before.revision,title:"过时改名"}), /其他页面/);
 });
+test("片段保存返回精确章节修订供后续草稿保存，另页更新仍拒绝旧确认版本", t => {
+  const {store,d,c} = setup(t), [original,other] = d.list(c.id);
+  const first = d.mutate("segment.update", {chapterId:c.id,revision:c.revision,id:original.id,text:"第一次保存。"});
+  assert.equal(first.chapterRevision,c.revision+1);
+  assert.equal(first.chapterRevision,store.get("chapters",c.id).revision);
+  const {chapterRevision,...saved} = first;
+  assert.deepEqual(saved,store.get("segments",original.id));
+  assert.equal(saved.id,original.id);assert.equal(saved.chapterId,c.id);
+  assert.equal(saved.text,"第一次保存。");assert.deepEqual(saved.config,original.config);
+  assert.equal(Object.hasOwn(store.get("segments",original.id),"chapterRevision"),false);
+  const second = d.mutate("segment.update", {chapterId:c.id,revision:chapterRevision,id:original.id,text:"等待保存时继续编辑。"});
+  assert.equal(second.chapterRevision,chapterRevision+1);
+  assert.equal(second.chapterRevision,store.get("chapters",c.id).revision);
+  assert.equal(Object.hasOwn(store.get("segments",original.id),"chapterRevision"),false);
+  d.mutate("segment.update", {chapterId:c.id,revision:second.chapterRevision,id:other.id,performance:"另一页面已保存的指导。"});
+  const latestChapter = store.get("chapters",c.id), latestSegments = d.list(c.id);
+  assert.throws(() => d.mutate("segment.update", {chapterId:c.id,revision:second.chapterRevision,id:original.id,text:"旧版本不应覆盖。"}), {status:409});
+  assert.deepEqual(store.get("chapters",c.id),latestChapter);
+  assert.deepEqual(d.list(c.id),latestSegments);
+  assert.equal(store.get("segments",original.id).text,"等待保存时继续编辑。");
+  assert.equal(store.get("segments",other.id).performance,"另一页面已保存的指导。");
+});
 test("章节重排更新交换双方修订，拒绝旧页面重复移动且保留已有音频", t => {
   const {store,d,p,c,v} = setup(t);
   const middle = d.mutate("chapter.create", {projectId:p.id,title:"第二章",source:"中间章。",segment:true});

@@ -18,8 +18,9 @@ class Locks {
     assert.equal(options.ifAvailable,true);
     if(this.held.has(name))return callback(null);
     this.held.add(name);
-    return callback({name});
+    try{return await callback({name});}finally{this.held.delete(name);}
   }
+  async query(){return {held:[...this.held].map(name=>({name})),pending:[]};}
   close(session){this.held.delete('workbench-drafts-'+session.getItem('draft-owner'));}
 }
 async function page(storage,session,locks){
@@ -81,4 +82,62 @@ test('旧缓存迁移写入失败时原数据保留',async()=>{
 test('跨页删除期间枚举返回空键不会中断草稿检查',async()=>{
   const storage=new Storage(),a=await page(storage,new Storage(),new Locks());a.writeDraft('one',{text:'未保存'},1);
   storage.key=()=>null;assert.equal(a.hasDraft('one'),false);
+});
+
+test('已打开页面可分别查看、恢复和放弃多个关闭页遗留，活动页面保护不变',async()=>{
+  const storage=new Storage(),locks=new Locks(),aSession=new Storage(),bSession=new Storage(),cSession=new Storage();
+  const a=await page(storage,aSession,locks),b=await page(storage,bSession,locks),c=await page(storage,cSession,locks);
+  a.writeDraft('one',{text:'A遗留'},4);c.writeDraft('one',{text:'C遗留'},6);
+  let entries=await b.listDrafts('one');assert.deepEqual(entries.map(x=>x.status),['active','active']);assert.equal(b.readDraft('one'),null);
+  locks.close(aSession);locks.close(cSession);
+  entries=await b.listDrafts('one');assert.deepEqual(entries.map(x=>x.status),['orphan','orphan']);
+  const [first,second]=entries;
+  assert.deepEqual(await b.recoverDraft('one',first),{draft:{text:'A遗留'},revision:4});
+  assert.equal(storage.getItem(first.key),null);assert.equal(storage.getItem(second.key),second.raw);
+  assert.deepEqual((await b.listDrafts('one')).map(x=>x.status).sort(),['current','orphan']);
+  await assert.rejects(b.recoverDraft('one',second),/本页已有/);
+  assert.equal(b.readDraft('one').draft.text,'A遗留');assert.equal(storage.getItem(second.key),second.raw);
+  await b.discardDraft('one',second);assert.equal(storage.getItem(second.key),null);assert.equal(b.hasDraft('one'),true);
+  b.clearDraft('one');assert.equal(b.hasDraft('one'),false);
+});
+
+test('遗留操作重新检查活动归属与原始值，拒绝过期列表和越界记录',async()=>{
+  const storage=new Storage(),locks=new Locks(),session=new Storage(),a=await page(storage,session,locks),b=await page(storage,new Storage(),locks);
+  a.writeDraft('one',{text:'仍在原页'},2);const [entry]=await b.listDrafts('one');
+  await assert.rejects(b.recoverDraft('one',entry),/仍在使用/);await assert.rejects(b.discardDraft('one',entry),/仍在使用/);
+  assert.equal(a.readDraft('one').draft.text,'仍在原页');
+  locks.close(session);const changed=JSON.stringify({draft:{text:'列表之后更新'},revision:3});storage.setItem(entry.key,changed);
+  await assert.rejects(b.recoverDraft('one',entry),/草稿已改变/);await assert.rejects(b.discardDraft('one',entry),/草稿已改变/);
+  await assert.rejects(b.recoverDraft('other',entry),/本片段/);assert.equal(storage.getItem(entry.key),changed);assert.equal(b.readDraft('one'),null);
+  const own=await page(storage,new Storage(),locks);const [current]=await own.listDrafts('one');assert.equal(current.status,'current');
+  await assert.rejects(own.discardDraft('one',current),/其他页面/);
+});
+
+test('恢复写入失败或源值中途改变时保留原记录，不覆盖本页内容',async()=>{
+  const storage=new Storage(),locks=new Locks(),session=new Storage(),a=await page(storage,session,locks),b=await page(storage,new Storage(),locks);
+  a.writeDraft('one',{text:'不能丢失'},7);locks.close(session);const [entry]=await b.listDrafts('one'),put=storage.setItem.bind(storage);
+  storage.setItem=(key,value)=>{if(key!==entry.key)throw new Error('quota');put(key,value);};
+  await assert.rejects(b.recoverDraft('one',entry),/quota/);assert.equal(storage.getItem(entry.key),entry.raw);assert.equal(b.readDraft('one'),null);
+  const changed=JSON.stringify({draft:{text:'更新后的来源'},revision:8});
+  storage.setItem=(key,value)=>{put(key,value);if(key!==entry.key)put(entry.key,changed);};
+  await assert.rejects(b.recoverDraft('one',entry),/草稿已改变/);assert.equal(storage.getItem(entry.key),changed);assert.equal(b.readDraft('one'),null);
+});
+
+test('旧格式遗留可显式恢复或放弃，恢复保留原修订',async()=>{
+  const storage=new Storage(),a=await page(storage,new Storage(),new Locks()),raw=JSON.stringify({draft:{text:'旧格式'},revision:9});
+  storage.setItem('draft-one',raw);const [entry]=await a.listDrafts('one');assert.equal(entry.status,'orphan');
+  assert.deepEqual(await a.recoverDraft('one',entry),{draft:{text:'旧格式'},revision:9});assert.equal(storage.getItem('draft-one'),null);
+  storage.setItem('draft-two',raw);const [second]=await a.listDrafts('two');await a.discardDraft('two',second);assert.equal(a.hasDraft('two'),false);
+});
+
+test('自己保存成功后后续输入承接确切修订，已删除或不同基准草稿不复活不改基准',async()=>{
+  const storage=new Storage(),a=await page(storage,new Storage(),new Locks()),submitted=JSON.stringify({draft:{text:'已提交'},revision:4});
+  a.writeDraft('one',{text:'已提交'},4);assert.equal(a.finishDraftSave('one',submitted,5),null);assert.equal(a.readDraft('one'),null);
+  a.writeDraft('one',{text:'随后输入'},4);assert.deepEqual(a.finishDraftSave('one',submitted,5),{draft:{text:'随后输入'},revision:5});assert.equal(a.readDraft('one').revision,5);
+  a.writeDraft('one',{text:'不同基准'},6);assert.equal(a.finishDraftSave('one',submitted,5).revision,6);
+  a.clearDraft('one');storage.setItem('draft-one',submitted);assert.equal(a.finishDraftSave('one',submitted,5),null);assert.equal(storage.getItem('draft-one'),submitted);
+  storage.removeItem('draft-one');a.writeDraft('one',{text:'缺少版本时保留'},4);
+  for(const revision of [undefined,NaN,Infinity,0,-1,1.5])assert.throws(()=>a.finishDraftSave('one',JSON.stringify(a.readDraft('one')),revision),/缺少有效版本/);
+  assert.throws(()=>a.finishDraftSave('one',JSON.stringify(a.readDraft('one')),6),/与本次提交不一致/);
+  assert.equal(a.readDraft('one').draft.text,'缺少版本时保留');assert.equal(a.readDraft('one').revision,4);
 });

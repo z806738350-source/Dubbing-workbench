@@ -37,7 +37,8 @@ import {
   ArrowDown,
 } from "lucide-react";
 import { api, action } from "./api";
-import { readDraft, writeDraft, clearDraft, hasDraft } from "./drafts";
+import { readDraft, writeDraft, clearDraft, hasDraft, listDrafts, recoverDraft, discardDraft, finishDraftSave } from "./drafts";
+import type { DraftRecord } from "./drafts";
 import AnalysisDialog from "./AnalysisDialog";
 import { Dialog, Empty, ErrorBanner, ErrorContext, Field, Form, Select, Status } from "./components";
 import type {
@@ -280,7 +281,8 @@ export default function App() {
       revision: chapter?.revision,
       ...data,
     });
-    await refresh();
+    // A failed follow-up read must not hide an acknowledged write.
+    await refresh().catch(() => {});
     return result;
   };
   const project = state?.projects.find((p) => p.id === projectId),
@@ -2365,9 +2367,32 @@ function Editor({
     [offset, setOffset] = useState(1),
     [merge, setMerge] = useState(false),
     [restore, setRestore] = useState<string | null>(null),
-    [templateOpen,setTemplateOpen] = useState(false);
+    [templateOpen,setTemplateOpen] = useState(false),
+    [draftList, setDraftList] = useState<DraftRecord<Segment>[] | null>(null),
+    [saving, setSaving] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const draftRef = useRef({draft, revision, dirty});
+  draftRef.current = {draft, revision, dirty};
   useEffect(()=>onDraftChange(s.id,dirty),[s.id,dirty,onDraftChange]);
+  useEffect(() => {
+    const onSaved = (event: Event) => {
+      const detail = (event as CustomEvent<{id: string; revision: number | null; submitted: string; savedRevision: number}>).detail;
+      if (detail.id !== s.id) return;
+      const current = draftRef.current;
+      if (!current.dirty) return;
+      if (JSON.stringify({draft: current.draft, revision: current.revision}) === detail.submitted) {
+        if (detail.revision === null) setDirty(false);
+        else setRevision(detail.revision);
+      } else {
+        const nextRevision = current.revision === JSON.parse(detail.submitted).revision ? detail.savedRevision : current.revision;
+        writeDraft(s.id, current.draft, nextRevision);
+        onDraftChange(s.id, true);
+        setRevision(nextRevision);
+      }
+    };
+    window.addEventListener("workbench-draft-saved", onSaved);
+    return () => window.removeEventListener("workbench-draft-saved", onSaved);
+  }, [s.id, onDraftChange]);
   useEffect(() => {
     if (!dirty) {
       setDraft({ ...s });
@@ -2386,6 +2411,9 @@ function Editor({
   };
   const next = chapter.segments.find((x) => x.order === s.order + 1);
   const saveDraft = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
     const submitted = JSON.stringify({draft, revision});
     const payload: Record<string, unknown> = {
       id: s.id,
@@ -2404,14 +2432,18 @@ function Editor({
       (draft.voiceId !== s.voiceId || s.voiceSource !== "override")
     )
       payload.voiceId = draft.voiceId;
-    await save("segment.update", payload);
-    if (clearDraft(s.id, submitted)) setDirty(false);
+    const saved = await save("segment.update", payload) as { chapterRevision: number };
+    const remaining = finishDraftSave<Segment>(s.id, submitted, saved.chapterRevision);
+    onDraftChange(s.id, !!remaining);
+    window.dispatchEvent(new CustomEvent("workbench-draft-saved", {detail: {id: s.id, revision: remaining?.revision ?? null, submitted, savedRevision: saved.chapterRevision}}));
+    } finally { setSaving(false); }
   };
   return (
     <>
       <div className="inspector-head">
         <strong>片段设置</strong>
         <span>第 {s.order + 1} 条</span>
+        <button className="text-button" onClick={() => run(async () => setDraftList(await listDrafts<Segment>(s.id)))}>查看本机草稿</button>
       </div>
       <div className="inspector-tabs tabs">
         {[
@@ -2755,10 +2787,10 @@ function Editor({
       <div className="inspector-actions">
         <button
           className="button"
-          disabled={!dirty || locked}
+          disabled={!dirty || locked || saving}
           onClick={() => run(saveDraft)}
         >
-          {dirty ? "保存修改" : "已保存"}
+          {saving ? "保存中…" : dirty ? "保存修改" : "已保存"}
         </button>
         <button
           className="button primary"
@@ -2769,6 +2801,25 @@ function Editor({
           {s.current ? "重新生成" : "生成本条"}
         </button>
       </div>
+      {draftList && <Dialog title="本机草稿" onClose={() => setDraftList(null)}>
+        <p className="hint">本页草稿请返回编辑区保存或放弃。其他活动页面的草稿由原页面处理；已关闭页面的草稿可逐份恢复或放弃。</p>
+        <button className="button small" onClick={() => run(async () => setDraftList(await listDrafts<Segment>(s.id)))}>刷新草稿列表</button>
+        {!draftList.length && <p>这条片段没有本机草稿。</p>}
+        {draftList.map((entry, i) => <section className="inspector-section" key={entry.key}>
+          <h3>草稿 {i + 1} · {entry.status === "current" ? "本页" : entry.status === "active" ? "其他活动页面" : "已关闭页面"}</h3>
+          <p className="original-excerpt">{entry.data.draft.text}</p>
+          <p>表演指导：{entry.data.draft.performance || "未填写"}</p>
+          <p className="hint">角色：{roles.find(r => r.id === entry.data.draft.roleId)?.name || "未绑定"} · 音色：{voices.find(v => v.id === entry.data.draft.voiceId)?.name || "未绑定"}</p>
+          <p className="hint">语速 {entry.data.draft.config.speech_rate} · 音调 {entry.data.draft.config.pitch_rate} · 音量 {entry.data.draft.config.loudness_rate}{entry.data.revision !== chapter.revision ? " · 正式剧本已更新，恢复后需核对" : ""}</p>
+          {entry.status === "orphan" && <div className="form-row">
+            <button className="button small" disabled={dirty || saving || locked} onClick={() => run(async () => {
+              const restored = await recoverDraft<Segment>(s.id, entry);
+              setDraft(restored.draft); setRevision(restored.revision); setDirty(true); onDraftChange(s.id, true); setDraftList(null);
+            })}>恢复到本页</button>
+            <button className="button small" onClick={() => run(async () => { await discardDraft(s.id, entry); setDraftList(await listDrafts<Segment>(s.id)); })}>放弃这份草稿</button>
+          </div>}
+        </section>)}
+      </Dialog>}
       {templateOpen && <TemplateDialog segment={s} chapter={chapter} templates={templates} save={save} onClose={()=>setTemplateOpen(false)}/>}
       {split && (
         <Dialog title="拆分片段" onClose={() => setSplit(false)}>
