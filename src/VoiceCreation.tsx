@@ -76,7 +76,7 @@ function SessionEditor({session, enabled, configured, audioTools, routeBlocked, 
     <p className="hint">固定样文</p><p className="original-excerpt">{session?.text || sample}</p>
     <ObjectDraftTools controller={draft} title="声音描述" onError={setError} render={value=><p className="original-excerpt">{value.description}</p>}/>
     {!session && draft.base !== 0 && <p className="warning">这份新建草稿已取得创建回执，不能再次创建。请核对会话列表与保留的原内容后明确处理。</p>}
-    {draft.base !== (session?.revision || 0) && <p className="warning">描述已由其他页面修改，草稿仍保留。请核对后处理。</p>}
+    {draft.base !== (session?.revision || 0) && <p className="warning">保存基准与当前显示资料不同，原草稿仍保留。请核对后处理。</p>}
     <div className="button-row">
       <button className="button small" disabled={draft.saving || !enabled || session?.state === "abandoned" || (!draft.dirty && !!session) || (!session && draft.base !== 0)} onClick={()=>void save()}>{draft.saving ? "保存中…" : session ? "保存描述" : "保存声音描述"}</button>
       {session?.state === "active" && <button className="text-button warning" disabled={draft.saving} onClick={()=>void run(async()=>{

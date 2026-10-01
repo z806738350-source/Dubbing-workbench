@@ -4,6 +4,8 @@
 
 仓库包含源码、设计文档与验收摘要。密钥、小说测试素材、逐句听评表、生成音频、运行数据及备份仅保存在本地；验收文档中的这些本地证据链接在 GitHub 上不可用。
 
+声音创建、多人干声对戏及场景版本已接入工作台。操作和限制见 [增强阶段使用说明](doc/enhancement/release-notes.md)，交付记录见 [增强阶段状态](doc/enhancement/execution-status.md)，逐项证据见 [增强验收矩阵](doc/enhancement/acceptance-matrix.md)。对戏与场景保持实验标识；工程通过和声音听评分别记录。
+
 ## 启动
 
 需要 Node.js 22.13 或更新版本，以及可执行的 FFmpeg / FFprobe。
@@ -19,6 +21,8 @@ npm start
 在项目根目录的 `.env.kunpo` 配置 `KUNPO_API_KEY`、`KUNPO_BASE_URL`、`KUNPO_TTS_MODEL`。文本分析默认使用 `gemini-3.8-flash`，可以在“设置与连接”输入任意 Kunpo 支持的模型名称并保存。可选 `KUNPO_TEXT_MODEL` 作为初始默认值，界面已保存的选择优先。密钥不发送到前端、不写入日志，也不包含在数据备份中。不要分享该文件。
 
 可用环境配置：`DATA_DIR` 指定独立数据目录，`PORT` 指定本地端口，`FFMPEG_PATH` / `FFPROBE_PATH` 指定处理程序。未指定时优先使用本机 `~/.local/bin/ffmpeg`。
+
+有限音频实验可配置 `KUNPO_AUDIO_CALL_LIMIT`（正整数）和 `KUNPO_AUDIO_USAGE_SCOPE`（本轮名称）。额度在入队事务中预留，未发送释放，已发送失败及结果不明仍计入；同一范围不能改上限或清零。它控制本机提交次数，不能替代供应商账单。
 
 文本分析不在工具端设置输出 token 上限，不发送 `max_tokens`，采用服务商自身的规则。实际调用按用量计费，超时或服务商返回截断结果时停止，不自动重复付费。
 

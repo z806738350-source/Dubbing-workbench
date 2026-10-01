@@ -1,0 +1,291 @@
+{
+  "date": "2026-10-01",
+  "implementationCommit": "3c34c1369c9404eb7fac58457a99039cb56cd4c9",
+  "baseline": "081314d3e05d06b4f7548025176d385c12ec2d09",
+  "automated": {
+    "baseline": {
+      "passed": 137,
+      "failed": 0
+    },
+    "publicSource": {
+      "passed": 209,
+      "failed": 0,
+      "skipped": 0,
+      "build": true
+    },
+    "localIntegration": {
+      "passed": 215,
+      "failed": 0,
+      "skipped": 0,
+      "build": true,
+      "extraCoverage": "5 original local launch/workspace tests and 1 enhancement project-path compatibility test"
+    }
+  },
+  "browser": {
+    "version": "154.0.8037.58",
+    "viewport": [
+      {
+        "width": 1440,
+        "height": 1000
+      },
+      {
+        "width": 960,
+        "height": 900
+      }
+    ],
+    "brCoverage": [
+      "BR01",
+      "BR02",
+      "BR03",
+      "BR04",
+      "BR05",
+      "BR06",
+      "BR07",
+      "BR08",
+      "BR09",
+      "BR10",
+      "BR11",
+      "BR12",
+      "BR13",
+      "BR14"
+    ],
+    "provider": "local mock",
+    "uniqueChecks": 39,
+    "checks": [
+      {
+        "name": "BR01 声音描述→候选实际播放→幂等入库→显式角色绑定",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR02 候选在途刷新后找回，供应商只发送一次",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR03 在途修改描述，旧音频只属于旧输入且不覆盖新描述",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR04 旧参考上传与声音创建入口并存",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR12 新声音对象遗留草稿可在已打开页面恢复并保存",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR11 声音描述保存期间续写承接自己的回执，可继续保存",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR05 非连续或隐藏成员范围被预检拒绝，无部分组",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR06 重叠组服务端409，待生成组保留原单条编排",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR07 首次组生成启用且只播放一次，组级高亮全部成员",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR07 相同设置整组返工失败，原匹配声音保留",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR09 场景建议需明确开启、逐项勾选后一次采用，不改正文",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR10 连续场景重跑后切回保留干声，切换零请求",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR11 组指导保存期间续写、卸载再打开后第二次保存成功",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR08 拆组预览恢复原单条，不裁切或自动补生成",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "BR14 桌面及既有窄屏关键操作可用，记录实际页面",
+        "status": "passed",
+        "evidence": "browser-result.json"
+      },
+      {
+        "name": "DR04 新建声音描述等待期间续写移交稳定会话，第二次 update 只保留一个对象",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "DR04 新建组等待期间续写移交稳定组，第二次 update 只创建一个组",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "DR04 新建事件等待期间续写移交稳定事件，第二次 update 且事件数量为一",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "DR06 A指导草稿、B实际改成员正文、A轮询后保存真实409，不抬章节基准且双方内容保留",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "DR06 事件草稿保留原章与unit基准，另一页改unit后保存真实409，原事件和双方续写保留",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "BR06 两页真实同范围并发建组：一成功一409，失败页草稿保留，单条编排完整",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "BR09 正文变更使已采用事件待复核，真实生成预检拒绝且零外发，明确复核后恢复",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "BR13 整组实际播放期间另一页改指导，旧音停止，全组高亮消失，旧音与旧basis不能检查通过",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "BR13 真实断网暂停、恢复后已变版本不会自动续播；成功检查绑定实际audioId与basis",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "BR14 单独关闭 声音创建 不改其他开关，新生成禁用，历史入口/试听或本地切换保留且零外发",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "BR14 单独关闭 多人干声对戏 · 实验 不改其他开关，新生成禁用，历史入口/试听或本地切换保留且零外发",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "BR14 单独关闭 场景生成 · 实验 不改其他开关，新生成禁用，历史入口/试听或本地切换保留且零外发",
+        "status": "passed",
+        "evidence": "browser-extra-result.json"
+      },
+      {
+        "name": "MR08 旧片段draft-key迁入本页，真实刷新后同归属仍完整，可按旧保存基准正式保存",
+        "status": "passed",
+        "evidence": "browser-draft-legacy-result.json"
+      },
+      {
+        "name": "DR01 两个真实页面声音描述草稿各自持久，放弃A不改B，B仍可保存",
+        "status": "passed",
+        "evidence": "browser-draft-legacy-result.json"
+      },
+      {
+        "name": "DR03 模拟复制sessionStorage，真实native Lock拒绝共用归属并复制草稿；清除或编辑复制页不改原页",
+        "status": "passed",
+        "evidence": "browser-draft-legacy-result.json"
+      },
+      {
+        "name": "DR07 保存ack成功后仅跟随/state GET故障，续写仍承接exact revision，可恢复读取后继续保存",
+        "status": "passed",
+        "evidence": "browser-storage-errors-result.json"
+      },
+      {
+        "name": "DR08 已保存对象update等待期间明确放弃续写，迟到成功回执与轮询不复活草稿",
+        "status": "passed",
+        "evidence": "browser-storage-errors-result.json"
+      },
+      {
+        "name": "DR08 create已提交A、继续输入B、stable键一次quota失败：server仅一对象，来源B及revision1保留且禁止重复create",
+        "status": "passed",
+        "evidence": "browser-storage-errors-result.json"
+      },
+      {
+        "name": "SC05 真实UI创建首条之前至末条之后的持续事件，范围有效",
+        "status": "passed",
+        "evidence": "browser-sustained-events-result.json"
+      },
+      {
+        "name": "SC05 描述编辑读取真实start，兼容member不同也不移动起止边界",
+        "status": "passed",
+        "evidence": "browser-sustained-events-result.json"
+      },
+      {
+        "name": "SC05 仅修改起点正文使整个持续事件待复核，终点正文和范围保留",
+        "status": "passed",
+        "evidence": "browser-sustained-events-result.json"
+      },
+      {
+        "name": "SC05 起点恢复旧正文仍待复核，不自动确认",
+        "status": "passed",
+        "evidence": "browser-sustained-events-result.json"
+      },
+      {
+        "name": "SC05 仅修改终点正文使整个持续事件待复核，起点正文和范围保留",
+        "status": "passed",
+        "evidence": "browser-sustained-events-result.json"
+      },
+      {
+        "name": "SC05 终点恢复旧正文仍待复核，不自动确认",
+        "status": "passed",
+        "evidence": "browser-sustained-events-result.json"
+      }
+    ],
+    "paidCalls": 0
+  },
+  "migration": {
+    "legacySegments": 313,
+    "singleUnits": 313,
+    "legacyTablesPreserved": 11,
+    "repeatIdempotent": true,
+    "paidCalls": 0
+  },
+  "maintenance": {
+    "passed": true,
+    "allRecordsIdentical": true,
+    "decodedRestoredMediaFiles": 26,
+    "oldProgramRollbackPassed": true,
+    "cleanupPreservedReferencedMedia": true,
+    "oldWriterRefusedUpgradedDatabase": true,
+    "paidCalls": 0
+  },
+  "live": {
+    "audioModel": "seed-audio-1.0",
+    "audioDispatches": 25,
+    "audioCallCap": 28,
+    "successfulAudioFiles": 24,
+    "unknownAudioAttempts": 1,
+    "reserved": 0,
+    "successfulAudioDurationSeconds": 113.117792,
+    "textModel": "gemini-3.8-flash",
+    "textDispatches": 1,
+    "material": "self-authored text and newly generated candidate references only",
+    "billVerified": false,
+    "listening": "pending human judgement",
+    "automaticRetries": 0
+  },
+  "release": {
+    "voiceCreation": "engineering passed, listening pending",
+    "dialogue": "engineering passed, experimental, listening pending",
+    "scene": "engineering passed, experimental, listening pending"
+  },
+  "privacy": "No keys, novel text, runtime data, actual provider request logs or generated audio included in this summary.",
+  "eventReviewFixCommit": "e59786bf90ad5cbc58d44bf5862c57204acee84d"
+}
