@@ -37,6 +37,7 @@ import {
   ArrowDown,
 } from "lucide-react";
 import { api, action } from "./api";
+import { readDraft, writeDraft, clearDraft, hasDraft } from "./drafts";
 import AnalysisDialog from "./AnalysisDialog";
 import { Dialog, Empty, ErrorBanner, ErrorContext, Field, Form, Select, Status } from "./components";
 import type {
@@ -327,7 +328,7 @@ export default function App() {
   ) => {
     if (!ids.length)
       throw new Error("没有可生成的待办。需返工片段请先勾选；结果不明项请单独核对后重试。");
-    if (ids.some(id=>draftIds.includes(id) || !!localStorage.getItem("draft-"+id)))
+    if (ids.some(id=>draftIds.includes(id) || hasDraft(id)))
       throw new Error("所选片段有未保存草稿，请先保存或明确放弃后再生成。");
     if (
       !options.confirmed &&
@@ -1022,7 +1023,7 @@ export default function App() {
                                   >
                                     <Play size={14} />
                                   </button>
-                                  <button className="icon" aria-label={`重新生成第 ${s.order + 1} 条`} title={draftIds.includes(s.id) || !!localStorage.getItem("draft-"+s.id) ? "先保存或放弃本条草稿" : "使用已保存设置重新生成"} disabled={locked || busy || draftIds.includes(s.id) || !!localStorage.getItem("draft-"+s.id)} onClick={()=>void run(()=>generate([s.id]))}><RefreshCw size={14}/></button>
+                                  <button className="icon" aria-label={`重新生成第 ${s.order + 1} 条`} title={draftIds.includes(s.id) || hasDraft(s.id) ? "先保存或放弃本条草稿" : "使用已保存设置重新生成"} disabled={locked || busy || draftIds.includes(s.id) || hasDraft(s.id)} onClick={()=>void run(()=>generate([s.id]))}><RefreshCw size={14}/></button>
                                   <button
                                     className="icon"
                                     aria-label={`检查通过第 ${s.order + 1} 条`}
@@ -2349,7 +2350,7 @@ function Editor({
 }) {
   const cached = (() => {
     try {
-      return JSON.parse(localStorage.getItem("draft-" + s.id) || "null");
+      return readDraft<Segment>(s.id);
     } catch {
       return null;
     }
@@ -2375,10 +2376,7 @@ function Editor({
   }, [s, chapter.revision, dirty]);
   useEffect(() => {
     if (dirty)
-      localStorage.setItem(
-        "draft-" + s.id,
-        JSON.stringify({ draft, revision }),
-      );
+      writeDraft(s.id, draft, revision);
 
   }, [draft, revision, dirty, s.id]);
   const edit = (p: Partial<Segment>) => {
@@ -2388,6 +2386,7 @@ function Editor({
   };
   const next = chapter.segments.find((x) => x.order === s.order + 1);
   const saveDraft = async () => {
+    const submitted = JSON.stringify({draft, revision});
     const payload: Record<string, unknown> = {
       id: s.id,
       revision,
@@ -2406,8 +2405,7 @@ function Editor({
     )
       payload.voiceId = draft.voiceId;
     await save("segment.update", payload);
-    localStorage.removeItem("draft-" + s.id);
-    setDirty(false);
+    if (clearDraft(s.id, submitted)) setDirty(false);
   };
   return (
     <>
@@ -2744,7 +2742,7 @@ function Editor({
           <button
             className="text-button"
             onClick={() => {
-              localStorage.removeItem("draft-" + s.id);
+              clearDraft(s.id);
               setDirty(false);
               setDraft({ ...s });
               setRevision(chapter.revision);
