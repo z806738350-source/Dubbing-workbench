@@ -67,6 +67,18 @@ export const audioInput = (a) => ({
   model: a.model || "seed-audio-1.0",
   ...a.input,
 });
+export function audioMatches(s, audio) {
+  const input = audioInput(audio);
+  const configOf = c => [c?.speech_rate, c?.loudness_rate, c?.pitch_rate];
+  try {
+    return same(
+      [inputOf(s).model, compile(s), s.voiceId, configOf(s.config)],
+      [input.model, audio.prompt ?? compile(input), input.voiceId, configOf(input.config)],
+    );
+  } catch {
+    return false;
+  }
+}
 const reviewBasis = (basis, model) => ({
   model: model || "seed-audio-1.0",
   ...basis,
@@ -85,7 +97,7 @@ export function segmentStatus(store, s) {
     ? "missing"
     : storedAudioUnavailable(store, audio)
       ? "broken"
-      : same(audioInput(audio), inputOf(s))
+      : audioMatches(s, audio)
         ? "matched"
         : "stale";
   const review =
@@ -247,6 +259,9 @@ export function createDomain(store) {
     if (store.get("roles", s.roleId).projectId !== c.projectId)
       fail("角色不属于当前项目");
     if (s.voiceId) store.get("voices", s.voiceId);
+    if (!s.config || typeof s.config !== "object" || Array.isArray(s.config) ||
+      Object.keys(s.config).some(key => !["speech_rate", "loudness_rate", "pitch_rate"].includes(key)))
+      fail("音频设置仅允许语速、音量与音高");
     for (const [key, min, max] of [
       ["speech_rate", -50, 100],
       ["loudness_rate", -50, 100],
@@ -693,8 +708,8 @@ export function createDomain(store) {
             const order = c.order;
             c.order = next.order;
             next.order = order;
-            store.put("chapters", c, c.projectId);
-            store.put("chapters", next, c.projectId);
+            touch(c, true, false);
+            touch(next, true, false);
             context(c.projectId);
           }
           return c;
@@ -948,7 +963,7 @@ export function createDomain(store) {
           if (![s.previous, s.approved].includes(p.audioId))
             fail("只能恢复上一版或最近通过版");
           const a = store.get("audios", p.audioId);
-          if (!same(audioInput(a), inputOf(s)) && !p.restoreSettings)
+          if (!audioMatches(s, a) && !p.restoreSettings)
             fail("此音频设置不同，请确认恢复设置", 409);
           const rework = s.review?.state === "rework";
           if (p.restoreSettings) {

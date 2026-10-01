@@ -9,7 +9,7 @@ import {
   compile,
   coverage,
   inputOf,
-  audioInput,
+  audioMatches,
   performanceIssues,
   segmentStatus,
   checkEntityRevision,
@@ -228,6 +228,7 @@ export function createWorker(store, domain, config) {
     });
   }
   function register(attempt, meta) {
+    attempt = { ...attempt };
     store.transaction(() => {
       const s = attempt.segmentId
         ? store.get("segments", attempt.segmentId)
@@ -271,7 +272,7 @@ export function createWorker(store, domain, config) {
       if (
         active(j) && !s.retired &&
         c.revision === j.revision &&
-        same(inputOf(s), audioInput(attempt)) &&
+        audioMatches(s, attempt) &&
         !newer
       ) {
         s.previous = s.current;
@@ -314,7 +315,10 @@ export function createWorker(store, domain, config) {
           }
         }
         const dispatch = store.transaction(() => {
-          if (!active(store.get("jobs", job.id)) || store.get("attempts", a.id).status !== "queued") return false;
+          const latest = store.get("jobs", job.id);
+          if (!active(latest) || store.get("attempts", a.id).status !== "queued") return false;
+          if (latest.stop || closing || routeBlocked || store.maybe("settings", "audio-route")?.blocked)
+            throw Object.assign(new Error("尚未提交的请求已停止"), { status: 400, stopped: true });
           if (s) {
             preflight(store.get("chapters", job.chapterId), [s.id]);
             if (store.get("chapters", job.chapterId).revision !== job.revision)
@@ -355,7 +359,9 @@ export function createWorker(store, domain, config) {
             audio_config: {
               format: "wav",
               sample_rate: 48000,
-              ...a.input.config,
+              speech_rate: a.input.config.speech_rate,
+              loudness_rate: a.input.config.loudness_rate,
+              pitch_rate: a.input.config.pitch_rate,
             },
           }),
           signal: AbortSignal.timeout(config.timeout || 180000),
@@ -399,7 +405,7 @@ export function createWorker(store, domain, config) {
         await rename(file + ".part", file);
         register(a, meta);
       } catch (e) {
-        const unknown = a.status === "sending" && !e.known;
+        const unknown = ["sending", "unknown"].includes(store.get("attempts", a.id).status) && !e.known;
         a.status = unknown ? "unknown" : e.stopped ? "stopped" : "failed";
         a.error = e.status
           ? e.message
@@ -523,20 +529,21 @@ export function createWorker(store, domain, config) {
     }
   }
   async function recover() {
-    for (const j of store.all("jobs").filter(active)) {
+    for (const j of store.all("jobs")) {
+      const interrupted = active(j);
       for (const a of store.all("attempts", j.id)) {
+        const file = join(store.directory, `audio/${a.id}.wav`);
+        // Only the completed, decoded response is renamed to this final path; .part never qualifies.
         if (
-          a.status === "sending" &&
-          existsSync(join(store.directory, `audio/${a.id}.wav`))
+          ["sending", "unknown"].includes(a.status) &&
+          !store.maybe("audios", a.id) && !file.endsWith(".part") && existsSync(file)
         ) {
           try {
-            register(
-              a,
-              await inspect(join(store.directory, `audio/${a.id}.wav`)),
-            );
+            register(a, await inspect(file));
             continue;
           } catch {}
         }
+        if (!interrupted) continue;
         if (["queued", "sending"].includes(a.status)) {
           a.status = a.status === "sending" ? "unknown" : "stopped";
           store.put("attempts", a, j.id);
@@ -547,6 +554,7 @@ export function createWorker(store, domain, config) {
           }
         }
       }
+      if (!interrupted) continue;
       const recovered = store.all("attempts", j.id);
       j.finishedAt = new Date().toISOString();
       if (recovered.length && recovered.every((a) => a.status === "success")) {

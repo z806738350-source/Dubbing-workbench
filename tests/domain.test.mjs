@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openStore, uid } from "../server/store.mjs";
+import { openStore, same, uid } from "../server/store.mjs";
 import {
   createDomain,
   coverage,
@@ -59,6 +59,52 @@ test("章节改名保留音频编排，但旧编辑保存仍冲突", t => {
   assert.equal(after.arrangement, before.arrangement);
   assert.equal(after.revision, before.revision + 1);
   assert.throws(() => d.mutate("chapter.update", {chapterId:c.id,revision:before.revision,title:"过时改名"}), /其他页面/);
+});
+test("章节重排更新交换双方修订，拒绝旧页面重复移动且保留已有音频", t => {
+  const {store,d,p,c,v} = setup(t);
+  const middle = d.mutate("chapter.create", {projectId:p.id,title:"第二章",source:"中间章。",segment:true});
+  const last = d.mutate("chapter.create", {projectId:p.id,title:"第三章",source:"末章。",segment:true});
+  const s = d.list(last.id)[0];
+  s.voiceId = v.id;
+  const a = {id:uid(),path:v.path,input:inputOf(s)};
+  store.put("audios",a,last.id);
+  s.current = a.id;
+  s.review = {audioId:a.id,basis:basisOf(s),state:"passed"};
+  store.put("segments",s,last.id);
+  const before = d.chapter(last.id), context = store.get("projects",p.id).contextRevision;
+  const move = {chapterId:last.id,revision:last.revision,direction:-1};
+  d.mutate("chapter.move",move);
+  const after = d.chapter(last.id), chapters = store.all("chapters",p.id);
+  assert.equal(after.revision,last.revision+1);
+  assert.equal(store.get("chapters",middle.id).revision,middle.revision+1);
+  assert.equal(store.get("chapters",c.id).revision,c.revision);
+  assert.equal(after.order,1);
+  assert.equal(after.arrangement,before.arrangement);
+  assert.equal(store.get("chapters",middle.id).arrangement,middle.arrangement);
+  assert.deepEqual(after.segments,before.segments);
+  assert.equal(store.get("projects",p.id).contextRevision,context+1);
+  assert.throws(() => d.mutate("chapter.move",move), {status:409});
+  assert.throws(() => d.mutate("chapter.move",{chapterId:middle.id,revision:middle.revision,direction:-1}), {status:409});
+  assert.deepEqual(store.all("chapters",p.id),chapters);
+  assert.equal(store.get("projects",p.id).contextRevision,context+1);
+  assert.equal(store.all("jobs").length,0);
+});
+test("音频配置只接收三个数值字段，保存与入队均拒绝未知属性", t => {
+  const {store,d,c,v,update} = setup(t);
+  const original = d.list(c.id)[0], chapter = store.get("chapters",c.id);
+  for (const config of [null,[],"invalid",{...original.config,format:"mp3"},{...original.config,sample_rate:8000},{...original.config,channels:2}]) {
+    assert.throws(() => update("segment.update",{id:original.id,config}), {status:400});
+    assert.deepEqual(store.get("segments",original.id),original);
+    assert.deepEqual(store.get("chapters",c.id),chapter);
+  }
+  const valid = update("segment.update",{id:original.id,voiceId:v.id,roleConfirmed:true,config:{pitch_rate:-12,loudness_rate:100,speech_rate:-50}});
+  assert.deepEqual(valid.config,{pitch_rate:-12,loudness_rate:100,speech_rate:-50});
+  valid.config.sample_rate = 8000;
+  store.put("segments",valid,c.id);
+  const worker = createWorker(store,d,{key:"test",model:"seed-audio-1.0"});
+  assert.throws(() => worker.enqueue({chapterId:c.id,revision:store.get("chapters",c.id).revision,ids:[valid.id],commandId:uid()}), {status:400});
+  assert.equal(store.all("jobs").length,0);
+  assert.equal(store.all("attempts").length,0);
 });
 test("同音色不同来源合并保留覆盖保护；数值冲突取消不修改", t => {
   const {d,c,role,v,update} = setup(t);
@@ -367,6 +413,48 @@ test('历史音频缺少 model 字段仍匹配；更换实际模型后旧音频�
   s.current=audio.id;s.review={audioId:audio.id,basis,state:'passed'};store.put('segments',s,c.id);
   assert.equal(segmentStatus(store,s).validity,'matched');assert.equal(segmentStatus(store,s).review,'passed');
   s.model='other';store.put('segments',s,c.id);assert.equal(segmentStatus(store,s).validity,'stale');assert.equal(segmentStatus(store,s).review,'pending');
+});
+
+test('等效编译提示复用音频和恢复设置，审核依据变化仍需检查', t => {
+  const {store,d,c,role,v,update}=setup(t);
+  update('role.update',{id:role.id,voiceId:v.id});
+  const s=d.list(c.id)[0], prompt=compile(s);
+  const audio={id:uid(),path:v.path,input:inputOf(s),prompt};
+  store.put('audios',audio,c.id);
+  s.current=s.previous=audio.id;
+  s.review={audioId:audio.id,basis:basisOf(s),state:'passed'};
+  store.put('segments',s,c.id);
+  update('segment.update',{id:s.id,performance:'自然、清楚地朗读，不增加喘息、笑声或额外台词。'});
+  let current=d.list(c.id)[0];
+  assert.equal(compile(current),prompt);
+  assert.equal(segmentStatus(store,current).validity,'matched');
+  assert.equal(segmentStatus(store,current).review,'pending');
+  update('segment.restore',{id:s.id,audioId:audio.id});
+  current=d.list(c.id)[0];
+  assert.equal(current.performance,'自然、清楚地朗读，不增加喘息、笑声或额外台词。');
+  assert.equal(current.current,audio.id);
+  for (const patch of [{text:s.text+'新字'},{performance:'更轻一些'},{model:'another-model'},{voiceId:uid()},{config:{...s.config,pitch_rate:1}}])
+    assert.equal(segmentStatus(store,{...current,...patch}).validity,'stale');
+  store.put('audios',{...audio,prompt:prompt+'额外指令'},c.id);
+  assert.equal(segmentStatus(store,current).validity,'stale');
+  store.put('audios',{...audio,prompt:undefined},c.id);
+  assert.equal(segmentStatus(store,current).validity,'matched');
+  assert.equal(store.all('jobs').length,0);
+});
+
+test('对象键顺序不改变音频和检查状态，数组顺序仍有意义', t => {
+  const {store,d,c,role,v,update}=setup(t);
+  update('role.update',{id:role.id,voiceId:v.id});
+  const s=d.list(c.id)[0],audio={id:uid(),path:v.path,input:inputOf(s),prompt:compile(s)};
+  store.put('audios',audio,c.id);
+  s.current=audio.id;s.review={audioId:audio.id,basis:basisOf(s),state:'passed'};
+  store.put('segments',s,c.id);
+  update('segment.update',{id:s.id,config:{pitch_rate:0,loudness_rate:0,speech_rate:0}});
+  const current=d.list(c.id)[0];
+  assert.equal(segmentStatus(store,current).validity,'matched');
+  assert.equal(segmentStatus(store,current).review,'passed');
+  assert.ok(same({a:1,b:2},{b:2,a:1}));
+  assert.ok(!same(['reference-one','reference-two'],['reference-two','reference-one']));
 });
 
 test("更换原文后旧事实出处不进入分析，重新核对保存后恢复", async (t) => {

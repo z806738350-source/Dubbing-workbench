@@ -2,9 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 export const uid = () => randomUUID();
-export const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+export const same = isDeepStrictEqual;
 export function fail(message, status = 400) {
   throw Object.assign(new Error(message), { status });
 }

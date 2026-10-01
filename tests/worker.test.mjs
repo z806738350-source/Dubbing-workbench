@@ -214,6 +214,69 @@ test("传输中断不自动重试，结束批次并停止余下项", async (t) =
   await worker.tick();
   assert.equal(calls, 1);
 });
+test("参考异步检查期间停止、关闭或暂停路由，生成和试音均零发送", async t => {
+  for (const kind of ["generate", "voice-test"]) for (const action of ["stop", "close", "route"]) await t.test(`${kind} / ${action}`, async t => {
+    const {store,d,v,worker,enqueue}=setup(t);let calls=0;
+    t.mock.method(globalThis,"fetch",async()=>{calls++;return new Response(wav(),{headers:{"Content-Type":"audio/wav"}})});
+    const job=kind==="generate"?enqueue():worker.enqueue({kind,voiceId:v.id,entityRevision:1,text:"检查期间停止。",commandId:uid()});
+    const pending=worker.tick();
+    assert.equal(store.get("jobs",job.id).status,"running");
+    assert.ok(store.all("attempts",job.id).every(a=>a.status==="queued"));assert.equal(calls,0);
+    if(action==="stop")d.mutate("job.stop",{id:job.id});
+    else if(action==="close")worker.close();
+    else store.put("settings",{id:"audio-route",blocked:true});
+    await pending;
+    assert.equal(calls,0);assert.equal(store.get("jobs",job.id).status,"stopped");
+    assert.ok(store.all("attempts",job.id).every(a=>a.status==="stopped"&&!a.createdAt));
+    await worker.tick();assert.equal(calls,0);
+  });
+});
+
+test("音频请求只发送三项允许参数，旧记录无法覆盖固定 WAV 和采样率", async t => {
+  const {store,worker,enqueue}=setup(t),job=enqueue();let calls=0;
+  for(const a of store.all("attempts",job.id)){
+    a.input.config={pitch_rate:2,loudness_rate:3,speech_rate:4,format:"mp3",sample_rate:8000,unknown:"ignored"};
+    store.put("attempts",a,job.id);
+  }
+  t.mock.method(globalThis,"fetch",async(_,options)=>{
+    calls++;assert.deepEqual(JSON.parse(options.body).audio_config,{format:"wav",sample_rate:48000,speech_rate:4,loudness_rate:3,pitch_rate:2});
+    return new Response(wav(),{headers:{"Content-Type":"audio/wav"}});
+  });
+  await worker.tick();assert.equal(calls,2);assert.equal(store.get("jobs",job.id).status,"success");
+});
+
+test("完整正式音频登记异常后，重开恢复历史产物且不复活或覆盖已结束批次", async t => {
+  for(const later of ["unchanged","edited","newer"]) await t.test(later,async t=>{
+    const {store,d,c,worker,enqueue,dir}=setup(t);let calls=0,failed=false;
+    const requests=t.mock.method(globalThis,"fetch",async()=>{calls++;return new Response(wav(),{headers:{"Content-Type":"audio/wav"}})});
+    const job=enqueue(),attempt=store.all("attempts",job.id)[0],put=store.put.bind(store);
+    const registration=t.mock.method(store,"put",(table,value,...args)=>{
+      if(!failed&&value.id===attempt.id&&(later==="edited"?table==="attempts"&&value.status==="success":table==="audios")){failed=true;throw Error("registration failed")}
+      return put(table,value,...args);
+    });
+    await worker.tick();registration.mock.restore();
+    assert.equal(failed,true);assert.equal(calls,1);assert.equal(store.get("jobs",job.id).status,"unknown");
+    assert.equal(store.get("attempts",attempt.id).status,"unknown");assert.equal(store.all("audios").length,0);
+    const file=join(dir,attempt.path || `audio/${attempt.id}.wav`);
+    assert.ok(existsSync(file));assert.ok((await inspect(file)).duration>0);
+    if(later==="edited")d.mutate("segment.update",{chapterId:c.id,revision:d.chapter(c.id).revision,id:attempt.segmentId,text:"登记失败后保存的新正文。"});
+    if(later==="newer"){
+      const newer=enqueue({retryUnknown:true});await worker.tick();assert.equal(store.get("jobs",newer.id).status,"success");
+      for(const s of d.list(c.id))d.mutate("segment.review",{chapterId:c.id,revision:d.chapter(c.id).revision,id:s.id,audioId:s.current,basis:basisOf(s),state:"passed"});
+    }
+    const ended=store.get("jobs",job.id),segments=d.list(c.id),chapter=store.get("chapters",c.id),before=store.all("audios").length;
+    store.close();store.close=()=>{};
+    const reopened=openStore(dir);t.after(()=>reopened.close());
+    const domain=createDomain(reopened),next=createWorker(reopened,domain,{key:"test",model:"seed-audio-1.0",audioUrl:"https://example.invalid"});
+    requests.mock.mockImplementation(()=>assert.fail("恢复不得请求供应商"));
+    await next.recover();await next.tick();
+    assert.equal(reopened.get("audios",attempt.id).id,attempt.id);assert.equal(reopened.get("attempts",attempt.id).status,"success");
+    assert.equal(reopened.all("audios").length,before+1);assert.deepEqual(reopened.get("jobs",job.id),ended);
+    assert.deepEqual(domain.list(c.id),segments);assert.deepEqual(reopened.get("chapters",c.id),chapter);
+    const restored=reopened.get("audios",attempt.id);await next.recover();
+    assert.equal(reopened.all("audios").length,before+1);assert.deepEqual(reopened.get("audios",attempt.id),restored);
+  });
+});
 test("同配置返工失败保留旧结果与通过记录", async (t) => {
   const { store, d, c, worker, enqueue } = setup(t);
   const original = global.fetch;
@@ -256,6 +319,19 @@ test("正式文件已落盘但未登记，恢复零付费调用；part 文件不
   assert.equal(store.all("audios").length, 1);
   assert.equal(store.get("attempts", attempts[0].id).status, "success");
   assert.equal(store.get("attempts", attempts[1].id).status, "unknown");
+});
+test("恢复登记事务回滚不会留下 sending，正式文件保留到下次补登记", async t => {
+  const {store,worker,enqueue,dir}=setup(t),job=enqueue(),a=store.all("attempts",job.id)[0],put=store.put.bind(store);
+  store.put("attempts",{...a,status:"sending"},job.id);mkdirSync(join(dir,"audio"));writeFileSync(join(dir,a.path || `audio/${a.id}.wav`),wav());
+  const registration=t.mock.method(store,"put",(table,value,...args)=>{
+    if(table==="attempts"&&value.id===a.id&&value.status==="success")throw Error("registration failed");
+    return put(table,value,...args);
+  });
+  t.mock.method(globalThis,"fetch",()=>assert.fail("恢复不得请求供应商"));
+  await worker.recover();registration.mock.restore();
+  assert.equal(store.get("attempts",a.id).status,"unknown");assert.equal(store.get("jobs",job.id).status,"unknown");assert.equal(store.all("audios").length,0);
+  const ended=store.get("jobs",job.id);await worker.recover();
+  assert.equal(store.get("attempts",a.id).status,"success");assert.equal(store.get("audios",a.id).id,a.id);assert.deepEqual(store.get("jobs",job.id),ended);
 });
 test("停止参考仍可本地导出；角色未确认阻断正式导出", async (t) => {
   const { store, d, c, v, worker, enqueue } = setup(t);
