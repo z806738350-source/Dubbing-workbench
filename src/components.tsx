@@ -1,0 +1,329 @@
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { AlertCircle, Check, ChevronDown, X } from "lucide-react";
+
+export const ErrorContext = createContext({ message: "", dismiss: () => {} });
+export function ErrorBanner() {
+  const { message, dismiss } = useContext(ErrorContext);
+  return message ? <div className="error-banner" role="alert">
+    <AlertCircle size={16} /><span>{message}</span>
+    <button className="icon" aria-label="关闭错误提示" onClick={dismiss}><X size={16} /></button>
+  </div> : null;
+}
+
+export function Dialog({
+  title,
+  children,
+  onClose,
+  wide = false,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+  wide?: boolean;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const el = ref.current!;
+    el.showModal();
+    el.querySelector<HTMLElement>(
+      "input:not([type=hidden]), textarea, [role=combobox]",
+    )?.focus();
+    return () => el.close();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className={wide ? "dialog wide" : "dialog"}
+      onCancel={onClose}
+      onClick={(e) => {
+        if (e.target === ref.current) onClose();
+      }}
+      aria-label={title}
+    >
+      <div className="dialog-head">
+        <h2>{title}</h2>
+        <button className="icon" aria-label="关闭" onClick={onClose}>
+          <X size={18} />
+        </button>
+      </div>
+      <ErrorBanner />
+      <div className="dialog-body">{children}</div>
+    </dialog>
+  );
+}
+export function Select({
+  value,
+  options,
+  onChange,
+  disabled = false,
+  label,
+  onOpen,
+}: {
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  label: string;
+  onOpen?: () => void;
+}) {
+  const [open, setOpen] = useState(false),
+    [cursor, setCursor] = useState(0);
+  const [placement, setPlacement] = useState({
+    top: 0,
+    left: 0,
+    width: 0,
+    maxHeight: 280,
+  });
+  const root = useRef<HTMLDivElement>(null),
+    trigger = useRef<HTMLButtonElement>(null);
+  const listId = useRef("list-" + crypto.randomUUID());
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const rect = trigger.current!.getBoundingClientRect();
+      const height = Math.min(
+        280,
+        options.length * 44 + 8,
+        window.innerHeight - 32,
+      );
+      const above =
+        window.innerHeight - rect.bottom < height + 12 &&
+        rect.top > height + 12;
+      setPlacement({
+        top: above ? rect.top - height - 4 : rect.bottom + 4,
+        left: Math.max(
+          8,
+          Math.min(rect.left, window.innerWidth - rect.width - 8),
+        ),
+        width: rect.width,
+        maxHeight: above
+          ? height
+          : Math.min(height, window.innerHeight - rect.bottom - 12),
+      });
+    };
+    place();
+    const close = (e: PointerEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    window.addEventListener("resize", place);
+    document.addEventListener("scroll", place, true);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      window.removeEventListener("resize", place);
+      document.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
+  const choose = (v: string) => {
+    onChange(v);
+    setOpen(false);
+    trigger.current?.focus();
+  };
+  return (
+    <div className="select" ref={root}>
+      <button
+        ref={trigger}
+        className="select-trigger"
+        type="button"
+        role="combobox"
+        aria-label={label}
+        aria-expanded={open}
+        aria-controls={listId.current}
+        aria-activedescendant={open ? `${listId.current}-${cursor}` : undefined}
+        disabled={disabled || !options.length}
+        onClick={() => {
+          if (!open) onOpen?.();
+          setCursor(
+            Math.max(
+              0,
+              options.findIndex((o) => o.value === value),
+            ),
+          );
+          setOpen(!open);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            if (open) {
+              e.preventDefault();
+              e.stopPropagation();
+              setOpen(false);
+            }
+            return;
+          }
+          if (e.key === "Tab") {
+            setOpen(false);
+            return;
+          }
+          if (!["ArrowDown", "ArrowUp", "Enter", "Home", "End"].includes(e.key))
+            return;
+          e.preventDefault();
+          if (e.key === "Enter" && open) {
+            choose(options[cursor].value);
+            return;
+          }
+          if (!open) onOpen?.();
+          setOpen(true);
+          setCursor(
+            e.key === "Home"
+              ? 0
+              : e.key === "End"
+                ? options.length - 1
+                : !open
+                  ? Math.max(
+                      0,
+                      options.findIndex((o) => o.value === value),
+                    )
+                  : (cursor + (e.key === "ArrowUp" ? -1 : 1) + options.length) %
+                    options.length,
+          );
+        }}
+      >
+        <span>{options.find((o) => o.value === value)?.label || "请选择"}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div
+          className="select-menu"
+          style={{
+            ...placement,
+            position: "fixed",
+            bottom: "auto",
+            right: "auto",
+          }}
+          role="listbox"
+          id={listId.current}
+          aria-label={label}
+        >
+          {options.map((o, i) => (
+            <button
+              type="button"
+              id={`${listId.current}-${i}`}
+              key={o.value}
+              role="option"
+              tabIndex={-1}
+              aria-selected={o.value === value}
+              className={i === cursor ? "cursor" : ""}
+              onPointerMove={() => setCursor(i)}
+              onClick={() => choose(o.value)}
+            >
+              <span>{o.label}</span>
+              {o.value === value && <Check size={14} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+export function Field({
+  label,
+  children,
+  hint,
+}: {
+  label: string;
+  children: ReactNode;
+  hint?: string;
+}) {
+  return (
+    <div className="field">
+      <label>
+        {label}
+        {children}
+      </label>
+      {hint && <p className="hint">{hint}</p>}
+    </div>
+  );
+}
+export function Empty({
+  icon,
+  heading,
+  children,
+  action,
+}: {
+  icon: ReactNode;
+  heading: string;
+  children: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="empty">
+      <div className="empty-icon">{icon}</div>
+      <h2>{heading}</h2>
+      <p>{children}</p>
+      {action && <div className="empty-actions">{action}</div>}
+    </div>
+  );
+}
+export function Status({
+  kind,
+  children,
+}: {
+  kind?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span className={`status ${kind || ""}`}>
+      <span className="status-dot" />
+      {children}
+    </span>
+  );
+}
+export function Form({
+  children,
+  onSubmit,
+  label,
+  busy = false,
+  successMessage,
+  revision,
+}: {
+  children: ReactNode;
+  onSubmit: (form: FormData, expectedRevision?: number) => Promise<void | number>;
+  label: string;
+  busy?: boolean;
+  successMessage?: string;
+  revision?: number;
+}) {
+  const [baseRevision, setBaseRevision] = useState(revision);
+  const [error, setError] = useState(""),
+    [pending, setPending] = useState(false),
+    [succeeded, setSucceeded] = useState(false);
+  return (
+    <form
+      noValidate
+      onChange={() => setSucceeded(false)}
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setError("");
+        setSucceeded(false);
+        setPending(true);
+        try {
+          const savedRevision = await onSubmit(new FormData(e.currentTarget), baseRevision);
+          if (typeof savedRevision === "number") setBaseRevision(savedRevision);
+          setSucceeded(true);
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setPending(false);
+        }
+      }}
+    >
+      {children}
+      {revision !== baseRevision && <p className="warning">资料已更新，当前输入仍保留。请复制需要保留的修改后关闭并重新打开。</p>}
+      {error && (
+        <p className="error-inline" role="alert">
+          {error}
+        </p>
+      )}
+      {succeeded && successMessage && (
+        <p className="hint" role="status">
+          {successMessage}
+        </p>
+      )}
+      <div className="form-actions">
+        <button className="button primary" disabled={pending || busy}>
+          {pending ? "正在保存…" : label}
+        </button>
+      </div>
+    </form>
+  );
+}

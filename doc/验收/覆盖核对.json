@@ -1,0 +1,55 @@
+{
+  "date": "2026-09-25",
+  "documents": [
+    {
+      "document": "配音工作台工具设计方案-v0.2.1.md",
+      "totalLines": 683,
+      "nonblankLines": 469,
+      "accountedNonblankLines": 469,
+      "missingLines": [],
+      "sourceTextMatches": true
+    },
+    {
+      "document": "Seed-Audio-1.0专用剧本与提示词写作规范-v0.2.1.md",
+      "totalLines": 291,
+      "nonblankLines": 203,
+      "accountedNonblankLines": 203,
+      "missingLines": [],
+      "sourceTextMatches": true
+    },
+    {
+      "document": "Seed-Audio-1.0能力补充与设计调整-v0.2.1.md",
+      "totalLines": 164,
+      "nonblankLines": 104,
+      "accountedNonblankLines": 104,
+      "missingLines": [],
+      "sourceTextMatches": true
+    },
+    {
+      "document": "Ardot前端设计规范归纳-v0.1.md",
+      "totalLines": 297,
+      "nonblankLines": 224,
+      "accountedNonblankLines": 224,
+      "missingLines": [],
+      "sourceTextMatches": true
+    }
+  ],
+  "sourceContentRecords": 836,
+  "individualCScenarios": 25,
+  "mixedBSubscenarios": 6,
+  "legacySourceSubscenario": 1,
+  "userRequirements": 8,
+  "backgroundRecords": 297,
+  "requirementRecords": 579,
+  "counts": {
+    "已实现并验证": 438,
+    "已实现未验证": 38,
+    "缺失": 5,
+    "偏离": 0,
+    "按计划延期": 98
+  },
+  "allRequirementStatusesAssigned": true,
+  "duplicateIds": false,
+  "warning": "统计含跨文档复述条款，不是独立功能数，也不是产品完成率；静态、模拟、浏览器、真实模型与人工声音证据分开。",
+  "updatedAt": "2026-10-01T06:04:43.961559+00:00"
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+data/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+data-backups/
+.hallmark/
+# Local listening records contain supplied novel text; do not publish them.
+doc/验收/第1章真实录制听评记录-2026-10-01.md
+doc/验收/跨章与表演对照听评记录-2026-10-01.md

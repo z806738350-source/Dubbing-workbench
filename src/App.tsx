@@ -1,0 +1,3205 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  AudioLines,
+  BookOpen,
+  Check,
+  CheckCheck,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  FileText,
+  FolderOpen,
+  Headphones,
+  Import,
+  Library,
+  Menu,
+  MoreHorizontal,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings2,
+  SkipBack,
+  SkipForward,
+  SlidersHorizontal,
+  Sparkles,
+  Square,
+  Upload,
+  Users,
+  Volume2,
+  X,
+  Scissors,
+  Link2,
+  RotateCcw,
+  PanelRightClose,
+  ArrowUp,
+  ArrowDown,
+} from "lucide-react";
+import { api, action } from "./api";
+import AnalysisDialog from "./AnalysisDialog";
+import { Dialog, Empty, ErrorBanner, ErrorContext, Field, Form, Select, Status } from "./components";
+import type {
+  State,
+  Job,
+  ChapterDetail,
+  Segment,
+  Role,
+  AliasSource,
+  Voice,
+  Master,
+  Project,
+  AudioRecord,
+} from "./types";
+
+const names: Record<string, string> = {
+  none: "未生成",
+  queued: "排队中",
+  running: "生成中",
+  success: "已生成",
+  failed: "生成失败",
+  unknown: "结果不明",
+  stopped: "已停止",
+  missing: "待生成",
+  broken: "文件不可用",
+  stale: "待更新",
+  matched: "音频匹配",
+  pending: "待检查",
+  passed: "已通过",
+  rework: "需返工",
+};
+const basis = (s: Segment) => ({
+  model: s.model || "seed-audio-1.0",
+  text: s.text,
+  voiceId: s.voiceId,
+  performance: s.performance,
+  config: s.config,
+  template: s.template,
+  roleId: s.roleId,
+  type: s.type,
+  source: s.source,
+  identityConfirmed: s.identityConfirmed,
+  roleConfirmed: s.roleConfirmed,
+});
+const time = (n: number) =>
+  `${Math.floor(n / 60)
+    .toString()
+    .padStart(2, "0")}:${Math.floor(n % 60)
+    .toString()
+    .padStart(2, "0")}`;
+const active = (s: string) => ["queued", "running"].includes(s);
+const connectionMessage = "无法连接本地工作区，已暂停试听。连接恢复后将先核对版本。";
+type Modal =
+  | "project"
+  | "project-rename"
+  | "chapter"
+  | "manual"
+  | "voices"
+  | "roles"
+  | "settings"
+  | "tasks"
+  | "export"
+  | "source"
+  | "rename"
+  | null;
+
+export default function App() {
+  const [rebindOpen, setRebindOpen] = useState(false);
+  const [draftIds,setDraftIds] = useState<string[]>([]);
+  const [,setDraftSignal] = useState(0);
+  const onDraftChange = useCallback((id:string,dirty:boolean)=>setDraftIds(prev=>dirty ? (prev.includes(id) ? prev : [...prev,id]) : prev.filter(x=>x!==id)),[]);
+
+  const bookmarks = useRef<Record<string, string>>({});
+  const pendingPlay = useRef<string | null>(null);
+  const [oldPreview, setOldPreview] = useState<Segment | null>(null);
+  const [generationConfirm, setGenerationConfirm] = useState<{
+    ids: string[];
+    whole: boolean;
+  } | null>(null);
+  useEffect(() => {
+    const close = () => {
+      if (window.innerWidth >= 1216) setInspectorOpen(false);
+    };
+    window.addEventListener("resize", close);
+    return () => window.removeEventListener("resize", close);
+  }, []);
+  const [state, setState] = useState<State | null>(null),
+    [chapter, setChapter] = useState<ChapterDetail | null>(null),
+    [chapterId, setChapterId] = useState(localStorage.getItem("chapter") || ""),
+    [projectId, setProjectId] = useState(""),
+    [selected, setSelected] = useState(""),
+    [checked, setChecked] = useState<string[]>([]),
+    [filter, setFilter] = useState("all"),
+    [search, setSearch] = useState(""),
+    [modal, setModal] = useState<Modal>(null),
+    [error, setError] = useState(""),
+    [notice, setNotice] = useState(""),
+    [busy, setBusy] = useState(false),
+    [navOpen, setNavOpen] = useState(false),
+    [inspectorOpen, setInspectorOpen] = useState(false),
+    [panelMode, setPanelMode] = useState("settings"),
+    [follow, setFollow] = useState(true),
+    [connectionReady, setConnectionReady] = useState(false),
+    [loading, setLoading] = useState(true);
+  const [player, setPlayer] = useState<{
+      kind: string;
+      id: string;
+      title: string;
+      chapterId?: string;
+      arrangement?: number;
+      playbackItems?: ChapterDetail["playbackItems"];
+      master?: Master;
+      resumeAt?: number;
+    } | null>(null),
+    [playing, setPlaying] = useState(false),
+    [position, setPosition] = useState(0),
+    [duration, setDuration] = useState(0),
+    [currentSegment, setCurrentSegment] = useState(""),
+    [transitioning, setTransitioning] = useState(false);
+  const projectRef = useRef(projectId);
+  projectRef.current = projectId;
+  const audio = useRef<HTMLAudioElement>(null),
+    listRef = useRef<HTMLDivElement>(null),
+    chapterRef = useRef(chapterId),
+    stateRef = useRef(state),
+    playerRef = useRef(player);
+  chapterRef.current = chapterId;
+  stateRef.current = state;
+  playerRef.current = player;
+  const refresh = useCallback(async () => {
+    try {
+    const s = await api<State>("/state");
+    setState(s);
+    let id = chapterRef.current;
+    if (!s.chapters.some((c) => c.id === id))
+      id =
+        s.chapters.find(
+          (c) => !projectRef.current || c.projectId === projectRef.current,
+        )?.id || "";
+    if (id !== chapterRef.current) setChapterId(id);
+    if (id) {
+      const c = await api<ChapterDetail>("/chapters/" + id);
+      if (chapterRef.current && chapterRef.current !== id) return;
+      setChapter(c);
+      setProjectId(c.projectId);
+      setSelected((prev) =>
+        c.segments.some((x) => x.id === prev) ? prev : c.segments[0]?.id || "",
+      );
+      if (pendingPlay.current === id) {
+        const master = c.masters.find((m) => m.arrangement === c.arrangement);
+        if (master) {
+          pendingPlay.current = null;
+          setNotice(c.coverage.valid ? "整章试听已准备好，点击播放开始试听。" : "当前剧本试听已准备好，原文内容尚未完整。点击播放检查现有片段。");
+        } else if (
+          !s.jobs.some(
+            (j) =>
+              j.chapterId === id && ["queued", "running"].includes(j.status),
+          )
+        )
+          pendingPlay.current = null;
+      } else if (pendingPlay.current && pendingPlay.current !== id)
+        pendingPlay.current = null;
+      const p = playerRef.current;
+      if (p?.chapterId === id && (p.arrangement !== c.arrangement || JSON.stringify(p.playbackItems) !== JSON.stringify(c.playbackItems) || s.jobs.some(j => j.chapterId === id && active(j.status)))) {
+        audio.current?.pause();
+        setPlayer(null);
+        setCurrentSegment("");
+        setNotice("本章版本或任务状态已变化，已停止旧播放。请核对后继续。");
+      }
+    } else {
+      setChapter(null);
+      setProjectId((prev) =>
+        s.projects.some((p) => p.id === prev) ? prev : s.projects[0]?.id || "",
+      );
+    }
+    setLoading(false);
+    setConnectionReady(true);
+    setError(previous => previous === connectionMessage ? "" : previous);
+    } catch {
+      audio.current?.pause();
+      setConnectionReady(false);
+      setError(connectionMessage);
+      throw new Error(connectionMessage);
+    }
+  }, []);
+  useEffect(() => {
+    void refresh().catch((e) => {
+      setError(e.message);
+      setLoading(false);
+    });
+    const timer = setInterval(() => void refresh().catch(() => {}), 2500);
+    const onFocus = () => { audio.current?.pause(); setConnectionReady(false); void refresh().catch((e) => setError(e.message)); };
+    const onStorage = (e: StorageEvent) => { if (e.key?.startsWith("draft-")) setDraftSignal(n=>n+1); if (e.key === "workbench-change") void refresh().catch(e => setError(e.message)); };
+    const onOffline = () => { audio.current?.pause(); setConnectionReady(false); setError(connectionMessage); };
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("online", onFocus);
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("online", onFocus);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [refresh,onDraftChange]);
+  useEffect(() => {
+    localStorage.setItem("chapter", chapterId);
+    setNotice("");
+    audio.current?.pause();
+    setPlayer(null);
+    setChecked([]);
+    setFilter("all");
+    setSearch("");
+    void refresh().catch((e) => setError(e.message));
+  }, [chapterId, refresh]);
+  useEffect(() => {
+    if (follow && currentSegment) {
+      document
+        .getElementById("segment-" + currentSegment)
+        ?.scrollIntoView({ block: "center", behavior: "instant" });
+    }
+  }, [currentSegment, follow, filter, search]);
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await fn();
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const mutate = async (name: string, data: Record<string, unknown> = {}) => {
+    if (name === "segment.review" && !connectionReady) throw new Error(connectionMessage);
+    const result = await action(name, {
+      chapterId: chapter?.id,
+      revision: chapter?.revision,
+      ...data,
+    });
+    await refresh();
+    return result;
+  };
+  const project = state?.projects.find((p) => p.id === projectId),
+    roles = state?.roles.filter((r) => r.projectId === projectId) || [],
+    voices = state?.voices || [],
+    segments = chapter?.segments || [],
+    selectedSegment = segments.find((s) => s.id === selected),
+    job = state?.jobs.find(
+      (j) => j.chapterId === chapterId && active(j.status),
+    ),
+    locked = !!job;
+  const visible = segments.filter((s) => {
+    if (
+      search &&
+      !`${s.text}${roles.find((r) => r.id === s.roleId)?.name}`.includes(search)
+    )
+      return false;
+    if (filter === "confirm") return !s.roleConfirmed || !s.identityConfirmed;
+    if (filter === "generate") return !s.excluded && s.validity !== "matched";
+    if (filter === "failed") return ["failed", "unknown"].includes(s.latest);
+    if (filter === "pending")
+      return s.validity === "matched" && s.review === "pending";
+    if (filter === "rework") return s.review === "rework";
+    return true;
+  });
+  const currentHidden = !!currentSegment && !visible.some(s=>s.id === currentSegment);
+  const ready = segments.filter(
+      (s) => !s.excluded && s.validity === "matched",
+    ).length,
+    total = segments.filter((s) => !s.excluded).length,
+    passed = segments.filter(
+      (s) => !s.excluded && s.review === "passed",
+    ).length;
+  const pickChapter = (id: string) => {
+    audio.current?.pause();
+    setPlayer(null);
+    setChapterId(id);
+    setNavOpen(false);
+    setInspectorOpen(false);
+  };
+  const generate = async (
+    ids: string[],
+    whole = false,
+    options: Record<string, unknown> = {},
+  ) => {
+    if (!ids.length)
+      throw new Error("没有可生成的待办。需返工片段请先勾选；结果不明项请单独核对后重试。");
+    if (ids.some(id=>draftIds.includes(id) || !!localStorage.getItem("draft-"+id)))
+      throw new Error("所选片段有未保存草稿，请先保存或明确放弃后再生成。");
+    if (
+      !options.confirmed &&
+      (state?.settings.routeBlocked ||
+        segments.some((s) => ids.includes(s.id) && s.latest === "unknown"))
+    ) {
+      setGenerationConfirm({ ids, whole });
+      return;
+    }
+    const payload = {
+      kind: "generate",
+      chapterId,
+      revision: chapter?.revision,
+      ids,
+      whole,
+      ...options,
+    };
+    const signature = JSON.stringify(payload);
+    let saved: { signature: string; commandId: string } | null = null;
+    try {
+      saved = JSON.parse(
+        sessionStorage.getItem("pending-generation") || "null",
+      );
+    } catch {
+      sessionStorage.removeItem("pending-generation");
+    }
+    const commandId =
+      saved?.signature === signature ? saved.commandId : crypto.randomUUID();
+    sessionStorage.setItem(
+      "pending-generation",
+      JSON.stringify({ signature, commandId }),
+    );
+    try {
+      audio.current?.pause();
+      setPlayer(null);
+      await api("/jobs", { ...payload, commandId });
+      sessionStorage.removeItem("pending-generation");
+    } catch (e) {
+      if ((e as { status?: number }).status)
+        sessionStorage.removeItem("pending-generation");
+      throw e;
+    }
+    setGenerationConfirm(null);
+    await refresh();
+  };
+  const startPlay = async (
+    kind: string,
+    id: string,
+    title: string,
+    master?: Master,
+    standalone = false,
+  ) => {
+    if (!connectionReady) { setError(connectionMessage); return; }
+    if (kind !== "voices" && !standalone && chapter) {
+      try {
+        const fresh = await api<ChapterDetail>("/chapters/" + chapter.id);
+        const now = await api<State>("/state");
+        const existing = playerRef.current;
+        const expected = existing?.chapterId === chapter.id && existing.kind === kind && existing.id === id ? existing.playbackItems : chapter.playbackItems;
+        if (fresh.arrangement !== chapter.arrangement || JSON.stringify(fresh.playbackItems) !== JSON.stringify(expected) || now.jobs.some(j => j.chapterId === chapter.id && active(j.status))) {
+          await refresh();
+          setError("章节版本或任务状态已变化，请核对后重新选择试听。");
+          return;
+        }
+      } catch { setError("无法核对播放版本，请恢复连接后重试。"); return; }
+    }
+    if (
+      !master &&
+      playerRef.current?.kind === kind &&
+      playerRef.current?.id === id &&
+      audio.current
+    ) {
+      if (audio.current.paused)
+        void audio.current.play().catch(() => setPlaying(false));
+      else audio.current.pause();
+      return;
+    }
+    const bookmark = bookmarks.current[chapterId];
+    if (master && bookmark && !master.mapping.some(x => x.segmentId === bookmark)) {
+      delete bookmarks.current[chapterId];
+      setNotice("原断点片段已拆分、合并或移除。请重新选择片段；再次点击试听将从开头播放。");
+      return;
+    }
+    audio.current?.pause();
+    setPosition(0);
+    setDuration(0);
+    setTransitioning(false);
+    setPlayer({
+      kind,
+      id,
+      title,
+      chapterId: kind === "voices" || standalone ? undefined : chapterId,
+      arrangement: chapter?.arrangement,
+      playbackItems: chapter?.playbackItems,
+      master,
+      resumeAt: master
+        ? (master.mapping.find(
+            (x) => x.segmentId === bookmarks.current[chapterId],
+          )?.startFrame || 0) / master.sampleRate
+        : 0,
+    });
+  };
+  useEffect(() => {
+    if (!player) {
+      audio.current?.pause();
+      setPlaying(false);
+      setPosition(0);
+      setDuration(0);
+      setCurrentSegment("");
+      setTransitioning(false);
+      return;
+    }
+    const el = audio.current!;
+    el.src = `/api/media/${player.kind}/${player.id}`;
+    el.load();
+    void el.play().catch(() => setPlaying(false));
+  }, [player]);
+  const playChapter = () =>
+    run(async () => {
+      if (!chapter) return;
+      const master = chapter.masters.find(
+        (m) => m.arrangement === chapter.arrangement,
+      );
+      if (master) await startPlay("masters", master.id, chapter.title, master);
+      else {
+        await api("/jobs", {
+          kind: "master",
+          chapterId,
+          revision: chapter.revision,
+          commandId: crypto.randomUUID(),
+        });
+        pendingPlay.current = chapterId;
+      }
+    });
+  const closeOldPreview = () => {
+    audio.current?.pause();
+    setPlayer(null);
+    setCurrentSegment("");
+    setOldPreview(null);
+  };
+  const chapterOptions =
+    state?.chapters
+      .filter((c) => c.projectId === projectId)
+      .sort((a, b) => a.order - b.order) || [];
+  const nav = (
+    <>
+      <div className="brand">
+        <span className="brand-mark">
+          <AudioLines size={21} />
+        </span>
+        <div>
+          <strong>配音工作台</strong>
+          <span>DUBBING WORKBENCH</span>
+        </div>
+        <button
+          className="icon mobile-close"
+          aria-label="关闭目录"
+          onClick={() => setNavOpen(false)}
+        >
+          <X size={18} />
+        </button>
+      </div>
+      <div className="project-switch">
+        <Select
+          label="当前项目"
+          value={projectId}
+          options={
+            state?.projects.map((p) => ({ value: p.id, label: p.name })) || []
+          }
+          onChange={(id) => {
+            projectRef.current = id;
+            setProjectId(id);
+            const c = state?.chapters.find((c) => c.projectId === id);
+            if (c) pickChapter(c.id);
+            else {
+              chapterRef.current = "";
+              setChapterId("");
+              setChapter(null);
+            }
+          }}
+        />
+        <button
+          className="icon"
+          aria-label="新建项目"
+          onClick={() => setModal("project")}
+        >
+          <Plus size={16} />
+        </button>
+      </div>
+      {project && <button className="text-button project-rename" onClick={() => setModal("project-rename")}>重命名项目</button>}
+      <button className="nav-item current" onClick={() => setNavOpen(false)}>
+        <BookOpen size={17} />
+        章节工作台
+      </button>
+      <button className="nav-item" onClick={() => setModal("voices")}>
+        <Library size={17} />
+        音色库<span>{voices.length}</span>
+      </button>
+      <button
+        className="nav-item"
+        disabled={!project}
+        onClick={() => setModal("roles")}
+      >
+        <Users size={17} />
+        角色档案<span>{roles.length}</span>
+      </button>
+      <div className="nav-section">
+        <span>章节</span>
+        <button
+          className="icon"
+          aria-label="导入新章节"
+          disabled={!project}
+          onClick={() => setModal("chapter")}
+        >
+          <Plus size={15} />
+        </button>
+      </div>
+      <div className="chapter-list">
+        {chapterOptions.map((c, i) => (
+          <button
+            key={c.id}
+            className={`chapter-item ${c.id === chapterId ? "selected" : ""}`}
+            onClick={() => pickChapter(c.id)}
+          >
+            <FileText size={15} />
+            <span className="chapter-nav-label"><span>{c.title}</span><small>{c.productionStatus}</small></span>
+            <span className="chapter-index">
+              {String(i + 1).padStart(2, "0")}
+            </span>
+          </button>
+        ))}
+        {project && !chapterOptions.length && (
+          <p className="nav-empty">导入文字，开始第一章</p>
+        )}
+      </div>
+      <div className="nav-bottom">
+        <button className="nav-item" onClick={() => setModal("tasks")}>
+          <RefreshCw size={16} />
+          任务记录
+          {state?.jobs.some((j) => active(j.status)) && (
+            <span className="live-dot" />
+          )}
+        </button>
+        <button className="nav-item" onClick={() => setModal("settings")}>
+          <Settings2 size={16} />
+          设置与连接
+        </button>
+        <div className="local-info">
+          <span className="status-dot" />
+          本地工作区<span>v0.1</span>
+        </div>
+      </div>
+    </>
+  );
+  const inspector = chapter && <>
+    <div className="tabs panel-tabs" aria-label="工作面板">
+      <button aria-pressed={panelMode === "settings"} className={panelMode === "settings" ? "active" : ""} onClick={()=>setPanelMode("settings")}>片段设置</button>
+      <button aria-pressed={panelMode === "analysis"} className={panelMode === "analysis" ? "active" : ""} onClick={()=>setPanelMode("analysis")}>AI 整理</button>
+    </div>
+    <div className="panel-content" hidden={panelMode !== "settings"}>
+      {selectedSegment ? (
+                    <Editor
+                      key={selectedSegment.id}
+                      segment={selectedSegment}
+                      onDraftChange={onDraftChange}
+                      templates={state?.templates || []}
+                      chapter={chapter}
+                      roles={roles}
+                      voices={voices}
+                      locked={locked}
+                      connectionReady={connectionReady}
+                      save={mutate}
+                      run={run}
+                      generate={(ids) => generate(ids)}
+                      onRoles={() => setModal("roles")}
+                    />
+      ) : <div className="inspector-scroll">
+        <div className="inspector-section">
+          <h3>当前章节</h3>
+          <p>{chapter.title}</p>
+          <p className="hint">{chapter.source.length} 字原文 · {segments.length} 条片段</p>
+        </div>
+        <div className="inspector-section">
+          <h3>制作方式</h3><p>逐条干声</p>
+          <p className="hint">选择片段后，在这里调整角色、声音与表演。</p>
+        </div>
+      </div>}
+    </div>
+    <div className="panel-content" hidden={panelMode !== "analysis"}>
+      <AnalysisDialog key={chapter.id} contextRevision={project?.contextRevision || 0}
+        defaultModel={state?.settings.textModel || "gemini-3.8-flash"}
+        chapter={chapter} roles={roles} selected={checked} refresh={refresh}/>
+    </div>
+  </>;
+  return (
+    <ErrorContext.Provider value={{ message: error, dismiss: () => setError("") }}>
+      <div className="app-shell">
+        <aside className="sidebar">{nav}</aside>
+        <main className="workspace">
+          <header className="topbar">
+            <div className="breadcrumb">
+              <button
+                className="icon menu-toggle"
+                aria-label="打开目录"
+                onClick={() => setNavOpen(true)}
+              >
+                <Menu size={19} />
+              </button>
+              <FolderOpen size={15} />
+              <span>{project?.name || "我的工作区"}</span>
+              <ChevronRight size={13} />
+              <strong>{chapter?.title || "开始制作"}</strong>
+            </div>
+            <div className="topbar-actions">
+              <span className="local-save">
+                <Check size={13} />
+                本地工作区
+              </span>
+              <button
+                className="button small"
+                onClick={() => setModal("tasks")}
+              >
+                <AudioLines size={14} />
+                <span className="desktop-label">任务</span>
+              </button>
+              <button
+                className="button primary small"
+                disabled={!chapter || locked}
+                onClick={() => setModal("export")}
+              >
+                <Download size={14} />
+                导出
+              </button>
+            </div>
+          </header>
+          {notice && <div className="notice-banner" role="status"><Check size={16}/><span>{notice}</span><button className="icon" aria-label="关闭提示" onClick={() => setNotice("")}><X size={16}/></button></div>}
+          <ErrorBanner />
+          {loading ? (
+            <div className="loading-layout" aria-label="正在读取工作区" aria-busy="true">
+              <div className="loading-heading" aria-hidden="true"><div className="skeleton"/><div className="skeleton"/></div>
+              <div className="loading-body" aria-hidden="true">
+                <div className="loading-rows">{[0, 1, 2, 3].map(i => <div className="loading-row" key={i}><div className="skeleton"/><div className="skeleton"/></div>)}</div>
+                <div className="inspector loading-inspector"><div className="skeleton"/><div className="skeleton"/><div className="skeleton"/></div>
+              </div>
+            </div>
+          ) : !chapter ? (
+            <Empty
+              icon={<BookOpen size={32} />}
+              heading={project ? "让文字开始有声" : "从一个故事开始"}
+              action={
+                <>
+                  <button
+                    className="button primary"
+                    onClick={() => setModal(project ? "chapter" : "project")}
+                  >
+                    <Plus size={16} />
+                    {project ? "导入第一章" : "新建项目"}
+                  </button>
+                  {!project && (
+                    <span className="subtle">项目和音频保存在本机</span>
+                  )}
+                </>
+              }
+            >
+              按章整理文本，为角色选择声音，逐条试听与打磨。
+            </Empty>
+          ) : (
+            <>
+              <section className="chapter-heading">
+                <div>
+                  <div className="chapter-label">
+                    章节制作 <span>逐条干声</span>
+                  </div>
+                  <button
+                    className="title-button"
+                    onClick={() => setModal("rename")}
+                    disabled={locked}
+                  >
+                    <h1>{chapter.title}</h1>
+                    <MoreHorizontal size={18} />
+                  </button>
+                  <p>
+                    {total} 条朗读片段 <span>·</span>{" "}
+                    {chapter.source
+                      ? `${Array.from(chapter.source).length.toLocaleString()} 字原文`
+                      : "手工剧本"}{" "}
+                    <span>·</span> {new Set(segments.map(s => s.roleId)).size} 个角色
+                  </p>
+                </div>
+                <div className="chapter-actions">
+                  <button
+                    className="button"
+                    disabled={locked}
+                    onClick={() => { setPanelMode("analysis"); if(window.innerWidth < 1216) setInspectorOpen(true); }}
+                  >
+                    <Sparkles size={15} />
+                    整理剧本
+                  </button>
+                  <button
+                    className="button"
+                    disabled={locked}
+                    onClick={() => setModal("source")}
+                  >
+                    <FileText size={15} />
+                    原文
+                  </button>
+                  <button
+                    className="button"
+                    disabled={locked}
+                    onClick={() => setModal("manual")}
+                  >
+                    <Plus size={15} />
+                    片段
+                  </button>
+                  <button
+                    className="button primary"
+                    disabled={locked || busy || !total}
+                    title="补做缺失、待更新和已勾选的需返工片段；结果不明项需单独核对"
+                    onClick={() =>
+                      run(() =>
+                        generate(
+                          segments
+                            .filter(
+                              (s) =>
+                                !s.excluded &&
+                                s.latest !== "unknown" &&
+                                (s.validity !== "matched" ||
+                                  (s.review === "rework" && checked.includes(s.id))),
+                            )
+                            .map((s) => s.id),
+                          true,
+                        ),
+                      )
+                    }
+                  >
+                    <AudioLines size={16} />
+                    生成待办
+                  </button>
+                </div>
+              </section>
+              <div className="chapter-summary">
+                <div className="completion">
+                  <span
+                    style={{
+                      transform: `scaleX(${total ? passed / total : 0})`,
+                    }}
+                  />
+                </div>
+                <span>
+                  <strong>{passed}</strong> / {total} 已检查
+                </span>
+                <span className="summary-extra">{ready} 条音频就绪 · {segments.filter(s => !s.excluded && (!s.roleConfirmed || !s.identityConfirmed)).length} 待确认 · {segments.filter(s => !s.excluded && s.validity === "stale").length} 待更新 · {segments.filter(s => !s.excluded && s.validity === "matched" && s.review === "pending").length} 待检查</span>
+                {!chapter.coverage.valid && (
+                  <span className="warning">
+                    原文有 {chapter.coverage.gaps} 字未覆盖
+                  </span>
+                )}
+                <button
+                  className="text-button"
+                  onClick={() => setModal("roles")}
+                >
+                  管理角色
+                  <ChevronRight size={12} />
+                </button>
+              </div>
+              {locked && (
+                <div className="task-banner" role="status">
+                  <AudioLines size={17} />
+                  <div>
+                    <strong>
+                      {job.kind === "generate"
+                        ? "正在生成配音"
+                        : job.kind === "master"
+                          ? chapter.coverage.valid ? "正在准备整章试听" : "正在准备当前剧本试听"
+                          : "正在导出成品"}
+                    </strong>
+                    <span>
+                      已成功 {job.done} / {job.total} · 失败 {job.failed || 0} · 已耗时 {time(job.elapsedSeconds || 0)}
+                      {job.currentSegmentId && ` · 当前第 ${(segments.find(s => s.id === job.currentSegmentId)?.order ?? 0) + 1} 条`}
+                      · 本章暂时只读，可前往其他章节
+                    </span>
+                  </div>
+                  <button
+                    className="button small"
+                    disabled={job.stop || job.kind !== "generate"}
+                    onClick={() =>
+                      run(() => mutate("job.stop", { id: job.id }))
+                    }
+                  >
+                    {job.stop ? "正在停止后续" : "停止后续"}
+                  </button>
+                </div>
+              )}
+              <div className="editor-layout">
+                <section className="script-panel">
+                  <div className="script-tools">
+                    <div className="tabs" aria-label="片段筛选">
+                      {[
+                        ["all", "全部"],
+                        ["confirm", "待确认"],
+                        ["generate", "待生成"],
+                        ["failed", "失败"],
+                        ["pending", "待检查"],
+                        ["rework", "需返工"],
+                      ].map(([id, label]) => (
+                        <button
+                          key={id}
+                          className={filter === id ? "active" : ""}
+                          aria-pressed={filter === id}
+                          onClick={() => setFilter(id)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="search-field">
+                      <Search size={14} />
+                      <input
+                        aria-label="搜索台词或角色"
+                        placeholder="搜索台词"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  {checked.length > 0 && (
+                    <div className="selection-bar" role="group" aria-label="所选片段操作">
+                      <span>已选 {checked.length} 条</span>
+                      <button
+                        className="text-button"
+                        disabled={locked}
+                        onClick={() => setRebindOpen(true)}
+                      >
+                        <Users size={14} aria-hidden="true" />改绑角色
+                      </button>
+                      <button
+                        className="text-button"
+                        disabled={locked}
+                        onClick={() => run(() => generate(checked))}
+                      >
+                        <AudioLines size={14} aria-hidden="true" />生成所选
+                      </button>
+                      <button
+                        className="text-button"
+                        disabled={locked}
+                        onClick={() =>
+                          run(() => mutate("segment.confirm", { ids: checked }))
+                        }
+                      >
+                        <CheckCheck size={14} aria-hidden="true" />确认归属
+                      </button>
+                      <button
+                        className="icon"
+                        aria-label="清空选择"
+                        onClick={() => setChecked([])}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+                  <div className="script-column-head">
+                    <input
+                      aria-label="选择可见片段"
+                      type="checkbox"
+                      checked={
+                        visible.length > 0 &&
+                        visible.every((s) => checked.includes(s.id))
+                      }
+                      onChange={(e) =>
+                        setChecked(
+                          e.target.checked
+                            ? visible
+                                .filter((s) => !s.excluded)
+                                .map((s) => s.id)
+                            : [],
+                        )
+                      }
+                    />
+                    <span>角色 / 朗读正文</span>
+                    <span>音频状态</span>
+                  </div>
+                  <div
+                    className="script-list"
+                    ref={listRef}
+                    onWheel={() => setFollow(false)}
+                    onTouchMove={() => setFollow(false)}
+                    onPointerDown={(e) => { if (e.target === e.currentTarget) setFollow(false); }}
+                    onKeyDown={(e) => { if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(e.key)) setFollow(false); }}
+                  >
+                    {visible.map((s) => {
+                      const role = roles.find((r) => r.id === s.roleId),
+                        voice = voices.find((v) => v.id === s.voiceId);
+                      return (
+                        <article
+                          id={"segment-" + s.id}
+                          key={s.id}
+                          className={`script-row ${selected === s.id ? "selected" : ""} ${currentSegment === s.id ? "playing" : ""} ${s.excluded ? "excluded" : ""}`}
+                        >
+                          <div className="row-gutter">
+                            <input
+                              type="checkbox"
+                              aria-label={`选择第 ${s.order + 1} 条`}
+                              checked={checked.includes(s.id)}
+                              onChange={(e) =>
+                                setChecked((prev) =>
+                                  e.target.checked
+                                    ? [...prev, s.id]
+                                    : prev.filter((id) => id !== s.id),
+                                )
+                              }
+                            />
+                            <span>{String(s.order + 1).padStart(2, "0")}</span>
+                          </div>
+                          <button
+                            className="row-content"
+                            onClick={() => {
+                              setSelected(s.id);
+                              if (window.innerWidth < 1216) {
+                                setPanelMode("settings");
+                                setInspectorOpen(true);
+                              }
+                            }}
+                          >
+                            <span className="row-meta">
+                              <span
+                                className={`avatar ${role?.narrator ? "narrator" : ""}`}
+                              >
+                                {role?.name[0] || "?"}
+                              </span>
+                              <strong>{role?.name || "未分配"}</strong>
+                              <span className="voice-caption">
+                                {voice?.name || "未绑定音色"}
+                                {s.voiceSource === "override"
+                                  ? " · 本条指定"
+                                  : ""}
+                              </span>
+                              {!s.roleConfirmed && (
+                                <span className="needs-confirm">待确认</span>
+                              )}
+                            </span>
+                            <span className="spoken-text">{s.text}</span>
+                            {s.performance && (
+                              <span className="performance">
+                                <SlidersHorizontal size={12} />
+                                {s.performance}
+                              </span>
+                            )}
+                          </button>
+                          <div className="row-trailing">
+                            {s.excluded ? (
+                              <Status>已排除</Status>
+                            ) : (
+                              <>
+                                <Status
+                                  kind={
+                                    s.review === "passed"
+                                      ? "success"
+                                      : s.validity !== "matched"
+                                        ? "neutral"
+                                        : s.review === "rework"
+                                          ? "warning"
+                                          : ""
+                                  }
+                                >
+                                  {s.validity === "matched"
+                                    ? names[s.review]
+                                    : names[s.validity]}
+                                </Status>
+                                <span className="attempt-state">{[
+                                  "failed",
+                                  "unknown",
+                                  "running",
+                                  "queued",
+                                ].includes(s.latest) ? names[s.latest] : ""}</span>
+                                <div className="row-actions">
+                                  <button
+                                    className="icon"
+                                    aria-label={`试听第 ${s.order + 1} 条${s.validity === "stale" ? "旧版" : ""}`}
+                                    disabled={!connectionReady || !s.current || s.validity === "broken" || locked}
+                                    onClick={() => {
+                                      setCurrentSegment(s.id);
+                                      // A spot-check must not replace an existing chapter resume point.
+                                      bookmarks.current[chapterId] ??= s.id;
+                                      if (s.validity !== "matched")
+                                        setOldPreview(s);
+                                      startPlay(
+                                        "audios",
+                                        s.current!,
+                                        `${role?.name} · 第 ${s.order + 1} 条${s.validity !== "matched" ? "（旧版）" : ""}`,
+                                      );
+                                    }}
+                                  >
+                                    <Play size={14} />
+                                  </button>
+                                  <button className="icon" aria-label={`重新生成第 ${s.order + 1} 条`} title={draftIds.includes(s.id) || !!localStorage.getItem("draft-"+s.id) ? "先保存或放弃本条草稿" : "使用已保存设置重新生成"} disabled={locked || busy || draftIds.includes(s.id) || !!localStorage.getItem("draft-"+s.id)} onClick={()=>void run(()=>generate([s.id]))}><RefreshCw size={14}/></button>
+                                  <button
+                                    className="icon"
+                                    aria-label={`检查通过第 ${s.order + 1} 条`}
+                                    disabled={
+                                      !connectionReady || s.validity !== "matched" || locked
+                                    }
+                                    onClick={() =>
+                                      run(() =>
+                                        mutate("segment.review", {
+                                          id: s.id,
+                                          audioId: s.current,
+                                          basis: basis(s),
+                                          state: "passed",
+                                        }),
+                                      )
+                                    }
+                                  >
+                                    <Check size={16} />
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                    {!visible.length && (
+                      <Empty
+                        icon={<FileText size={28} />}
+                        heading={
+                          segments.length
+                            ? "没有符合条件的片段"
+                            : "本章还没有朗读片段"
+                        }
+                        action={
+                          <button
+                            className="button"
+                            onClick={() =>
+                              segments.length
+                                ? (setSearch(""), setFilter("all"))
+                                : setModal("manual")
+                            }
+                          >
+                            {segments.length ? "查看全部" : "添加片段"}
+                          </button>
+                        }
+                      >
+                        {segments.length
+                          ? "换一个筛选条件，或搜索其他台词。"
+                          : "添加手工片段，开始配置声音。"}
+                      </Empty>
+                    )}
+                  </div>
+                  <div className="script-footer">
+                    <span>
+                      {visible.length} / {segments.length} 条
+                    </span>
+                    <span>正文与表演指导分开保存</span>
+                  </div>
+                </section>
+                <aside className={`inspector ${panelMode === "analysis" ? "analysis-active" : ""}`}>
+                  {!inspectorOpen && inspector}
+                </aside>
+              </div>
+            </>
+          )}
+          <footer className="player">
+            <div className="player-title">
+              <div className="player-symbol">
+                <Headphones size={19} />
+              </div>
+              <div>
+                <strong>{player?.title || (chapter && !chapter.coverage.valid ? "当前剧本试听" : "整章试听")}</strong>
+                <span>
+                  {player
+                    ? player.kind === "masters"
+                      ? `${chapter?.coverage.valid ? "与导出共用同一母版" : "当前剧本试听，内容尚未完整"}${transitioning ? " · 片段间过渡" : ""}`
+                      : player.kind === "voices"
+                        ? "参考声音"
+                        : "单条试听"
+                    : `${ready} / ${total} 条音频就绪`}
+                </span>
+              </div>
+            </div>
+            <div className="transport">
+              <button
+                className="icon"
+                aria-label="后退五秒"
+                disabled={!player}
+                onClick={() => {
+                  if (audio.current)
+                    audio.current.currentTime = Math.max(
+                      0,
+                      audio.current.currentTime - 5,
+                    );
+                }}
+              >
+                <SkipBack size={17} />
+              </button>
+              <button
+                className="play-button"
+                aria-label={playing ? "暂停" : "播放"}
+                disabled={
+                  !connectionReady || busy || locked || (!player && (!total || ready !== total))
+                }
+                onClick={() =>
+                  player
+                    ? playing
+                      ? audio.current?.pause()
+                      : void startPlay(player.kind, player.id, player.title, undefined, !player.chapterId)
+                    : void playChapter()
+                }
+              >
+                {playing ? <Pause size={20} /> : <Play size={20} />}
+              </button>
+              <button
+                className="icon"
+                aria-label="前进五秒"
+                disabled={!player}
+                onClick={() => {
+                  if (audio.current)
+                    audio.current.currentTime = Math.min(
+                      duration,
+                      audio.current.currentTime + 5,
+                    );
+                }}
+              >
+                <SkipForward size={17} />
+              </button>
+            </div>
+            <div className="timeline">
+              <input
+                type="range"
+                aria-label="播放进度"
+                min={0}
+                max={duration || 1}
+                step={0.01}
+                value={position}
+                disabled={!player || !duration}
+                onChange={(e) => {
+                  if (audio.current)
+                    audio.current.currentTime = Number(e.target.value);
+                  setPosition(Number(e.target.value));
+                }}
+              />
+              <div>
+                <span>{time(position)}</span>
+                <span>{time(duration)}</span>
+              </div>
+            </div>
+            <div className="player-options">
+              <button
+                className="button small"
+                disabled={!connectionReady || !total || ready !== total || locked}
+                onClick={() => void playChapter()}
+              >
+                <AudioLines size={14} />
+                {chapter?.masters.some(
+                  (m) => m.arrangement === chapter.arrangement,
+                )
+                  ? chapter.coverage.valid ? "整章试听" : "当前剧本试听"
+                  : "准备试听"}
+              </button>
+              <button
+                className={`${currentHidden ? "button small" : "icon"} ${follow ? "is-active" : ""}`}
+                aria-label={currentHidden ? "当前播放被筛选隐藏，回到当前播放" : follow ? "暂停跟随" : "回到当前播放"}
+                aria-pressed={follow}
+                onClick={() => {
+                  if (follow && !currentHidden) { setFollow(false); return; }
+                  setSearch("");
+                  setFilter("all");
+                  setFollow(true);
+                  document
+                    .getElementById("segment-" + currentSegment)
+                    ?.scrollIntoView({ block: "nearest" });
+                }}
+              >
+                <Link2 size={17} />{currentHidden && "回到当前播放"}
+              </button>
+              <Volume2 size={17} />
+            </div>
+          </footer>
+        </main>
+      </div>
+      <audio
+        ref={audio}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => { setPlaying(false); setTransitioning(false); }}
+        onError={() => {
+          setPlaying(false);
+          if (player?.master && player.chapterId === chapterId && chapter) {
+            setPlayer(null);
+            setNotice("整章缓存无法播放，正在本地重新准备；不会调用配音模型。");
+            void run(async () => {
+              await api("/jobs", {kind: "master", chapterId, revision: chapter.revision, commandId: crypto.randomUUID()});
+              pendingPlay.current = chapterId;
+              await refresh();
+            });
+          } else setError("音频无法播放，文件可能缺失或格式不受支持。请恢复文件或重新生成本条。");
+        }}
+        onLoadedMetadata={() => {
+          if (player?.resumeAt) audio.current!.currentTime = player.resumeAt;
+          setDuration(
+            Number.isFinite(audio.current!.duration)
+              ? audio.current!.duration
+              : 0,
+          );
+        }}
+        onTimeUpdate={() => {
+          if (!player) return;
+          const t = audio.current!.currentTime;
+          setPosition(t);
+          if (player?.master) {
+            const m = player.master;
+            const current = m.mapping.find(
+              (x, i) =>
+                t >= x.startFrame / m.sampleRate &&
+                (i === m.mapping.length - 1 ||
+                  t < m.mapping[i + 1].startFrame / m.sampleRate),
+            );
+            if (current) {
+              setCurrentSegment(current.segmentId);
+              setTransitioning(t >= current.endFrame / m.sampleRate && current !== m.mapping.at(-1));
+              if (player.chapterId)
+                bookmarks.current[player.chapterId] = (t >= current.endFrame / m.sampleRate ? m.mapping.find(x => x.startFrame > current.endFrame)?.segmentId : current.segmentId) || current.segmentId;
+            }
+          }
+        }}
+      />
+      {generationConfirm && (
+        <Dialog
+          title="核对后重新生成"
+          onClose={() => setGenerationConfirm(null)}
+        >
+          <Form
+            label="确认并开始"
+            onSubmit={async (f) => {
+              if (f.get("confirm") !== "on")
+                throw new Error("请先核对并勾选确认");
+              await generate(generationConfirm.ids, generationConfirm.whole, {
+                confirmed: true,
+                retryUnknown: true,
+                resumeRoute: true,
+              });
+            }}
+          >
+            <p>
+              本次选择 {generationConfirm.ids.length}{" "}
+              条片段。结果不明的请求可能已经计费；重新发送可能再次计费。若接口曾暂停，请先检查权限和额度。
+            </p>
+            <label className="check-label">
+              <input type="checkbox" name="confirm" />
+              已核对，允许重新发送所选片段
+            </label>
+          </Form>
+        </Dialog>
+      )}
+      {navOpen && (
+        <Dialog title="项目与章节" onClose={() => setNavOpen(false)}>
+          <div className="mobile-nav">{nav}</div>
+        </Dialog>
+      )}
+      {inspectorOpen && chapter && (
+        <div className="mobile-inspector">
+          <Dialog title="章节工作面板" onClose={() => setInspectorOpen(false)}>
+            {inspector}
+          </Dialog>
+        </div>
+      )}
+      {modal === "project" && (
+        <Dialog title="新建配音项目" onClose={() => setModal(null)}>
+          <Form
+            label="创建项目"
+            onSubmit={async (f) => {
+              const p = await action<Project>("project.create", {
+                name: f.get("name"),
+              });
+              projectRef.current = p.id;
+              setProjectId(p.id);
+              chapterRef.current = "";
+              setChapterId("");
+              setChapter(null);
+              await refresh();
+              setModal(null);
+            }}
+          >
+            <Field label="项目名称">
+              <input
+                name="name"
+                autoFocus
+                placeholder="例如：不要乱碰瓷"
+                maxLength={100}
+              />
+            </Field>
+            <p className="hint">
+              角色档案在项目内跨章节复用，参考音色可供所有项目使用。
+            </p>
+          </Form>
+        </Dialog>
+      )}
+      {modal === "project-rename" && project && (
+        <RenameProject project={project} save={mutate} onClose={() => setModal(null)} />
+      )}
+      {modal === "chapter" && (
+        <ImportChapter
+          projectId={projectId}
+          onClose={() => setModal(null)}
+          onCreated={async (id) => {
+            pickChapter(id);
+            setModal(null);
+            await refresh();
+          }}
+        />
+      )}
+      {modal === "manual" && chapter && (
+        <Dialog title="添加手工片段" onClose={() => setModal(null)}>
+          <Form
+            label="保存片段"
+            revision={chapter.revision}
+            onSubmit={async (f, revision) => {
+              await mutate("segment.create", { text: f.get("text"), revision });
+              setModal(null);
+            }}
+          >
+            <Field label="朗读正文">
+              <textarea
+                name="text"
+                autoFocus
+                placeholder="输入要朗读的文字"
+                rows={7}
+              />
+            </Field>
+            <p className="hint">
+              先使用旁白角色；保存后可调整角色、音色和表演。
+            </p>
+          </Form>
+        </Dialog>
+      )}
+      {modal === "source" && chapter && (
+        <Dialog title="章节原文" onClose={() => setModal(null)} wide>
+          <div className="source-summary">
+            <Status kind={chapter.coverage.valid ? "success" : "warning"}>
+              {chapter.coverage.valid
+                ? "原文覆盖完整"
+                : `未覆盖 ${chapter.coverage.gaps} 字 · 重复 ${chapter.coverage.overlaps} 字`}
+            </Status>
+            <span>原文保持不变</span>
+          </div>
+          <pre className="source-text">
+            {chapter.source || "本章由手工片段组成，没有导入原文。"}
+          </pre>
+        </Dialog>
+      )}
+      {modal === "rename" && chapter && (
+        <Dialog title="章节设置" onClose={() => setModal(null)}>
+          <Form
+            label="保存设置"
+            revision={chapter.revision}
+            onSubmit={async (f, revision) => {
+              await mutate("chapter.update", { title: f.get("title"), revision });
+              setModal(null);
+            }}
+          >
+            <Field label="章节名称">
+              <input name="title" defaultValue={chapter.title} />
+            </Field>
+          </Form>
+          <div className="section-rule">
+            <h3>叙事顺序</h3>
+            <div className="button-row">
+              <button
+                className="button"
+                onClick={() =>
+                  run(async () => { await mutate("chapter.move", { direction: -1 }); setNotice("叙事顺序已更新，请复核各章可知的角色资料；既有音频未重做。"); })
+                }
+              >
+                <ArrowUp size={14} />
+                前移一章
+              </button>
+              <button
+                className="button"
+                onClick={() =>
+                  run(async () => { await mutate("chapter.move", { direction: 1 }); setNotice("叙事顺序已更新，请复核各章可知的角色资料；既有音频未重做。"); })
+                }
+              >
+                <ArrowDown size={14} />
+                后移一章
+              </button>
+            </div>
+          </div>
+        </Dialog>
+      )}
+      {rebindOpen && chapter && (
+        <RebindDialog
+          revision={chapter.revision}
+          rows={chapter.segments.filter((s) => checked.includes(s.id))}
+          roles={roles}
+          voices={voices}
+          onClose={() => setRebindOpen(false)}
+          onSave={async (roleId, revision) => {
+            await mutate("segment.rebind", { ids: checked, roleId, revision });
+            setRebindOpen(false);
+          }}
+        />
+      )}
+      {oldPreview && (
+        <Dialog title="旧音频试听正文" onClose={closeOldPreview}>
+          <p className="hint">
+            正在试听旧音频。下面是这版音频生成时使用的正文，与当前编辑可能不同。
+          </p>
+          <p className="original-excerpt">{oldPreview.audio?.input.text}</p>
+          <button
+            className="button"
+            onClick={closeOldPreview}
+          >
+            结束试听并返回
+          </button>
+        </Dialog>
+      )}
+      {modal === "voices" && (
+        <VoiceLibrary
+          voices={voices}
+          jobs={state?.jobs || []}
+          playingId={playing ? player?.id : undefined}
+          routeBlocked={state?.settings.routeBlocked || false}
+          onClose={() => setModal(null)}
+          onRefresh={refresh}
+          play={(v) => startPlay("voices", v.id, v.name)}
+          playSample={(v) =>
+            startPlay(
+              "audios",
+              v.sampleAudioId!,
+              `${v.name} · 测试样音`,
+              undefined,
+              true,
+            )
+          }
+        />
+      )}
+      {modal === "roles" && state && (
+        <Roles
+          roles={roles}
+          voices={voices}
+          projectId={projectId}
+          chapter={chapter}
+          chapters={state.chapters.filter(c => c.projectId === projectId)}
+          locked={locked}
+          onClose={() => setModal(null)}
+          save={mutate}
+        />
+      )}
+      {modal === "settings" && state && (
+        <Dialog title="设置与连接" onClose={() => setModal(null)}>
+          <div className="settings-status">
+            <span className="brand-mark">
+              <AudioLines size={22} />
+            </span>
+            <div>
+              <h3>Seed Audio 1.0</h3>
+              <Status kind={state.settings.configured ? "success" : "warning"}>
+                {state.settings.configured
+                  ? "密钥已在服务端配置"
+                  : "尚未配置密钥"}
+              </Status>
+            </div>
+          </div>
+          <dl className="details-list">
+            <div>
+              <dt>当前模型</dt>
+              <dd>{state.settings.model}</dd>
+            </div>
+            <div>
+              <dt>音频处理</dt>
+              <dd>
+                {state.settings.audioTools ? "FFmpeg 已就绪" : "未找到 FFmpeg"}
+              </dd>
+            </div>
+            <div>
+              <dt>生成方式</dt>
+              <dd>逐条干声 · 48 kHz</dd>
+            </div>
+            <div>
+              <dt>保存位置</dt>
+              <dd>本地工作区</dd>
+            </div>
+          </dl>
+          <p className="hint">
+            密钥只由本地服务读取。生成会按服务商规则计费；超时结果不明时不会自动重试。
+          </p>
+          {state.settings.routeBlocked && (
+            <p className="error-inline">
+              接口因共享错误暂停。请检查额度和配置后，在任务记录中重新发起。
+            </p>
+          )}
+          <div className="section-rule">
+            <h3>文本分析模型</h3>
+            <Form
+              successMessage="默认模型已保存；本轮手动指定的模型保持不变。"
+              label="保存模型设置"
+              revision={state.settings.revision}
+              onSubmit={async (f, entityRevision) => {
+                const saved = await action<{revision: number}>("settings.update", {
+                  entityRevision,
+                  textModel: f.get("textModel"),
+                  defaultGap: Number(f.get("defaultGap")),
+                });
+                await refresh();
+                return saved.revision;
+              }}
+            >
+              <Field
+                label="多模态模型名称"
+                hint="填写 Kunpo 支持的完整模型名，作为新分析的默认值；本轮手动指定的模型保留，不会重跑已有任务。"
+              >
+                <input
+                  name="textModel"
+                  defaultValue={state.settings.textModel}
+                  placeholder="gemini-3.8-flash"
+                  maxLength={150}
+                />
+              </Field>
+              <Field
+                label="新章节默认间隔（秒）"
+                hint="只影响之后创建的章节；当前章节在导出设置中调整。"
+              >
+                <input
+                  name="defaultGap"
+                  type="number"
+                  min={0}
+                  max={10}
+                  step={0.1}
+                  defaultValue={state.settings.defaultGap}
+                />
+              </Field>
+            </Form>
+          </div>
+          <div className="section-rule">
+            <h3>项目数据</h3>
+            <p className="hint">
+              关闭网页不会停止后台任务；关闭终端或电脑可能中断工作。终端按 Ctrl+C 会停止后续派发并等待在途任务结束。
+              关闭本地服务后备份 data
+              文件夹，包含数据库、参考声音和成品文件。恢复时使用新目录，避免覆盖原数据。
+            </p>
+          </div>
+        </Dialog>
+      )}
+      {modal === "tasks" && state && (
+        <Dialog title="任务记录" onClose={() => setModal(null)} wide>
+          <div className="task-list">
+            {state.jobs.length ? (
+              state.jobs.map((j) => (
+                <div className="task-row" key={j.id}>
+                  <span className="task-icon">
+                    <AudioLines size={19} />
+                  </span>
+                  <div>
+                    <strong>
+                      {j.kind === "generate"
+                        ? "配音生成"
+                        : j.kind === "master"
+                          ? "准备试听"
+                          : j.kind === "voice-test"
+                            ? "音色试音"
+                            : "导出成品"}{" "}
+                      ·{" "}
+                      {j.kind === "voice-test"
+                        ? voices.find((v) => v.id === j.voiceId)?.name
+                        : state.chapters.find((c) => c.id === j.chapterId)
+                            ?.title}
+                    </strong>
+                    <p>
+                      已成功 {j.done} / {j.total} · 失败 {j.failed || 0} · 未提交 {j.stopped || 0} · 任务历时 {j.elapsedSeconds === undefined ? "未记录" : time(j.elapsedSeconds)} ·{" "}
+                      {new Date(j.createdAt).toLocaleString("zh-CN")}
+                    </p>
+                    {j.error && <p className="error-inline">{j.error}</p>}
+                    {j.resultAudioId && <button className="text-button" onClick={() => void startPlay("audios", j.resultAudioId!, "本次试音结果", undefined, true)}>{j.resultNotSelected ? "试听本次结果 · 已保留，未替换当前样音" : "试听本次样音"}</button>}
+                    {j.kind === "generate" && j.chapterId === chapterId && !active(j.status) && ["failed", "stopped", "unknown"].includes(j.status) && <button className="text-button" disabled={locked || busy} onClick={() => void run(async () => {
+                      const current = await api<ChapterDetail>("/chapters/" + j.chapterId);
+                      const remaining = current.segments.filter(s => j.ids?.includes(s.id) && !s.excluded && s.latest !== "unknown" && (s.validity !== "matched" || s.review === "rework"));
+                      setChapter(current);
+                      setChecked(remaining.map(s => s.id));
+                      setSearch(""); setFilter("all"); setModal(null);
+                      setNotice(remaining.length ? `已选择 ${remaining.length} 条余下片段，已排除结果不明项。请核对当前内容后点击“生成所选”，将创建新任务。` : "没有可直接继续的片段；结果不明项需单独核对可能重复计费后再重试。");
+                    })}>选择余下片段继续</button>}
+                  </div>
+                  <Status
+                    kind={
+                      j.status === "success"
+                        ? "success"
+                        : j.status === "unknown" || j.status === "failed"
+                          ? "warning"
+                          : ""
+                    }
+                  >
+                    {names[j.status] || j.status}
+                  </Status>
+                </div>
+              ))
+            ) : (
+              <Empty icon={<AudioLines size={28} />} heading="还没有生成任务">
+                完成角色和音色配置后，选择片段生成配音。
+              </Empty>
+            )}
+          </div>
+        </Dialog>
+      )}
+      {modal === "export" && chapter && (
+        <ExportDialog
+          chapter={chapter}
+          ready={ready}
+          total={total}
+          passed={passed}
+          connectionReady={connectionReady}
+          onClose={() => setModal(null)}
+          onRefresh={refresh}
+        />
+      )}
+    </ErrorContext.Provider>
+  );
+}
+
+function RenameProject({ project, save, onClose }: { project: Project; save: (a: string, p: Record<string, unknown>) => Promise<unknown>; onClose: () => void }) {
+  const [base] = useState(project);
+  return <Dialog title="重命名项目" onClose={onClose}>
+    <Form label="保存项目名称" onSubmit={async f => {
+      await save("project.rename", { id: base.id, name: f.get("name"), entityRevision: base.revision ?? 1 });
+      onClose();
+    }}>
+      <Field label="项目名称"><input name="name" defaultValue={base.name} maxLength={100}/></Field>
+      {(project.revision ?? 1) !== (base.revision ?? 1) && <p className="warning">项目名称已在其他页面修改。当前输入保留，请复制需要保留的文字后关闭并重新打开。</p>}
+    </Form>
+  </Dialog>;
+}
+
+function ImportChapter({
+  projectId,
+  onClose,
+  onCreated,
+}: {
+  projectId: string;
+  onClose: () => void;
+  onCreated: (id: string) => Promise<void>;
+}) {
+  const [source, setSource] = useState(""),
+    [title, setTitle] = useState(""),
+    [error, setError] = useState(""),
+    [imported, setImported] = useState<{ text: string; name: string } | null>(
+      null,
+    );
+  return (
+    <Dialog title="导入章节" onClose={onClose} wide>
+      <Form
+        label="导入并按句拆分"
+        onSubmit={async () => {
+          if (!source.trim()) throw new Error("请先选择文件或粘贴原文");
+          const c = await action<{ id: string }>("chapter.create", {
+            projectId,
+            title,
+            source,
+            importedSource: imported?.text || source,
+            sourceFilename: imported?.name,
+            segment: true,
+          });
+          await onCreated(c.id);
+        }}
+      >
+        <label className="upload-zone">
+          <Upload size={22} />
+          <strong>选择 TXT / Markdown 文件</strong>
+          <span>UTF-8 编码 · Markdown 按纯文本保留</span>
+          <input
+            type="file"
+            accept=".txt,.md"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              try {
+                const t = new TextDecoder("utf-8", { fatal: true }).decode(
+                  await f.arrayBuffer(),
+                );
+                setImported({ text: t, name: f.name });
+                setSource(t.replace(/\r\n?/g, "\n"));
+                setTitle(f.name.replace(/\.(txt|md)$/i, ""));
+                setError("");
+              } catch {
+                setError("文件不是 UTF-8 编码，请转换编码后重试");
+              }
+            }}
+          />
+        </label>
+        <Field label="章节名称">
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="例如：第一章"
+          />
+        </Field>
+        <Field
+          label="原文预览"
+          hint="也可以直接粘贴文字。初始分段默认归旁白且待确认，不自动判断对白人物。"
+        >
+          <textarea
+            value={source}
+            onChange={(e) => setSource(e.target.value)}
+            rows={9}
+            placeholder="在这里粘贴本章原文"
+          />
+        </Field>
+        {error && <p className="error-inline">{error}</p>}
+        <div className="source-summary">
+          <span>{Array.from(source).length.toLocaleString()} 字符</span>
+          <span>只统一换行，不润色正文</span>
+        </div>
+      </Form>
+    </Dialog>
+  );
+}
+
+function VoiceLibrary({
+  voices,
+  playingId,
+  jobs,
+  routeBlocked,
+  playSample,
+  onClose,
+  onRefresh,
+  play,
+}: {
+  voices: Voice[];
+  playingId?: string;
+  jobs: Job[];
+  routeBlocked: boolean;
+  playSample: (v: Voice) => void;
+  onClose: () => void;
+  onRefresh: () => Promise<void>;
+  play: (v: Voice) => void;
+}) {
+  const stateRevision = useRef(1);
+  const [inspecting, setInspecting] = useState<Voice | null>(null);
+  const [testing, setTesting] = useState<Voice | null>(null);
+  const [deleting, setDeleting] = useState<Voice | null>(null);
+  const [libraryError, setLibraryError] = useState("");
+  const [testCommand, setTestCommand] = useState(crypto.randomUUID());
+  const [accepted, setAccepted] = useState(false);
+  const [upload, setUpload] = useState(false),
+    [file, setFile] = useState<File | null>(null),
+    [query, setQuery] = useState("");
+  return (
+    <Dialog title="参考音色库" onClose={onClose} wide>
+      {inspecting && <VoiceInspection voice={inspecting} current={voices.find(v => v.id === inspecting.id)} play={play} playSample={playSample} onClose={() => setInspecting(null)} onSaved={onRefresh} />}
+      {deleting && (
+        <DeleteVoiceDialog
+          voice={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={async () => {
+            await onRefresh();
+            setDeleting(null);
+          }}
+        />
+      )}
+      {libraryError && (
+        <p className="error-inline" role="alert">
+          {libraryError}
+        </p>
+      )}
+      {testing ? (
+        <Form
+          label="生成测试样音"
+          onSubmit={async (f) => {
+            if (!accepted) throw new Error("请先确认本次付费试音");
+            await api("/jobs", {
+              kind: "voice-test",
+              voiceId: testing.id,
+              entityRevision: testing.revision ?? 1,
+              text: f.get("text"),
+              commandId: testCommand,
+              retryUnknown: true,
+              resumeRoute: true,
+            });
+            await onRefresh();
+            setTesting(null);
+          }}
+        >
+          <h3>{testing.name}</h3>
+          <Field
+            label="试音正文"
+            hint="最多 300 字。使用这份参考声音朗读新的文字，样音单独保存。"
+          >
+            <textarea
+              name="text"
+              maxLength={300}
+              defaultValue="雨停了，远处传来熟悉的脚步声。我们出发吧。"
+              rows={4}
+            />
+          </Field>
+          <p className="hint">
+            将试音正文和这份参考录音发送至配音服务，产生一次调用费用。若此前结果不明，重试可能重复计费。
+            {routeBlocked && " 本次提交也会重新启用已暂停的音频接口。"}
+          </p>
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={accepted}
+              onChange={(e) => setAccepted(e.target.checked)}
+            />
+            我已确认，开始付费试音
+          </label>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => setTesting(null)}
+          >
+            返回音色列表
+          </button>
+        </Form>
+      ) : upload ? (
+        <Form
+          label="保存到音色库"
+          onSubmit={async (f) => {
+            if (!file) throw new Error("请先选择参考声音文件");
+            const data = await new Promise<string>((resolve, reject) => {
+              const r = new FileReader();
+              r.onload = () => resolve((r.result as string).split(",")[1]);
+              r.onerror = reject;
+              r.readAsDataURL(file);
+            });
+            await api("/voices", {
+              name: f.get("name"),
+              filename: file.name,
+              data,
+            });
+            await onRefresh();
+            setUpload(false);
+            setFile(null);
+          }}
+        >
+          <Field label="音色名称">
+            <input name="name" placeholder="例如：沉稳旁白" />
+          </Field>
+          <label className="upload-zone">
+            <Upload size={25} />
+            <strong>{file?.name || "选择参考声音"}</strong>
+            <span>WAV / MP3 · 最长 30 秒 · 最大 10 MB</span>
+            <input
+              type="file"
+              accept=".wav,.mp3"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+            />
+          </label>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => setUpload(false)}
+          >
+            返回音色列表
+          </button>
+        </Form>
+      ) : (
+        <>
+          <div className="library-toolbar">
+            <div className="search-field">
+              <Search size={15} />
+              <input
+                aria-label="搜索音色"
+                placeholder="搜索音色"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+            <button className="button primary" onClick={() => setUpload(true)}>
+              <Plus size={16} />
+              添加参考
+            </button>
+          </div>
+          <p className="hint">
+            保存参考声音，跨项目复用。绑定角色前可以先试听素材。
+          </p>
+          <div className="voice-grid">
+            {voices
+              .filter((v) => v.name.includes(query))
+              .map((v) => {
+                const task = jobs.find((j) => j.voiceId === v.id);
+                return (
+                  <div className="voice-card" key={v.id}>
+                    <div className="voice-card-top">
+                      <div className="voice-symbol">
+                        <AudioLines size={25} />
+                      </div>
+                      <button
+                        className="icon"
+                        aria-label={`${playingId === v.id ? "暂停" : "试听"} ${v.name}`}
+                        disabled={v.state === "deleted" || v.deletePending}
+                        onClick={() => play(v)}
+                      >
+                        {playingId === v.id ? (
+                          <Pause size={18} />
+                        ) : (
+                          <Play size={18} />
+                        )}
+                      </button>
+                    </div>
+                    <h3>{v.name}</h3>
+                    {task && (
+                      <Status
+                        kind={
+                          task.status === "success"
+                            ? "success"
+                            : ["failed", "unknown"].includes(task.status)
+                              ? "warning"
+                              : "neutral"
+                        }
+                      >
+                        测试样音 · {names[task.status]}
+                      </Status>
+                    )}
+                    {task?.error && (
+                      <p className="error-inline">{task.error}</p>
+                    )}
+                    {task?.resultNotSelected && <p className="hint">资料或试音任务已变化，本次结果已保留，可在任务记录试听；当前样音未替换。</p>}
+                    <div className="voice-actions">
+                      <button
+                        className="text-button"
+                        disabled={
+                          v.state !== "active" ||
+                          jobs.some(
+                            (j) =>
+                              j.voiceId === v.id &&
+                              ["queued", "running"].includes(j.status),
+                          )
+                        }
+                        onClick={() => {
+                          setTesting(v);
+                          setAccepted(false);
+                          setTestCommand(crypto.randomUUID());
+                        }}
+                      >
+                        {task && ["queued", "running"].includes(task.status)
+                          ? "正在生成试音…"
+                          : "生成新文本试音"}
+                      </button>
+                      {v.sampleAudioId && (
+                        <button
+                          className="text-button"
+                          onClick={() => playSample(v)}
+                        >
+                          {playingId === v.sampleAudioId
+                            ? "暂停样音"
+                            : "试听样音"}
+                        </button>
+                      )}
+                    </div>
+                    <button className="text-button" disabled={v.state === "deleted" || v.deletePending} onClick={() => setInspecting(structuredClone(v))}>参考观察与人工检查</button>
+                    <p>{v.inspectionCurrent ? (v.inspection?.target === "sample" ? "当前样音已人工检查" : "参考录音已人工检查") : "未验证"}{v.inspection?.checked && !v.inspectionCurrent ? " · 原检查对象已变化" : ""}</p>
+                    <p>
+                      {v.duration.toFixed(1)} 秒 ·{" "}
+                      {v.tested ? "已用于生成 · 听感未由程序验证" : "未验证 · 尚未用于生成"}
+                    </p>
+                    <Select
+                      label={`${v.name} 使用状态`}
+                      onOpen={() => { stateRevision.current = v.revision ?? 1; }}
+                      disabled={v.state === "deleted" || v.deletePending}
+                      value={v.state}
+                      options={[
+                        { value: "active", label: "可用" },
+                        { value: "archived", label: "归档 · 保留已有引用" },
+                        {
+                          value: "stopped",
+                          label: v.deletePending
+                            ? "等待在途任务或读取结束后删除"
+                            : "停止新生成",
+                        },
+                        ...(v.state === "deleted"
+                          ? [{ value: "deleted", label: "参考文件已删除" }]
+                          : []),
+                      ]}
+                      onChange={async (state) => {
+                        try {
+                          setLibraryError("");
+                          await action("voice.update", { id: v.id, state, entityRevision: stateRevision.current });
+                          await onRefresh();
+                        } catch (e) {
+                          setLibraryError((e as Error).message);
+                        }
+                      }}
+                    />
+                    {v.deleteError && (
+                      <p className="error-inline">{v.deleteError}</p>
+                    )}
+                    <button
+                      className="text-button warning"
+                      disabled={v.state === "deleted" || v.deletePending}
+                      onClick={() => setDeleting(v)}
+                    >
+                      删除参考素材
+                    </button>
+                  </div>
+                );
+              })}
+          </div>
+          {!voices.length && (
+            <Empty
+              icon={<AudioLines size={28} />}
+              heading="让每个角色有自己的声音"
+            >
+              添加一段清晰、单人说话的短音频作为参考。
+            </Empty>
+          )}
+        </>
+      )}
+    </Dialog>
+  );
+}
+
+
+
+function TemplateDialog({segment,chapter,templates,save,onClose}: {segment:Segment;chapter:ChapterDetail;templates:State["templates"];save:(a:string,p:Record<string,unknown>)=>Promise<unknown>;onClose:()=>void}) {
+  const [base] = useState(()=>({id:segment.id,chapterId:chapter.id,revision:chapter.revision,template:segment.template}));
+  const available = templates.filter(t=>t.id!==base.template);
+  const [target,setTarget] = useState(available.find(t=>t.current)?.id || available[0]?.id || "");
+  const [confirmed,setConfirmed] = useState(false);
+  const [preview,setPreview] = useState<{from:string;to:string;name:string;description:string;before:string;after:string;unavailable:string}|null>(null);
+  const [error,setError] = useState("");
+  useEffect(()=>{
+    let cancelled=false;setPreview(null);setError("");setConfirmed(false);
+    if (target) void api<typeof preview>("/templates/preview",{...base,template:target}).then(v=>{if(!cancelled)setPreview(v)}).catch(e=>{if(!cancelled)setError(e.message)});
+    return ()=>{cancelled=true};
+  },[target,base]);
+  return <Dialog title="切换提示模板" onClose={onClose} wide>
+    <p className="hint">当前片段：{base.template}。切换会使既有音频待更新；应用后需另行生成。正文、参考音色、表演和已保存数值保持原样。</p>
+    {!available.length ? <p className="hint">当前没有其他可用模板。已有片段会继续使用保存的版本，普通改字和重跑不会自动升级。</p> : <Form label="应用所选模板" revision={chapter.revision} busy={!preview || !confirmed} onSubmit={async()=>{await save("segment.template",{...base,template:target,confirm:confirmed});onClose();}}>
+      <Select label="目标提示模板" value={target} options={available.map(t=>({value:t.id,label:`${t.name} · ${t.id}${t.current ? " · 新建片段默认" : ""}`}))} onChange={setTarget}/>
+      {error && <p className="error-inline" role="alert">{error}</p>}
+      {preview && <><p className="hint">{preview.description}</p><div className="merge-comparison"><div><strong>原模板 {preview.from}</strong><p className="original-excerpt">{preview.unavailable || preview.before}</p></div><div><strong>目标模板 {preview.to}</strong><p className="original-excerpt">{preview.after}</p></div></div><label className="check-label"><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>我已核对差异，应用到当前片段</label></>}
+    </Form>}
+  </Dialog>;
+}
+
+function VoiceInspection({voice, current, play, playSample, onClose, onSaved}: {voice:Voice; current?:Voice; play:(v:Voice)=>void; playSample:(v:Voice)=>void; onClose:()=>void; onSaved:()=>Promise<void>}) {
+  const initial = voice.inspection?.target || (voice.sampleAudioId ? "sample" : "reference");
+  const [target,setTarget] = useState(initial);
+  const [checked,setChecked] = useState(!!voice.inspectionCurrent);
+  return <Dialog title={`参考观察与检查 · ${voice.name}`} onClose={onClose}>
+    <Form label="保存观察与检查" revision={current?.revision ?? 1} onSubmit={async (f,expected) => {
+      await action("voice.update", {id:voice.id,entityRevision:expected,observations:Object.fromEntries(["tone","accent","performance","volume"].map(k=>[k,f.get(k)])),inspection:{target,audioId:target === "sample" ? voice.sampleAudioId : null,checked}});
+      await onSaved(); onClose();
+    }}>
+      <p className="hint">记录参考录音的听感，供导演建议参考；不会改写人物事实或自动重做音频。</p>
+      {([["tone","基础声线","例如：低沉、带气声"],["accent","口音观察","例如：普通话、轻微地域口音"],["performance","参考表演特征","例如：中性平稳、明显激动"],["volume","参考音量观察","例如：偏轻、峰值明显、音量稳定"]] as const).map(([key,label,placeholder])=><Field key={key} label={label}><textarea name={key} defaultValue={voice.observations?.[key] || ""} placeholder={placeholder} maxLength={1000} rows={2}/></Field>)}
+      <Select label="人工检查对象" value={target} options={[{value:"reference",label:"参考录音"},...(voice.sampleAudioId ? [{value:"sample",label:"当前测试样音"}] : [])]} onChange={value=>{setTarget(value as "reference"|"sample");setChecked(false)}}/>
+      {target === "sample" && current?.sampleAudioId !== voice.sampleAudioId && <p className="warning">当前样音已变化，此表单仍对应打开时的音频；请重新打开并检查。</p>}
+      <button type="button" className="button small" onClick={()=>target === "sample" ? playSample(voice) : play(voice)}>试听所选检查音频</button>
+      <label className="check-label"><input type="checkbox" checked={checked} onChange={e=>setChecked(e.target.checked)}/>我已试听并检查所选音频</label>
+      <p className="hint">不勾选也可保存观察，状态保持未验证；播放结束或生成成功不会自动勾选。原检查时间：{voice.inspection?.checked && voice.inspection.at ? new Date(voice.inspection.at).toLocaleString() : "尚无已检查记录"}。</p>
+    </Form>
+  </Dialog>;
+}
+
+function Roles({
+  roles,
+  voices,
+  projectId,
+  chapter: currentChapter,
+  chapters,
+  locked,
+  onClose,
+  save,
+}: {
+  roles: Role[];
+  voices: Voice[];
+  projectId: string;
+  chapter: ChapterDetail | null;
+  chapters: State["chapters"];
+  locked: boolean;
+  onClose: () => void;
+  save: (a: string, p: Record<string, unknown>) => Promise<unknown>;
+}) {
+  const [editing, setEditing] = useState({ role: roles[0], chapter: currentChapter });
+  const [newRole, setNewRole] = useState(false);
+  const [showAllRoles, setShowAllRoles] = useState(false);
+  const { role, chapter } = editing;
+  const selected = role?.id || "";
+  const known = currentChapter?.knownRoles?.find(r => r.id === selected);
+  const [applyDefault, setApplyDefault] = useState(false);
+  return (
+    <Dialog title="角色档案" onClose={onClose} wide>
+      <p className="hint">{showAllRoles || !currentChapter ? "项目全部档案 · 包含后续章节资料，不代表当前章已知" : `截至「${currentChapter.title}」可知的角色`}</p>
+      {currentChapter && <button type="button" className="text-button" onClick={() => {
+        if (showAllRoles && !known) setEditing({role: roles.find(r => currentChapter.knownRoles.some(k => k.id === r.id))!, chapter:currentChapter});
+        setShowAllRoles(!showAllRoles);
+      }}>{showAllRoles ? "返回本章可知角色" : "查看项目全部档案（含后续章节）"}</button>}
+      <div className="roles-layout">
+        <div className="role-list">
+          {roles.filter(r => showAllRoles || !currentChapter || currentChapter.knownRoles.some(k => k.id === r.id)).map((r) => (
+            <button
+              key={r.id}
+              className={r.id === selected ? "selected" : ""}
+              onClick={() => {
+                setEditing({ role: r, chapter: currentChapter });
+                setNewRole(false);
+                setApplyDefault(false);
+              }}
+            >
+              <span className="avatar">{r.name[0]}</span>
+              {r.name}
+              {r.archived ? " · 已归档" : ""}
+            </button>
+          ))}
+          <button className="text-button" onClick={() => setNewRole(true)}>
+            <Plus size={14} />
+            添加角色
+          </button>
+        </div>
+        <div>
+          {newRole ? (
+            <Form
+              label="创建角色"
+              onSubmit={async (f) => {
+                const r = (await save("role.create", {
+                  projectId,
+                  chapterId: currentChapter?.id,
+                  name: f.get("name"),
+                })) as Role;
+                setEditing({ role: r, chapter: currentChapter });
+                setNewRole(false);
+              }}
+            >
+              <Field label="角色名称">
+                <input name="name" autoFocus />
+              </Field>
+            </Form>
+          ) : (
+            role && (
+              <Form
+                key={`${role.id}:${role.revision ?? 1}:${chapter?.id}:${chapter?.revision}`}
+                label="保存角色"
+                busy={locked}
+                onSubmit={async (f) => {
+                  const updated = await save("role.update", {
+                    id: role.id,
+                    entityRevision: role.revision ?? 1,
+                    name: f.get("name"),
+                    archived: f.get("archived") === "on",
+                    aliasSources: JSON.parse(String(f.get("aliasSources") || "[]")),
+                    voiceId: f.get("voice"),
+                    chapterId: chapter?.id,
+                    revision: chapter?.revision,
+                    apply: f.get("apply") === "on",
+                    ...(chapter
+                      ? {
+                          note: String(f.get("note") || ""),
+                          quote: String(f.get("quote") || ""),
+                          gender: String(f.get("gender") || "未知"),
+                        }
+                      : {}),
+                  }) as Role;
+                  setEditing({ role: updated, chapter: chapter ? await api<ChapterDetail>("/chapters/" + chapter.id) : null });
+                  setApplyDefault(false);
+                }}
+              >
+                {((roles.find(r => r.id === role.id)?.revision ?? 1) !== (role.revision ?? 1) || currentChapter?.revision !== chapter?.revision) && <div className="warning">
+                  资料已更新，当前未保存的输入仍保留。请核对后重新编辑。
+                  <button type="button" className="text-button" onClick={() => { setEditing({ role: roles.find(r => r.id === role.id)!, chapter: currentChapter }); setApplyDefault(false); }}>载入最新资料（放弃本页未保存修改）</button>
+                </div>}
+                <Field label="显示名称">
+                  <input name="name" defaultValue={role.name} />
+                </Field>
+                <AliasFields role={role} validity={(roles.find(r => r.id === role.id)?.revision ?? 1) === (role.revision ?? 1) ? roles.find(r => r.id === role.id)?.aliasValidity : undefined} chapter={chapter} chapters={chapters} showAll={showAllRoles} />
+                {chapter && (
+                  <>
+                    <details><summary>截至本章的已知人物信息</summary><p className="hint">已确认别名：{known?.aliases?.join("、") || "暂无"}</p>{known?.facts?.map(f => <p key={f.chapterId} className="hint">{f.text} · {f.gender || "未知"} · {f.kind}{f.sourceQuote ? `：${f.sourceQuote}` : ""}</p>)}{!known?.facts?.length && <p className="hint">暂无已确认事实。</p>}</details>
+                    {role.facts?.some((f) => f.chapterId === chapter.id && f.sourceQuote &&
+                      (f.sourceVersion || 1) !== (chapter.sourceVersion || 1)) && (
+                      <p className="warning">原文已更换，这份人物依据暂不参与分析。请核对备注与出处后重新保存。</p>
+                    )}
+                    <GenderField
+                      initial={
+                        role.facts?.find((f) => f.chapterId === chapter.id)
+                          ?.gender || "未知"
+                      }
+                    />
+                    <Field
+                      label="本章起生效的人物备注"
+                      hint="只参与当前章及后续章节的文本分析，不会改写旧章音频。"
+                    >
+                      <textarea
+                        name="note"
+                        rows={3}
+                        defaultValue={
+                          role.facts?.find((f) => f.chapterId === chapter.id)
+                            ?.text || ""
+                        }
+                      />
+                    </Field>
+                    <Field
+                      label="原文依据（选填）"
+                      hint="逐字摘录本章；留空则标记为用户补充。"
+                    >
+                      <input
+                        name="quote"
+                        defaultValue={
+                          role.facts?.find((f) => f.chapterId === chapter.id)
+                            ?.sourceQuote || ""
+                        }
+                      />
+                    </Field>
+                  </>
+                )}
+                <VoiceField voices={voices} initial={role.voiceId || ""} />
+                {!role.narrator && (
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      name="archived"
+                      defaultChecked={role.archived}
+                    />
+                    归档空角色（须先改绑其全部片段）
+                  </label>
+                )}
+                <label className="check-label">
+                  <input
+                    name="apply"
+                    type="checkbox"
+                    checked={applyDefault}
+                    onChange={e => setApplyDefault(e.target.checked)}
+                    disabled={locked || !chapter}
+                  />
+                  应用到本章使用角色默认的片段
+                </label>
+                {applyDefault && chapter && <div className="hint">将更新以下片段至上方所选默认音色：{chapter.segments.filter(s => s.roleId === role.id && s.voiceSource !== "override").map(s => <p key={s.id}>第 {s.order + 1} 条 · {voices.find(v => v.id === s.voiceId)?.name || "未绑定"} · {s.text.slice(0, 40)}</p>)}本条指定的片段不受影响。</div>}
+                <p className="hint">
+                  首次绑定自动补齐本章尚未指定音色的片段。后续修改默认只影响新片段；本条指定的音色保留。
+                </p>
+              </Form>
+            )
+          )}
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+function AliasFields({ role, validity, chapter, chapters, showAll }: { role: Role; validity?: Record<string, boolean>; chapter: ChapterDetail | null; chapters: State["chapters"]; showAll: boolean }) {
+  const [rows, setRows] = useState<AliasSource[]>(role.aliasSources || role.aliases.map(name => ({name, chapterId:null, needsReview:true})));
+  const change = (index: number, patch: Partial<AliasSource>) => {
+    if (!chapter) return;
+    setRows(rows.map((a,i) => i === index ? {...a, ...patch, chapterId:chapter.id, sourceVersion:chapter.sourceVersion || 1, needsReview:false} : a));
+  };
+  return <div className="section-rule">
+    <h3>别名及依据</h3>
+    <p className="hint">保存角色后才建立正式关系。明示与推断需逐字引文；用户补充从所选章节起生效。其他章的记录请到来源章修改。</p>
+    <input type="hidden" name="aliasSources" value={JSON.stringify(rows)} />
+    {rows.map((a,i) => {
+      const source = chapters.find(c => c.id === a.chapterId);
+      if (!showAll && chapter && source && source.order > chapter.order) return null;
+      const editable = chapter && (!a.chapterId || a.chapterId === chapter.id);
+      const unchanged = JSON.stringify(a) === JSON.stringify(role.aliasSources?.[i]);
+      return <div className="section-rule" key={i}>
+        <p className="hint">{source?.title || "来源章待核对"} · {unchanged ? validity?.[a.name] ? "依据有效" : "待核对 · 暂不参与分析" : "未保存"}</p>
+        {editable ? <>
+          <Field label={`别名 ${i + 1}`}><input value={a.name} maxLength={100} onChange={e => change(i,{name:e.target.value})} /></Field>
+          <Field label={`别名 ${i + 1} 依据类别`}><Select label={`别名 ${i + 1} 依据类别`} value={a.kind || ""} options={[
+            {value:"",label:"请选择依据类别"}, {value:"原文明示",label:"原文明示"}, {value:"上下文推断",label:"上下文推断"}, {value:"用户补充",label:"用户补充"},
+          ]} onChange={kind => change(i,{kind,...(kind === "用户补充" ? {sourceQuote:"",reason:""} : {})})} /></Field>
+          {a.kind !== "用户补充" && <Field label={`别名 ${i + 1} 原文引文`} hint="逐字来自本章，用于核对名称与角色的关系；可定位不代表解释正确。"><textarea rows={2} value={a.sourceQuote || ""} onChange={e => change(i,{sourceQuote:e.target.value})} /></Field>}
+          {a.kind === "上下文推断" && <Field label={`别名 ${i + 1} 推断说明`}><textarea rows={2} value={a.reason || ""} onChange={e => change(i,{reason:e.target.value})} /></Field>}
+          <div className="button-row">
+            <button type="button" className="text-button" onClick={() => change(i,{})}>确认本章依据（保存后生效）</button>
+            <button type="button" className="text-button warning" onClick={() => setRows(rows.filter((_,n) => n !== i))}>移除此别名</button>
+          </div>
+        </> : <><strong>{a.name}</strong><p className="hint">{a.kind || "依据类别待核对"}{a.sourceQuote ? `：${a.sourceQuote}` : ""}{a.reason ? ` · ${a.reason}` : ""}</p></>}
+      </div>;
+    })}
+    {!rows.length && <p className="hint">尚未添加别名。</p>}
+    <button type="button" className="text-button" disabled={!chapter} onClick={() => chapter && setRows([...rows,{name:"",chapterId:chapter.id,kind:"用户补充",sourceQuote:"",reason:"",sourceVersion:chapter.sourceVersion || 1}])}>添加本章别名</button>
+  </div>;
+}
+
+function VoiceField({ voices, initial }: { voices: Voice[]; initial: string }) {
+  const [v, setV] = useState(initial);
+  return (
+    <Field label="默认音色">
+      <Select
+        label="默认音色"
+        value={v}
+        options={[
+          { value: "", label: "尚未绑定" },
+          ...voices
+            .filter((x) => x.state === "active" || x.id === initial)
+            .map((x) => ({ value: x.id, label: x.name })),
+        ]}
+        onChange={setV}
+      />
+      <input type="hidden" name="voice" value={v} />
+    </Field>
+  );
+}
+
+function Editor({
+  segment: s,
+  templates,
+  onDraftChange,
+  chapter,
+  roles,
+  voices,
+  locked,
+  connectionReady,
+  save,
+  run,
+  generate,
+  onRoles,
+}: {
+  segment: Segment;
+  templates: State["templates"];
+  onDraftChange: (id:string,dirty:boolean)=>void;
+  chapter: ChapterDetail;
+  roles: Role[];
+  voices: Voice[];
+  locked: boolean;
+  connectionReady: boolean;
+  save: (a: string, p: Record<string, unknown>) => Promise<unknown>;
+  run: (fn: () => Promise<unknown>) => Promise<void>;
+  generate: (ids: string[]) => Promise<void>;
+  onRoles: () => void;
+}) {
+  const cached = (() => {
+    try {
+      return JSON.parse(localStorage.getItem("draft-" + s.id) || "null");
+    } catch {
+      return null;
+    }
+  })();
+  const [draft, setDraft] = useState<Segment>(cached?.draft || { ...s }),
+    [revision, setRevision] = useState<number>(
+      cached?.revision || chapter.revision,
+    ),
+    [dirty, setDirty] = useState(!!cached),
+    [tab, setTab] = useState("settings"),
+    [split, setSplit] = useState(false),
+    [offset, setOffset] = useState(1),
+    [merge, setMerge] = useState(false),
+    [restore, setRestore] = useState<string | null>(null),
+    [templateOpen,setTemplateOpen] = useState(false);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  useEffect(()=>onDraftChange(s.id,dirty),[s.id,dirty,onDraftChange]);
+  useEffect(() => {
+    if (!dirty) {
+      setDraft({ ...s });
+      setRevision(chapter.revision);
+    }
+  }, [s, chapter.revision, dirty]);
+  useEffect(() => {
+    if (dirty)
+      localStorage.setItem(
+        "draft-" + s.id,
+        JSON.stringify({ draft, revision }),
+      );
+
+  }, [draft, revision, dirty, s.id]);
+  const edit = (p: Partial<Segment>) => {
+    onDraftChange(s.id,true);
+    setDraft((prev) => ({ ...prev, ...p }));
+    setDirty(true);
+  };
+  const next = chapter.segments.find((x) => x.order === s.order + 1);
+  const saveDraft = async () => {
+    const payload: Record<string, unknown> = {
+      id: s.id,
+      revision,
+      text: draft.text,
+      performance: draft.performance,
+      type: draft.type,
+      roleConfirmed: draft.roleConfirmed,
+      identityConfirmed: draft.identityConfirmed,
+      excluded: draft.excluded,
+      config: draft.config,
+    };
+    if (draft.roleId !== s.roleId) payload.roleId = draft.roleId;
+    if (
+      draft.voiceSource === "override" &&
+      (draft.voiceId !== s.voiceId || s.voiceSource !== "override")
+    )
+      payload.voiceId = draft.voiceId;
+    await save("segment.update", payload);
+    localStorage.removeItem("draft-" + s.id);
+    setDirty(false);
+  };
+  return (
+    <>
+      <div className="inspector-head">
+        <strong>片段设置</strong>
+        <span>第 {s.order + 1} 条</span>
+      </div>
+      <div className="inspector-tabs tabs">
+        {[
+          ["settings", "声音与表演"],
+          ["original", "原文"],
+          ["prompt", "提示词"],
+        ].map(([id, name]) => (
+          <button
+            key={id}
+            className={tab === id ? "active" : ""}
+            onClick={() => setTab(id)}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+      <div className="inspector-scroll">
+        {tab === "settings" ? (
+          <>
+            <div className="inspector-section">
+              <div className="section-heading">
+                <h3>角色与声音</h3>
+                <button className="text-button" onClick={onRoles}>
+                  管理
+                </button>
+              </div>
+              <Field label="朗读角色">
+                <Select
+                  label="朗读角色"
+                  disabled={locked}
+                  value={draft.roleId}
+                  options={roles
+                    .filter((r) => !r.archived || r.id === draft.roleId)
+                    .map((r) => ({ value: r.id, label: r.name }))}
+                  onChange={(roleId) => {
+                    const r = roles.find((r) => r.id === roleId)!;
+                    edit({
+                      roleId,
+                      roleConfirmed: true,
+                      ...(draft.voiceSource === "default"
+                        ? { voiceId: r.voiceId }
+                        : { identityConfirmed: false }),
+                    });
+                  }}
+                />
+              </Field>
+              <Field label="实际音色">
+                <Select
+                  label="实际音色"
+                  disabled={locked}
+                  value={draft.voiceId || ""}
+                  options={[
+                    { value: "", label: "请选择参考音色" },
+                    ...voices
+                      .filter(
+                        (v) => v.state === "active" || v.id === draft.voiceId,
+                      )
+                      .map((v) => ({
+                        value: v.id,
+                        label:
+                          v.name +
+                          (v.state !== "active"
+                            ? "（" +
+                              (v.state === "archived" ? "已归档" : "已停用") +
+                              "）"
+                            : ""),
+                      })),
+                  ]}
+                  onChange={(voiceId) =>
+                    edit({
+                      voiceId: voiceId || null,
+                      voiceSource: "override",
+                      identityConfirmed: true,
+                    })
+                  }
+                />
+              </Field>
+              <div className="field-source">
+                <span>
+                  {draft.voiceSource === "override"
+                    ? "本条指定"
+                    : "继承角色默认"}
+                </span>
+                {s.voiceSource === "override" && (
+                  <button
+                    className="text-button"
+                    disabled={locked || dirty}
+                    onClick={() =>
+                      run(() =>
+                        save("segment.update", { id: s.id, resetVoice: true }),
+                      )
+                    }
+                  >
+                    恢复默认
+                  </button>
+                )}
+              </div>
+              <Field label="内容类型">
+                <Select
+                  label="内容类型"
+                  disabled={locked}
+                  value={draft.type}
+                  options={[
+                    { value: "narration", label: "叙述旁白" },
+                    { value: "dialogue", label: "角色对白" },
+                    { value: "thought", label: "直接内心独白" },
+                  ]}
+                  onChange={(type) => edit({ type })}
+                />
+              </Field>
+              <label className="check-label">
+                <input
+                  type="checkbox"
+                  checked={draft.roleConfirmed && draft.identityConfirmed}
+                  disabled={locked}
+                  onChange={(e) =>
+                    edit({
+                      roleConfirmed: e.target.checked,
+                      identityConfirmed: e.target.checked,
+                    })
+                  }
+                />
+                已核对角色和声音身份
+              </label>
+            </div>
+            <div className="inspector-section">
+              <h3>朗读正文</h3>
+              <textarea
+                aria-label="朗读正文"
+                ref={textarea}
+                rows={5}
+                disabled={locked}
+                value={draft.text}
+                onChange={(e) => edit({ text: e.target.value })}
+              />
+              <div className="field-source">
+                <span>{Array.from(draft.text).length} 字符</span>
+                <span>原文保持不变</span>
+              </div>
+            </div>
+            <div className="inspector-section">
+              <h3>表演指导</h3>
+              <textarea
+                aria-label="表演指导"
+                rows={4}
+                disabled={locked}
+                value={draft.performance}
+                onChange={(e) => edit({ performance: e.target.value })}
+                placeholder="例如：压低声音，语速稍缓，句尾收轻"
+              />
+              <div className="preset-chips">
+                {["自然叙述", "平静克制", "轻声提醒", "坚定有力"].map((t) => (
+                  <button
+                    key={t}
+                    disabled={locked}
+                    onClick={() => edit({ performance: t })}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+              <p className="hint">只描述怎么说，不改写台词。当前为干声模式，不加入音乐或环境音效。生成时会将正文、表演要求和参考录音发送至配音服务。
+              {Array.from(draft.text).length > 350 && <span className="warning"> 本条较长，可能接近或超过单次时长，请按语义拆分。字数不是精确时长预测。</span>}
+              {draft.voiceId && !voices.find(v => v.id === draft.voiceId)?.tested && <span className="hint"> 当前参考尚未验证，可先试听或生成测试样音。</span>}</p>
+              {!!s.promptIssues?.length && <p className="error-inline">{s.promptIssues.join("；")}</p>}
+            </div>
+            <details className="advanced">
+              <summary>更多设置</summary>
+              <div className="number-fields">
+                {[
+                  ["speech_rate", "语速"],
+                  ["loudness_rate", "音量"],
+                  ["pitch_rate", "音调"],
+                ].map(([key, label]) => (
+                  <Field label={label} key={key}>
+                    <input
+                      type="number"
+                      disabled={locked}
+                      value={draft.config[key as keyof typeof draft.config]}
+                      onChange={(e) =>
+                        edit({
+                          config: {
+                            ...draft.config,
+                            [key]: Number(e.target.value),
+                          },
+                        })
+                      }
+                    />
+                  </Field>
+                ))}
+              </div>
+              <label className="check-label">
+                <input
+                  type="checkbox"
+                  checked={draft.excluded}
+                  disabled={locked}
+                  onChange={(e) => edit({ excluded: e.target.checked })}
+                />
+                从朗读中排除，保留原文记录
+              </label>
+              <div className="button-row">
+                <button
+                  className="button small"
+                  disabled={locked || dirty || Array.from(s.text).length < 2}
+                  onClick={() => {
+                    setOffset(
+                      Math.max(
+                        1,
+                        Math.min(
+                          Array.from(s.text).length - 1,
+                          Array.from(
+                            s.text.slice(
+                              0,
+                              textarea.current?.selectionStart || 0,
+                            ),
+                          ).length,
+                        ),
+                      ),
+                    );
+                    setSplit(true);
+                  }}
+                >
+                  <Scissors size={13} />
+                  拆分
+                </button>
+                <button
+                  className="button small"
+                  disabled={locked || dirty || !next}
+                  onClick={() => setMerge(true)}
+                >
+                  <Link2 size={13} />
+                  合并下一条
+                </button>
+              </div>
+            </details>
+            <div className="inspector-section">
+              <h3>音频版本</h3>
+              <dl className="details-list">
+                <div>
+                  <dt>最近尝试</dt>
+                  <dd>{names[s.latest]}</dd>
+                </div>
+                <div>
+                  <dt>当前音频</dt>
+                  <dd>{names[s.validity]}</dd>
+                </div>
+                <div>
+                  <dt>人工检查</dt>
+                  <dd>{names[s.review]}</dd>
+                </div>
+              </dl>
+              <div className="button-row">
+                <button
+                  className="button small"
+                  disabled={!s.previous || locked || dirty}
+                  onClick={() => setRestore(s.previous)}
+                >
+                  <RotateCcw size={13} />
+                  上一版
+                </button>
+                <button
+                  className="button small"
+                  disabled={!s.approved || locked || dirty}
+                  onClick={() => setRestore(s.approved)}
+                >
+                  最近通过版
+                </button>
+              </div>
+              {s.validity === "matched" && (
+                <button
+                  className="text-button warning"
+                  disabled={!connectionReady || locked || dirty}
+                  onClick={() =>
+                    run(() =>
+                      save("segment.review", {
+                        id: s.id,
+                        audioId: s.current,
+                        basis: basis(s),
+                        state: "rework",
+                      }),
+                    )
+                  }
+                >
+                  标记需返工
+                </button>
+              )}
+            </div>
+          </>
+        ) : tab === "original" ? (
+          <div className="inspector-section">
+            <h3>原文对照</h3>
+            {s.source.spans.length > 0 && <p className="hint">前文：{Array.from(chapter.source).slice(Math.max(0, s.source.spans[0].start - 80), s.source.spans[0].start).join("") || "章节开头"}</p>}
+            <p className="original-excerpt">
+              {s.source.spans
+                .map((span) =>
+                  Array.from(chapter.source)
+                    .slice(span.start, span.end)
+                    .join(""),
+                )
+                .join("") || s.source.text || "这条旧手工片段未保存独立来源文本，无法还原最初原文。"}
+            </p>
+            {s.source.spans.length > 0 && <p className="hint">后文：{Array.from(chapter.source).slice(s.source.spans.at(-1)!.end, s.source.spans.at(-1)!.end + 80).join("") || "章节结尾"}</p>}
+            {s.editHistory?.length ? <p className="warning">朗读正文有 {s.editHistory.length} 次显式修改。当前文字请与上方可用的来源对照。</p> : null}
+            <p className="original-excerpt">当前朗读：{s.text}</p>
+            <p className="hint">
+              {s.source.kind === "edited"
+                ? "此片段经过结构编辑，保留父片段来源。"
+                : "原文区间由程序保存，编辑朗读文字不覆盖原文。"}
+            </p>
+          </div>
+        ) : (
+          <div className="inspector-section">
+            <h3>实际生成提示</h3>
+            <p className="hint">模板 {s.template} · 仅显示已保存设置</p>
+            <button className="button small" disabled={locked || dirty} onClick={()=>setTemplateOpen(true)}>查看与切换模板</button>
+            {!!s.promptIssues?.length && <p className="error-inline">{s.promptIssues.join("；")}</p>}
+            <pre className="prompt-text">{s.prompt}</pre>
+          </div>
+        )}
+      </div>
+      {dirty && (
+        <div className="draft-notice">
+          <span>
+            {revision !== chapter.revision
+              ? "正式剧本已更新，草稿仍保留。请核对后重新编辑。"
+              : "修改已暂存为本机草稿，尚未应用。"}
+          </span>
+          <button
+            className="text-button"
+            onClick={() => {
+              localStorage.removeItem("draft-" + s.id);
+              setDirty(false);
+              setDraft({ ...s });
+              setRevision(chapter.revision);
+            }}
+          >
+            放弃草稿
+          </button>
+        </div>
+      )}
+      <div className="inspector-actions">
+        <button
+          className="button"
+          disabled={!dirty || locked}
+          onClick={() => run(saveDraft)}
+        >
+          {dirty ? "保存修改" : "已保存"}
+        </button>
+        <button
+          className="button primary"
+          disabled={dirty || locked || s.excluded}
+          onClick={() => run(() => generate([s.id]))}
+        >
+          <AudioLines size={15} />
+          {s.current ? "重新生成" : "生成本条"}
+        </button>
+      </div>
+      {templateOpen && <TemplateDialog segment={s} chapter={chapter} templates={templates} save={save} onClose={()=>setTemplateOpen(false)}/>}
+      {split && (
+        <Dialog title="拆分片段" onClose={() => setSplit(false)}>
+          <Form
+            label="确认拆分"
+            revision={chapter.revision}
+            onSubmit={async (f, revision) => {
+              await save("segment.split", {
+                revision,
+                id: s.id,
+                offset,
+                performance: [f.get("first"), f.get("second")],
+              });
+              setSplit(false);
+            }}
+          >
+            <Field label="在第几个字符后拆分">
+              <input
+                type="number"
+                min={1}
+                max={Array.from(s.text).length - 1}
+                value={offset}
+                onChange={(e) => setOffset(Number(e.target.value))}
+              />
+            </Field>
+            <p className="original-excerpt">
+              {Array.from(s.text).slice(0, offset).join("")}
+              <span className="split-marker"> / </span>
+              {Array.from(s.text).slice(offset).join("")}
+            </p>
+            <Field label="前一条表演指导">
+              <input name="first" defaultValue={s.performance} />
+            </Field>
+            <Field label="后一条表演指导">
+              <input name="second" defaultValue={s.performance} />
+            </Field>
+            <p className="hint">
+              两条继承当前实际音色和数值设置。请重新分配“后半句”等位置相关指导；拆分后需重新生成。
+            </p>
+          </Form>
+        </Dialog>
+      )}
+      {merge && next && (
+        <Dialog title="合并相邻片段" onClose={() => setMerge(false)}>
+          <Form
+            label="确认合并"
+            revision={chapter.revision}
+            onSubmit={async (f, revision) => {
+              await save("segment.merge", {
+                revision,
+                id: s.id,
+                choice: f.get("choice"),
+                performance: f.get("performance"),
+              });
+              setMerge(false);
+            }}
+          >
+            <p className="original-excerpt">
+              {s.text}
+              {next.text}
+            </p>
+            <p className="hint">
+              本条：{voices.find((v) => v.id === s.voiceId)?.name || "无音色"} ·
+              下一条：
+              {voices.find((v) => v.id === next.voiceId)?.name || "无音色"}
+            </p>
+            <div className="merge-comparison">
+              {[s, next].map((row, index) => <div key={row.id}><strong>{index === 0 ? "本条设置" : "下一条设置"}</strong><p>模型 {row.model || "seed-audio-1.0"} · 模板 {row.template}</p><p>语速 {row.config.speech_rate} · 音量 {row.config.loudness_rate} · 音高 {row.config.pitch_rate}</p><p>{row.voiceSource === "override" ? "本条指定音色" : "继承角色默认"}</p></div>)}
+            </div>
+            {s.voiceSource !== next.voiceSource && <p className="hint">合并后保留“本条指定”的覆盖保护。</p>}
+            <label className="check-label">
+              <input type="radio" name="choice" value="first" />
+              使用本条音色、模型、数值配置和模板
+            </label>
+            <label className="check-label">
+              <input type="radio" name="choice" value="second" />
+              使用下一条音色、模型、数值配置和模板
+            </label>
+            <Field label="合并后表演指导">
+              <textarea name="performance" defaultValue={s.performance} />
+            </Field>
+            <p className="hint">
+              只允许同角色、同类型合并；合并后重新生成和检查。
+            </p>
+          </Form>
+        </Dialog>
+      )}
+      {restore && (
+        <RestoreDialog
+          id={restore}
+          segment={s}
+          revision={chapter.revision}
+          voices={voices}
+          onClose={() => setRestore(null)}
+          restore={async (revision) => {
+            await save("segment.restore", {
+              revision,
+              id: s.id,
+              audioId: restore,
+              restoreSettings: true,
+            });
+            setRestore(null);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function RestoreDialog({
+  id,
+  segment: s,
+  revision,
+  voices,
+  onClose,
+  restore,
+}: {
+  id: string;
+  segment: Segment;
+  revision: number;
+  voices: Voice[];
+  onClose: () => void;
+  restore: (revision?: number) => Promise<void>;
+}) {
+  const [record, setRecord] = useState<AudioRecord | null>(null),
+    [error, setError] = useState("");
+  useEffect(() => {
+    void api<AudioRecord>("/audio-record/" + id)
+      .then(setRecord)
+      .catch((e) => setError(e.message));
+  }, [id]);
+  const label = (id: string | null) =>
+    voices.find((v) => v.id === id)?.name || "未绑定";
+  return (
+    <Dialog title="恢复音频版本" onClose={onClose}>
+      <p className="hint">
+        保留当前角色归属和原文来源。以下生成设置将恢复，检查状态会按当前审核依据重新计算。
+      </p>
+      {error && <p role="alert">{error}</p>}
+      <Form label="恢复此版设置并选用" revision={revision} busy={!record} onSubmit={(_, expected) => restore(expected)}>
+        {record && (
+          <div className="restore-diff">
+            <h3>朗读正文</h3>
+            <p className="hint">当前</p>
+            <p>{s.text}</p>
+            <p className="hint">此版本</p>
+            <p>{record.input.text}</p>
+            <h3>参考声音</h3>
+            <p>
+              {label(s.voiceId)} → {label(record.input.voiceId)}
+            </p>
+            <h3>表演指导</h3>
+            <p>
+              {s.performance || "自然朗读"} →{" "}
+              {record.input.performance || "自然朗读"}
+            </p>
+            <h3>数值设置与模板</h3>
+            <p>
+              语速 / 音量 / 音调：{Object.values(s.config).join(" / ")} →{" "}
+              {Object.values(record.input.config).join(" / ")}
+            </p>
+            <p>
+              {s.template} → {record.input.template}
+            </p>
+          </div>
+        )}
+      </Form>
+    </Dialog>
+  );
+}
+
+function ExportDialog({
+  chapter: c,
+  ready,
+  total,
+  passed,
+  connectionReady,
+  onClose,
+  onRefresh,
+}: {
+  chapter: ChapterDetail;
+  ready: number;
+  total: number;
+  passed: number;
+  connectionReady: boolean;
+  onClose: () => void;
+  onRefresh: () => Promise<void>;
+}) {
+  const [format, setFormat] = useState("wav"),
+    [gap, setGap] = useState(c.gap);
+  const [gapRevision, setGapRevision] = useState(c.revision);
+  const [confirmation, setConfirmation] = useState(c);
+  return (
+    <Dialog title="检查与导出" onClose={onClose}>
+      <div className="export-overview">
+        <Headphones size={26} />
+        <div>
+          <h3>{c.title}</h3>
+          <p>
+            {ready} / {total} 音频就绪 · {passed} 条检查通过 · {c.segments.filter(s => !s.excluded && s.review === "pending").length} 条待检查
+          </p>
+        </div>
+      </div>
+      <Field label="片段间隔（秒）">
+        <input
+          type="number"
+          min={0}
+          max={10}
+          step={0.1}
+          value={gap}
+          onChange={(e) => setGap(Number(e.target.value))}
+        />
+      </Field>
+      {gap !== c.gap && (
+        <Form
+          label="保存间隔"
+          onSubmit={async () => {
+            const saved = await action<ChapterDetail>("chapter.update", {
+              chapterId: c.id,
+              revision: gapRevision,
+              gap,
+            });
+            setGapRevision(saved.revision);
+            setConfirmation(previous => ({...previous, revision: saved.revision, arrangement: saved.arrangement}));
+            await onRefresh();
+          }}
+        >
+          <p className="hint">保存间隔后，将按新编排准备试听与导出。</p>
+        </Form>
+      )}
+      <Field label="导出格式">
+        <Select
+          label="导出格式"
+          value={format}
+          options={[
+            { value: "wav", label: "WAV · 48 kHz 无损母版" },
+            { value: "mp3", label: "MP3 · 192 kbps" },
+          ]}
+          onChange={setFormat}
+        />
+      </Field>
+      <Form
+        label="确认检查并导出"
+        busy={!connectionReady || gap !== c.gap}
+        onSubmit={async () => {
+          await api("/jobs", {
+            kind: "export",
+            chapterId: c.id,
+            revision: confirmation.revision,
+            arrangement: confirmation.arrangement,
+            commandId: crypto.randomUUID(),
+            format,
+            confirm: true,
+            reviewItems: confirmation.segments
+              .filter((s) => !s.excluded)
+              .map((s) => ({ id: s.id, audioId: s.current, basis: basis(s) })),
+          });
+          await onRefresh();
+          onClose();
+        }}
+      >
+        {(confirmation.revision !== c.revision || confirmation.arrangement !== c.arrangement) && <p className="warning">本章内容或音频编排已变化，请关闭后重新打开，核对再导出。</p>}
+        <p className="hint">
+          将当前匹配音频的待检查项统一确认为通过。需返工、身份未确认、缺漏或过期音频必须先处理。
+        </p>
+      </Form>
+      {c.exports.length > 0 && (
+        <div className="section-rule">
+          <h3>已导出的文件</h3>
+          {c.exports.some(e => !e.fileExists) && <p className="hint">缺失文件不能下载。源音频完整时，可在上方重新导出当前版本，不产生配音费用；历史版本请从备份恢复。</p>}
+          {c.exports.slice().reverse().map((e) => (
+            <a
+              className="download-row"
+              key={e.id}
+              download={`${c.title}-编排${e.arrangement}-${e.createdAt.replace(/[:.]/g, "-")}.${e.format}`}
+              href={e.fileExists ? `/api/media/exports/${e.id}` : undefined}
+              aria-disabled={!e.fileExists}
+            >
+              <Download size={16} />
+              {e.format.toUpperCase()}
+              <span>
+                <b>{!e.fileExists ? "文件缺失" : e.current ? "当前结果" : "非当前结果"}</b>
+                <small>编排 {e.arrangement} · {new Date(e.createdAt).toLocaleString()}</small>
+              </span>
+            </a>
+          ))}
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
+function RebindDialog({
+  revision,
+  rows,
+  roles,
+  voices,
+  onClose,
+  onSave,
+}: {
+  revision: number;
+  rows: Segment[];
+  roles: Role[];
+  voices: Voice[];
+  onClose: () => void;
+  onSave: (id: string, revision?: number) => Promise<void>;
+}) {
+  const [id, setId] = useState(roles.find((r) => !r.archived)?.id || "");
+  const role = roles.find((r) => r.id === id);
+  return (
+    <Dialog title="改绑所选片段" onClose={onClose}>
+      <Form label="确认改绑" revision={revision} onSubmit={async (_, expected) => onSave(id, expected)}>
+        <Field label="改绑到已有角色">
+          <Select
+            value={id}
+            label="目标角色"
+            onChange={setId}
+            options={roles
+              .filter((r) => !r.archived)
+              .map((r) => ({ value: r.id, label: r.name }))}
+          />
+        </Field>
+        <p className="hint">
+          只影响本章选中的 {rows.length}{" "}
+          条。角色默认音色随角色切换；本条指定音色保留并重新核对身份。
+        </p>
+        <div className="rebind-preview">
+          {rows.map((s) => (
+            <div key={s.id}>
+              <strong>
+                第 {s.order + 1} 条 ·{" "}
+                {roles.find((r) => r.id === s.roleId)?.name} → {role?.name}
+              </strong>
+              <p>{s.text}</p>
+              <span className="hint">
+                {voices.find((v) => v.id === s.voiceId)?.name || "未配置"} →{" "}
+                {voices.find(
+                  (v) =>
+                    v.id ===
+                    (s.voiceSource === "override" ? s.voiceId : role?.voiceId),
+                )?.name || "待配置"}
+                {s.voiceSource === "override" ? " · 保留本条指定" : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      </Form>
+    </Dialog>
+  );
+}
+
+function DeleteVoiceDialog({
+  voice,
+  onClose,
+  onDeleted,
+}: {
+  voice: Voice;
+  onClose: () => void;
+  onDeleted: () => Promise<void>;
+}) {
+  const [usage, setUsage] = useState<{
+    chapters: { id: string; title: string; project: string; count: number }[];
+    roles: string[];
+    count: number;
+  } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    void api<typeof usage>(`/voices/${voice.id}/usage`)
+      .then(setUsage)
+      .catch((e) => setError(e.message));
+  }, [voice.id]);
+  return (
+    <Dialog title="删除参考素材" onClose={onClose}>
+      <p>
+        删除「{voice.name}
+        」的参考文件后，相关片段将无法再用它生成。已有音频和成品保留。
+      </p>
+      {error && (
+        <p className="error-inline" role="alert">
+          {error}
+        </p>
+      )}
+      {usage ? (
+        <Form
+          label="确认删除参考文件"
+          onSubmit={async (f) => {
+            if (f.get("confirm") !== "on") throw new Error("请先确认删除影响");
+            await action("voice.delete", { id: voice.id, confirm: true, entityRevision: voice.revision ?? 1 });
+            await onDeleted();
+          }}
+        >
+          <p className="hint">
+            影响 {usage.count} 条片段；角色默认：
+            {usage.roles.join("、") || "无"}
+            。若有在途生成或正在读取，先停用并等待结束再删除。
+          </p>
+          <ul>
+            {usage.chapters.map((c) => (
+              <li key={c.id}>
+                {c.project} / {c.title} · {c.count} 条
+              </li>
+            ))}
+          </ul>
+          <label className="check-label">
+            <input name="confirm" type="checkbox" />
+            我已了解影响，删除这份参考文件
+          </label>
+        </Form>
+      ) : (
+        !error && <p className="hint">正在检查引用…</p>
+      )}
+    </Dialog>
+  );
+}
+
+function GenderField({ initial }: { initial: string }) {
+  const [gender, setGender] = useState(initial);
+  return (
+    <Field label="本章确认的性别" hint="无法判断时保留未知；不从后续章节回填。">
+      <input type="hidden" name="gender" value={gender} />
+      <Select
+        label="本章确认的性别"
+        value={gender}
+        options={["未知", "女", "男", "其他"].map((value) => ({
+          value,
+          label: value,
+        }))}
+        onChange={setGender}
+      />
+    </Field>
+  );
+}

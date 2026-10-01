@@ -1,0 +1,56 @@
+/* Hallmark · macrostructure: Workbench · tone: modern-minimal · anchor hue: green
+ * theme: studied-DNA (source: https://ardot.tencent.com/) · paper oklch(100% 0 0)
+ * accent oklch(52% 0.13 150) · display/body: Inter with Chinese fallback · studied: yes */
+:root {
+  --color-paper: oklch(100% 0 0);
+  --color-canvas: oklch(98% 0 0);
+  --color-sidebar: oklch(97.5% 0 0);
+  --color-input: oklch(95.5% 0 0);
+  --color-hover: oklch(93% 0 0);
+  --color-ink: oklch(22% 0 0);
+  --color-secondary: oklch(39% 0 0);
+  --color-muted: oklch(49% 0 0);
+  --color-rule: oklch(90% 0 0);
+  --color-control-border: oklch(62% 0 0);
+  --color-accent: oklch(52% 0.13 150);
+  --color-accent-ink: oklch(100% 0 0);
+  --color-selected: oklch(96% 0.028 150);
+  --color-selected-border: oklch(76% 0.11 150);
+  --color-focus: oklch(52% 0.13 150);
+  --color-warning: oklch(46% 0.11 64);
+  --color-warning-bg: oklch(97% 0.025 80);
+  --color-error: oklch(49% 0.18 28);
+  --color-error-bg: oklch(97% 0.016 28);
+  --color-overlay: oklch(20% 0 0 / 0.28);
+  --font-body: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-display: var(--font-body);
+  --font-mono: ui-monospace, SFMono-Regular, monospace;
+  --text-xs: 0.6875rem;
+  --text-sm: 0.8125rem;
+  --text-ui: 0.875rem;
+  --text-base: 1rem;
+  --text-heading: 1.5rem;
+  --space-2xs: 0.25rem;
+  --space-xs: 0.5rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+  --space-3xl: 4rem;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+  --rule-width: 1px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 120ms;
+  --dur-short: 180ms;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-modal: 400;
+  --z-toast: 500;
+}
