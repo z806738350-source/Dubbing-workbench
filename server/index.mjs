@@ -157,7 +157,7 @@ export async function startServer({
         return send(res, 200, domain.voiceUsage(path.split("/")[3]));
       if (req.method === "GET" && path.startsWith("/api/chapters/")) {
         const id = path.split("/").pop();
-        if (audioTools) for (const row of domain.enhancement.resolve(id)) {
+        if (audioTools) for (const row of domain.enhancement.inspectArrangement(id).rows) {
           if (row.a) await validateStoredAudio(store, row.a);
         }
         return send(res, 200, domain.chapter(id));

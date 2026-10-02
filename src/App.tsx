@@ -926,6 +926,7 @@ export default function App() {
                     </div>
                   )}
                   <button className="text-button" onClick={()=>setUnitPanelId("list")}>对戏组与声音版本</button>
+                  {!!chapter.arrangementIssues?.length && <p className="error-inline" role="alert">当前编排需修复：{chapter.arrangementIssues.join("；")}。请打开对戏组与声音版本处理后，再准备整章试听或导出。</p>}
                   <div className="script-column-head">
                     <input
                       aria-label="选择可见片段"
@@ -1314,7 +1315,7 @@ export default function App() {
       {unitPanelId === "list" && chapter && <Dialog title="对戏组与声音版本" onClose={()=>setUnitPanelId(null)} wide>
         <p className="hint">组级操作覆盖全部成员。场景版本按单元管理，切换已有版本仅做本地处理。</p>
         {(chapter.units || []).map(unit=><button className="nav-item" key={unit.id} onClick={()=>setUnitPanelId(unit.id)}>
-          {unit.kind === "group" ? "对戏组" : "单条"} · 第 {unit.members.map(id=>(chapter.segments.find(s=>s.id === id)?.order ?? -1)+1).join("、")} 条 · {unit.state === "pending" ? "待生成，未启用" : unit.state === "dissolved" ? "已解除 · 历史保留" : "已启用"} · {unit.mode === "scene" ? "场景" : "干声"}
+          {unit.kind === "group" ? "对戏组" : "单条"} · {unit.members.some(id=>!chapter.segments.some(s=>s.id === id)) ? "成员记录缺失" : "第 " + unit.members.map(id=>chapter.segments.find(s=>s.id === id)!.order+1).join("、") + " 条"} · {unit.state === "pending" ? "待生成，未启用" : unit.state === "dissolved" ? "已解除 · 历史保留" : "已启用"} · {unit.mode === "scene" ? "场景" : "干声"}{!!unit.diagnostics?.length && " · 需修复"}
         </button>)}
       </Dialog>}
       {unitPanelId && chapter && state && chapter.units?.find(u=>u.id === unitPanelId) && <UnitPanel key={unitPanelId} unit={chapter.units.find(u=>u.id === unitPanelId)!}
@@ -3170,7 +3171,7 @@ function ExportDialog({
       </Field>
       <Form
         label="确认检查并导出"
-        busy={!connectionReady || gap !== c.gap}
+        busy={!connectionReady || gap !== c.gap || !!c.arrangementIssues?.length}
         onSubmit={async () => {
           await api("/jobs", {
             kind: "export",
@@ -3188,6 +3189,7 @@ function ExportDialog({
           onClose();
         }}
       >
+        {!!c.arrangementIssues?.length && <p className="error-inline" role="alert">当前编排需修复：{c.arrangementIssues.join("；")}。请先明确解除无效分组并核对单条。</p>}
         {(confirmation.revision !== c.revision || confirmation.arrangement !== c.arrangement) && <p className="warning">本章内容或音频编排已变化，请关闭后重新打开，核对再导出。</p>}
         <p className="hint">
           将当前匹配音频的待检查项统一确认为通过。需返工、身份未确认、缺漏或过期音频必须先处理。

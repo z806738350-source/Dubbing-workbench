@@ -388,7 +388,7 @@ export function createDomain(store) {
     },
     mutate(action, p) {
       return store.transaction(() => {
-        enhancement.assertStructural(action, p);
+        if (action !== "segment.update") enhancement.assertStructural(action, p);
         const apply = () => {
         if (action === "settings.update") {
           const previous = store.maybe("settings", "models") || {
@@ -825,11 +825,12 @@ export function createDomain(store) {
               ...(s.editHistory || []),
               { revision: c.revision, text: previous.text },
             ];
-            if (!s.text.trim()) {
-              s.excluded = true;
-              s.exclusionReason = "用户清空朗读正文";
-            }
           }
+          if (typeof s.text === "string" && !s.text.trim()) {
+            s.excluded = true;
+            s.exclusionReason = "用户清空朗读正文";
+          }
+          enhancement.assertStructural(action, { ...p, excluded: s.excluded });
           validate(s, c);
           store.put("segments", s, c.id);
           touch(c, true, wasExcluded !== s.excluded);
@@ -1017,18 +1018,18 @@ export function createDomain(store) {
     const result = originalSnapshot();
     return { ...result, ...enhancement.snapshot(), enhancementTemplates:listUnitTemplates(), jobs: result.jobs.map(j => { if (!['voice-create','unit-generate'].includes(j.kind)) return j; const a=store.all('attempts',j.id).find(a=>a.status==='success' && store.maybe('audios',a.id)); return {...j,...(a?{resultAudioId:a.id,resultNotSelected:a.adopted===false}:{})}; }), chapters: result.chapters.map(c => {
       const task = result.jobs.find(j => j.chapterId === c.id && active(j));
-      const rows = enhancement.resolve(c.id);
+      const { rows, issues: arrangementIssues } = enhancement.inspectArrangement(c.id);
       const base = ['待整理','全已排除','待校对','待确认'].includes(c.productionStatus);
       const unknown = rows.some(r => enhancement.getUnit(r.s.id).variants[r.s.mode].latest === 'unknown');
-      return { ...c, productionStatus: task ? c.productionStatus : base ? c.productionStatus : unknown ? '结果待核对' : rows.some(r => r.validity === 'missing') ? '待生成' : rows.some(r => r.validity !== 'matched') ? '待更新' : rows.some(r => r.review === 'rework') ? '需返工' : rows.every(r => r.review === 'passed') ? '已检查' : '待检查' };
+      return { ...c, arrangementIssues, productionStatus: arrangementIssues.length ? '编排需修复' : task ? c.productionStatus : base ? c.productionStatus : unknown ? '结果待核对' : rows.some(r => r.validity === 'missing') ? '待生成' : rows.some(r => r.validity !== 'matched') ? '待更新' : rows.some(r => r.review === 'rework') ? '需返工' : rows.every(r => r.review === 'passed') ? '已检查' : '待检查' };
     }) };
   };
   api.chapter = id => {
     enhancement.syncLegacy();
-    const result = originalChapter(id), rows = enhancement.resolve(id), reviewItems = rows.map(r => ({ id: r.s.id, audioId: r.a?.id || null, basis: r.basis }));
-    const exportReady = rows.length > 0 && result.coverage.valid && result.segments.filter(s => !s.excluded).every(s => s.roleConfirmed && s.identityConfirmed) && rows.every(r => r.validity === 'matched' && r.review === 'passed');
+    const result = originalChapter(id), { rows, issues: arrangementIssues } = enhancement.inspectArrangement(id), reviewItems = rows.map(r => ({ id: r.s.id, audioId: r.a?.id || null, basis: r.basis }));
+    const exportReady = !arrangementIssues.length && rows.length > 0 && result.coverage.valid && result.segments.filter(s => !s.excluded).every(s => s.roleConfirmed && s.identityConfirmed) && rows.every(r => r.validity === 'matched' && r.review === 'passed');
     const units = store.all('units', id).filter(u => u.state !== 'retired').map(enhancement.view);
-    return { ...result, units, events: units.flatMap(u => u.events), reviewItems, playbackItems: rows.map(r => ({ id: r.s.id, unitId: r.s.id, members: r.s.members, mode: r.s.mode, audioId: r.a?.id || null, basis: r.basis, validity: r.validity, review: r.review })), segments: result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, ...(group ? {groupId:group.id} : {}) }; }), exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && same(e.confirmation?.reviewItems, reviewItems) })) };
+    return { ...result, arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems: rows.map(r => ({ id: r.s.id, unitId: r.s.id, members: r.s.members, mode: r.s.mode, audioId: r.a?.id || null, basis: r.basis, validity: r.validity, review: r.review })), segments: result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, ...(group ? {groupId:group.id} : {}) }; }), exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && same(e.confirmation?.reviewItems, reviewItems) })) };
   };
   return api;
 }

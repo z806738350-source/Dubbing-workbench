@@ -53,3 +53,17 @@ test('SC03 上下文与单元修订变化拒绝过期建议，空事件结果不
   p.contextRevision--;store.put('projects',p);const u=store.get('units',unit.id);u.revision++;store.put('units',u,u.chapterId);
   assert.throws(()=>analysis.resume({id:d.id,draftVersion:d.draftVersion,replace:true,batchIds:[d.batches[0].id]}),{status:409});assert.equal(store.all('events',unit.id).length,0);
 });
+
+test('F3 逆序持续建议与旧ready草稿均不可采用；本地校对保留起止位置且零重分析',async t=>{
+  const {store,chapter,segment,unit,analysis,start,item,result}=setup(t);let calls=0;
+  global.fetch=async()=>{calls++;return result(['environment','music'].map(kind=>({...item,kind,evidence:'创作建议',evidenceRefs:[],startMemberId:segment.id,endMemberId:segment.id,startPosition:'after',endPosition:'before'})));};
+  const r=await start();await analysis.close();let d=store.get('suggestions',r.id);
+  assert.equal(d.status,'partial');assert.ok(d.items.every(i=>i.issues.some(message=>/范围|顺序/.test(message))));
+  // Simulate a ready draft persisted by the previous release: apply must revalidate it.
+  d.status='ready';d.items.forEach(i=>i.issues=[]);store.put('suggestions',d,chapter.id);
+  assert.throws(()=>analysis.apply({id:r.id,revision:chapter.revision,draftVersion:d.draftVersion,selected:d.items.map(i=>i.id)}),{status:409});
+  assert.equal(store.all('events',unit.id).length,0);
+  for(const bad of d.items){analysis.edit({id:r.id,draftVersion:d.draftVersion,batchId:bad.batchId,itemId:bad.id,item:{startPosition:'before',endPosition:'after'}});d=store.get('suggestions',r.id);}
+  assert.equal(d.status,'ready');analysis.apply({id:r.id,revision:chapter.revision,draftVersion:d.draftVersion,selected:d.items.map(i=>i.id)});
+  const events=store.all('events',unit.id);assert.equal(events.length,2);assert.ok(events.every(e=>e.startPosition==='before'&&e.endPosition==='after'));assert.equal(calls,1);
+});

@@ -143,8 +143,8 @@ export function createAnalysis(store, domain, config) {
           else item.text = member.text;
           if (!["before", "during", "after"].includes(item.position)) issue("声音事件位置无效");
           if (item.startMemberId !== undefined || item.endMemberId !== undefined) {
-            const start = r.memberIds.indexOf(item.startMemberId), end = r.memberIds.indexOf(item.endMemberId);
-            if (start < 0 || end < start) issue("持续声音范围无效，不可跨生成单元");
+            try { domain.enhancement.assertEventRange({ members: r.memberIds }, item); }
+            catch (error) { issue(error.message); }
           }
         } else {
           const s = r.segments.find((s) => s.id === item.segmentId);
@@ -508,7 +508,7 @@ export function createAnalysis(store, domain, config) {
           "evidenceRefs",
           "reason",
           "uncertain",
-          ...(r.kind === "scene" ? ["unitId", "kind", "description", "memberId", "position", "startMemberId", "endMemberId"] : []),
+          ...(r.kind === "scene" ? ["unitId", "kind", "description", "memberId", "position", "startMemberId", "endMemberId", "startPosition", "endPosition"] : []),
         ];
         const old = b.items[index] || {},
           next = { ...old, id: old.id || uid(), userEdited: true };
@@ -559,7 +559,7 @@ export function createAnalysis(store, domain, config) {
         if (!Array.isArray(p.selected) || !p.selected.length || p.selected.some(id => !draft.items.some(i => i.id === id))) fail("请勾选需要采用的声音事件");
         domain.enhancement.addEvents(draft.unitId, draft.items.filter(i => p.selected.includes(i.id)).map(i => ({
           kind: i.kind, description: i.description, memberId: i.memberId, position: i.position,
-          ...(i.startMemberId ? { startMemberId: i.startMemberId, endMemberId: i.endMemberId } : {}),
+          ...(i.startMemberId ? { startMemberId: i.startMemberId, endMemberId: i.endMemberId, startPosition: i.startPosition, endPosition: i.endPosition } : {}),
           state: "adopted", evidence: { kind: i.evidence, quote: i.sourceQuote, ...(i.sourceQuotes?.length ? { quotes: i.sourceQuotes } : {}), reason: i.reason || "", suggestionId: draft.id, itemId: i.id },
         })), draft.unitRevision);
         draft.appliedItemIds = [...new Set(p.selected)];

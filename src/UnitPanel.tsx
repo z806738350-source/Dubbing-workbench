@@ -6,7 +6,7 @@ import { ObjectDraftTools, objectDraftId, useObjectDraft } from "./ObjectDraft";
 import SceneSuggestions from "./SceneSuggestions";
 import type { ChapterDetail, GenerationUnit, Job, Role, SoundEvent, State } from "./types";
 
-const labels: Record<string,string> = {missing:"待生成", stale:"待更新", matched:"音频匹配", broken:"文件不可用", pending:"待检查", passed:"已通过", rework:"需返工", queued:"排队中", running:"生成中", failed:"生成失败", unknown:"结果不明", stopped:"已停止"};
+const labels: Record<string,string> = {invalid:"需修复", missing:"待生成", stale:"待更新", matched:"音频匹配", broken:"文件不可用", pending:"待检查", passed:"已通过", rework:"需返工", queued:"排队中", running:"生成中", failed:"生成失败", unknown:"结果不明", stopped:"已停止"};
 const message = (conflict: unknown) => typeof conflict === "string" ? conflict : (conflict as {message?:string;reason?:string})?.message || (conflict as {reason?:string})?.reason || "成员配置不一致，请核对成员";
 export function unitHasDraft(unit: GenerationUnit, events: SoundEvent[]) {
   return unit.members.some(id=>hasDraft(id)) || ["dry","scene"].some(mode=>hasDraft(objectDraftId("unit", unit.id + "/" + mode))) ||
@@ -73,7 +73,7 @@ function UnitDetails({unit, chapter, roles, state, locked, connected, refresh, c
   const [newEvent,setNewEvent] = useState(false);
   const [editingEvent,setEditingEvent] = useState<string|null>(null);
   const [createdEvent,setCreatedEvent] = useState<SoundEvent|null>(null);
-  const [preview,setPreview] = useState<{kind:"dissolve"|"restore"|"template";base:{revision:number;entityRevision:number};audioId?:string;items?:{id:string;audioId:string|null;validity:string;review:string}[];differences?:unknown[];events?:SoundEvent[];before?:string;after?:string;to?:string} | null>(null);
+  const [preview,setPreview] = useState<{kind:"dissolve"|"restore"|"template";base:{revision:number;entityRevision:number;arrangement?:number};audioId?:string;items?:{id:string;mode:"dry";audioId:string|null;validity:string;review:string;diagnostics:string[]}[];differences?:unknown[];events?:SoundEvent[];before?:string;after?:string;to?:string} | null>(null);
   const [restoreConfirmed,setRestoreConfirmed] = useState(false);
   const command = useRef({id:crypto.randomUUID(),signature:""});
   const events = (chapter.events || []).filter(e=>e.unitId === unit.id);
@@ -83,19 +83,21 @@ function UnitDetails({unit, chapter, roles, state, locked, connected, refresh, c
   const templates = (state.enhancementTemplates || []).filter(t=>mode === "scene" ? t.mode === "scene" : unit.kind === "group" ? t.scope === "group" : t.scope === "single" && t.mode === "dry");
   const [targetTemplate,setTargetTemplate] = useState(currentTemplate);
   const flags = state.settings.features;
-  const enabled = unit.state !== "dissolved" && (unit.kind !== "group" || flags?.groups !== false) && (mode !== "scene" || flags?.scenes !== false);
-  const editLocked = locked || unit.state === "dissolved";
+  const invalid = !!unit.diagnostics?.length;
+  const enabled = !invalid && unit.state !== "dissolved" && (unit.kind !== "group" || flags?.groups !== false) && (mode !== "scene" || flags?.scenes !== false);
+  const editLocked = locked || invalid || unit.state === "dissolved";
   const job = state.jobs.find(j=>["queued","running"].includes(j.status) && (j.unitId === unit.id || j.unitIds?.includes(unit.id)));
   const run = async(fn:()=>Promise<unknown>)=>{setError("");try{await fn();}catch(e){setError((e as Error).message);}};
   const payload = {chapterId:chapter.id,revision:chapter.revision,id:unit.id,entityRevision:unit.revision};
   return <Dialog title={(unit.kind === "group" ? "多人对戏组 · 实验" : "单条声音版本") + (unit.state === "dissolved" ? " · 已解除" : "")} onClose={close} wide>
     <p className="hint">{unit.state === "pending" ? "待生成组尚未启用，原编排保留。" : unit.state === "dissolved" ? "历史组保留供查看，当前编排已使用单条。" : "当前已启用"} · 当前编排使用{unit.mode === "scene" ? "场景" : "干声"}。一次生成覆盖以下全部成员，不裁切为逐句独立音频。</p>
+    {invalid && <div className="error-inline" role="alert"><p>本单元需修复：{unit.diagnostics!.join("；")}</p><p>{unit.kind === "group" && unit.state !== "dissolved" ? "请先查看解除分组预览并明确解除，再处理剩余单条。" : "请先核对并修复成员资料。"}历史结果仍保留，不能用于确认当前编排。</p></div>}
     <Members ids={unit.members} chapter={chapter} roles={roles} open={open}/>
     {error && <p className="error-inline" role="alert">{error}</p>}
     {unit.kind === "single" && mode === "dry" ? <p className="hint">单条干声的表演指导在片段编辑区保存。<button className="text-button" onClick={()=>open(unit.members[0])}>打开片段表演指导</button></p> :
-      <Field label={mode === "scene" ? "场景版本共同指导" : "共同表演指导"}><textarea rows={3} disabled={locked || unit.state === "dissolved"} value={controller.draft.guidance} onChange={e=>controller.edit({guidance:e.target.value})}/></Field>}
+      <Field label={mode === "scene" ? "场景版本共同指导" : "共同表演指导"}><textarea rows={3} disabled={editLocked} value={controller.draft.guidance} onChange={e=>controller.edit({guidance:e.target.value})}/></Field>}
     <ObjectDraftTools controller={controller} title="单元表演指导" onError={setError} render={v=><p className="original-excerpt">{v.guidance}</p>}/>
-    <button className="button small" disabled={locked || !controller.dirty || controller.saving || unit.state === "dissolved" || (unit.kind === "single" && mode === "dry")} onClick={()=>void run(async()=>{
+    <button className="button small" disabled={editLocked || !controller.dirty || controller.saving || (unit.kind === "single" && mode === "dry")} onClick={()=>void run(async()=>{
       await controller.save(async(value,revision)=>{
         const saved = await action<GenerationUnit>("unit.update", {...payload,revision:value.chapterRevision,mode,entityRevision:revision,guidance:value.guidance});
         return {value:{guidance:saved.variants[mode].guidance || "",chapterRevision:saved.chapterRevision!},revision:saved.revision};
@@ -115,7 +117,7 @@ function UnitDetails({unit, chapter, roles, state, locked, connected, refresh, c
         <button className="button small" disabled={editLocked || !targetTemplate || targetTemplate === currentTemplate || unitHasDraft(unit,events)} onClick={()=>void run(async()=>{const result=await api<{before:string;after:string;to:string}>("/enhancement-preview",{kind:"template",...payload,mode,template:targetTemplate});setPreview({...result,kind:"template",base:{revision:payload.revision,entityRevision:payload.entityRevision}});setRestoreConfirmed(false);})}>查看模板提示差异</button>
       </details>
       <div className="button-row">
-        <button className="button small" disabled={!variant.current || !connected || locked || status.validity === "broken"} onClick={()=>play(variant.current!, (unit.kind === "group" ? "整组" : "单条") + (mode === "scene" ? "场景" : "干声") + (status.validity !== "matched" ? " · 旧版" : ""),unit.state === "dissolved")}>试听{unit.state === "dissolved" ? "历史" : status.validity !== "matched" ? "旧版" : "当前"}音频</button>
+        <button className="button small" disabled={!variant.current || !connected || locked || status.validity === "broken"} onClick={()=>play(variant.current!, (unit.kind === "group" ? "整组" : "单条") + (mode === "scene" ? "场景" : "干声") + (status.validity !== "matched" ? " · 旧版" : ""),invalid || unit.state === "dissolved")}>试听{unit.state === "dissolved" ? "历史" : status.validity !== "matched" ? "旧版" : "当前"}音频</button>
         <button className="button small" disabled={editLocked || unit.mode === mode || status.validity !== "matched" || unitHasDraft(unit,events)} onClick={()=>void run(async()=>{await action("unit.switch",{...payload,mode});await refresh();})}>本地切换到{mode === "scene" ? "场景" : "干声"}</button>
         <button className="button small" disabled={editLocked || !connected || status.validity !== "matched" || unitHasDraft(unit,events)} onClick={()=>void run(async()=>{await action("unit.review",{...payload,mode,audioId:variant.current,basis:status.basis,state:"passed"});await refresh();})}>确认已试听并检查通过</button>
         <button className="text-button warning" disabled={editLocked || !connected || status.validity !== "matched"} onClick={()=>void run(async()=>{await action("unit.review",{...payload,mode,audioId:variant.current,basis:status.basis,state:"rework"});await refresh();})}>标记整单元需返工</button>
@@ -132,7 +134,7 @@ function UnitDetails({unit, chapter, roles, state, locked, connected, refresh, c
           {result.prompt && <details><summary>查看这次实际提示</summary><pre className="prompt-text">{result.prompt}</pre></details>}
         </section>)}
       </details>}
-      {!enabled && <p className="warning">该实验的新生成已关闭，已有版本仍可查看和本地切换。</p>}
+      {!enabled && !invalid && <p className="warning">该实验的新生成已关闭，已有版本仍可查看和本地切换。</p>}
       <p className="hint">{mode === "scene" ? "只生成所选场景版本，保留已有干声，不会自动补生成干声。" : "只生成本单元干声，保留已有场景版本。"}一次请求覆盖以上 {unit.members.length} 条，产生调用费用；结果不明时重新提交可能重复计费。</p>
       {unitHasDraft(unit,events) && <p className="warning">本单元或成员有本机草稿。成员入口在上方，指导与事件草稿入口在各编辑区，请先处理后生成。</p>}
       <label className="check-label"><input type="checkbox" checked={accepted} onChange={e=>setAccepted(e.target.checked)}/>我已核对全部成员、表演及采用事件，确认本次费用与重复计费风险</label>
@@ -153,6 +155,7 @@ function UnitDetails({unit, chapter, roles, state, locked, connected, refresh, c
         <h3>{({environment:"环境",effect:"音效",music:"音乐"})[event.kind]} · {event.state === "removed" ? "已移除" : event.state === "adopted" ? "已采用" : "尚未采用"}{event.validity === "needsReview" ? " · 待复核" : ""}</h3>
         <p className="original-excerpt">{event.description}</p><p className="hint">对应第 {(chapter.segments.find(s=>s.id === (event.startMemberId || event.memberId))?.order ?? -1)+1} 条 · {({before:"之前",during:"期间",after:"之后"})[event.startPosition || event.position]}{event.endMemberId ? "，持续到第 " + ((chapter.segments.find(s=>s.id === event.endMemberId)?.order ?? -1)+1) + " 条" : ""} · {event.evidence.kind}</p>
         {event.evidence.quote && <p className="original-excerpt">{event.evidence.quote}</p>}{event.evidence.reason && <p className="hint">{event.evidence.reason}</p>}
+        {!!event.diagnostics?.length && <p className="error-inline">{event.diagnostics.join("；")}</p>}
         <button className="text-button" onClick={()=>setEditingEvent(event.id)}>编辑 / 查看本机草稿</button>
         {event.state !== "removed" && <div className="button-row">
           {event.state === "draft" && <button className="text-button" disabled={editLocked} onClick={()=>void run(async()=>{await action("event.update",{...payload,unitId:unit.id,id:event.id,eventRevision:event.revision,state:"adopted"});await refresh();})}>明确采用此事件</button>}
@@ -163,12 +166,12 @@ function UnitDetails({unit, chapter, roles, state, locked, connected, refresh, c
       <SceneSuggestions unit={unit} chapter={chapter} contextRevision={state.projects.find(p=>p.id === chapter.projectId)?.contextRevision || 0} model={state.settings.textModel} enabled={enabled && !locked} refresh={refresh}/>
     </section>}
     {unit.kind === "group" && unit.state !== "dissolved" && <button className="text-button warning" disabled={locked} onClick={()=>void run(async()=>{
-      const result=await api<{items:{id:string;audioId:string|null;validity:string;review:string}[];events?:SoundEvent[]}>("/enhancement-preview",{kind:"dissolve",...payload});setPreview({...result,kind:"dissolve",base:{revision:payload.revision,entityRevision:payload.entityRevision}});
+      const result=await api<{arrangement:number;items:{id:string;mode:"dry";audioId:string|null;validity:string;review:string;diagnostics:string[]}[];events?:SoundEvent[]}>("/enhancement-preview",{kind:"dissolve",...payload});setPreview({...result,kind:"dissolve",base:{revision:payload.revision,entityRevision:payload.entityRevision,arrangement:result.arrangement}});
     })}>查看解除分组预览</button>}
     {preview && <Dialog title={preview.kind === "dissolve" ? "解除分组预览" : preview.kind === "template" ? "明确切换模板预览" : "恢复旧版本设置预览"} onClose={()=>setPreview(null)}>
       {preview.kind === "dissolve" ? <>
         <p className="hint">恢复原单条干声，保留历史组；缺音不会裁切或自动付费补录。</p>
-        {preview.items?.map(item=><p key={item.id}>第 {(chapter.segments.find(s=>s.id === item.id)?.order ?? -1)+1} 条 · {labels[item.validity]} · {labels[item.review]}{!item.audioId ? " · 需明确补生成" : ""}</p>)}
+        {preview.items?.map(item=><p key={item.id}>{chapter.segments.some(s=>s.id === item.id) ? "第 " + (chapter.segments.find(s=>s.id === item.id)!.order+1) + " 条" : "成员记录缺失"} · 单条干声 · {labels[item.validity] || item.validity} · {labels[item.review] || item.review}{!item.audioId ? " · 需明确补生成" : ""}{!!item.diagnostics?.length && " · " + item.diagnostics.join("；")}</p>)}
         <p className="warning">本组场景声音将退出当前编排；未恢复的缺音将阻止整章试听和正式导出。</p>
         <button className="button primary" onClick={()=>void run(async()=>{await action("unit.dissolve",{...payload,...preview.base});await refresh();setPreview(null);close();})}>确认解除分组</button>
       </> : preview.kind === "template" ? <>

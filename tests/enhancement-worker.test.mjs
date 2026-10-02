@@ -438,6 +438,47 @@ test("EX07/EX08 组与单条混排双格式同母版，删除参考和母版只�
   assert.equal(calls, 2); assert.deepEqual([store.get("settings", "audio-usage:mixed-local-render").reserved, store.get("settings", "audio-usage:mixed-local-render").used], [0, 2]);
 });
 
+test("F2 scene单条成组后解除严格恢复预览干声，缺干声阻断母版和导出且零补生成", async t => {
+  for(const hasDry of [true,false])await t.test(hasDry ? "已有干声实际进入母版及双格式导出" : "无干声不以旧scene补位",async t=>{
+    const {dir,store,domain,voices,worker}=setup(t),{chapter,group:original}=chapterFixture(domain,store,voices),ids=domain.list(chapter.id).map(s=>s.id);
+    const mutate=(action,data)=>domain.mutate(action,{chapterId:chapter.id,revision:store.get('chapters',chapter.id).revision,...data});
+    mutate('unit.dissolve',{id:original.id,entityRevision:original.revision});
+    let calls=0,frames=4800;
+    t.mock.method(globalThis,'fetch',async()=>{calls++;return new Response(wav(frames),{headers:{'content-type':'audio/wav'}})});
+    const generate=async(unitId,mode)=>{const job=await worker.submit({kind:'unit-generate',chapterId:chapter.id,revision:store.get('chapters',chapter.id).revision,unitId,mode,commandId:uid()});await worker.tick();assert.equal(store.get('jobs',job.id).status,'success');return store.all('attempts',job.id)[0].id;};
+    const dryIds=[];for(const id of ids)dryIds.push(id===ids[0]&&!hasDry ? null : await generate(id,'dry'));
+    frames=9600;const sceneId=await generate(ids[0],'scene');assert.equal(store.get('units',ids[0]).mode,'scene');
+    const group=mutate('unit.create',{ids:ids.slice(0,2)});frames=14400;await generate(group.id,'dry');
+    const current=store.get('units',group.id),preview=domain.enhancement.preview({kind:'dissolve',chapterId:chapter.id,revision:store.get('chapters',chapter.id).revision,id:group.id,entityRevision:current.revision});
+    assert.deepEqual(preview.items.map(i=>i.audioId),dryIds.slice(0,2));assert.deepEqual(preview.items.map(i=>i.mode),['dry','dry']);const beforeCalls=calls;
+    mutate('unit.dissolve',{id:group.id,entityRevision:current.revision});
+    const resolved=domain.enhancement.resolve(chapter.id);assert.deepEqual(resolved.map(r=>r.s.mode),['dry','dry','dry']);assert.deepEqual(resolved.map(r=>r.a?.id||null),dryIds);
+    assert.equal(store.get('units',ids[0]).variants.scene.current,sceneId);assert.ok(domain.enhancement.view(store.get('units',ids[0])).variants.scene.history.some(a=>a.id===sceneId));
+    if(hasDry){
+      const masterJob=await worker.submit({kind:'master',chapterId:chapter.id,revision:store.get('chapters',chapter.id).revision,commandId:uid()});await worker.tick();assert.equal(store.get('jobs',masterJob.id).status,'success');
+      const master=store.all('masters',chapter.id)[0];assert.deepEqual(master.mapping.map(m=>m.audioId),dryIds);assert.ok(!master.mapping.some(m=>m.audioId===sceneId));
+      const gapFrames=Math.round(domain.chapter(chapter.id).gap*48000);assert.equal(master.frames,14400+2*gapFrames);
+      for(const format of ['wav','mp3']){const c=domain.chapter(chapter.id),job=await worker.submit({kind:'export',chapterId:c.id,revision:c.revision,arrangement:c.arrangement,reviewItems:c.reviewItems,format,confirm:format==='wav',commandId:uid()});await worker.tick();assert.equal(store.get('jobs',job.id).status,'success');const result=store.all('exports',c.id).find(e=>e.jobId===job.id);assert.equal(result.masterId,master.id);assert.equal((await inspect(join(dir,result.path))).format,format);const decoded=execFileSync(ffmpeg,['-v','error','-xerror','-i',join(dir,result.path),'-ar','48000','-ac','1','-f','s16le','pipe:1']).length/2;assert.equal(decoded,master.frames);}
+    }else{
+      assert.equal(resolved[0].validity,'missing');const c=domain.chapter(chapter.id);
+      for(const kind of ['master','export'])await assert.rejects(worker.submit({kind,chapterId:c.id,revision:c.revision,arrangement:c.arrangement,reviewItems:c.reviewItems,format:'wav',confirm:true,commandId:uid()}),/缺少匹配|没有音频/);
+      assert.equal(store.all('masters',c.id).length,0);assert.equal(store.all('exports',c.id).length,0);
+    }
+    assert.equal(calls,beforeCalls);
+  });
+});
+
+test("F3 已存逆序事件阻断新入队及最终发送事务，零外发并保留待修正事件",async t=>{
+  const {store,domain,voices,worker}=setup(t,{callLimit:1,usageScope:'inverse-event'}),{chapter,group,payload}=chapterFixture(domain,store,voices),memberId=group.members[0];
+  const event=domain.mutate('event.create',{chapterId:chapter.id,revision:store.get('chapters',chapter.id).revision,unitId:group.id,entityRevision:group.revision,kind:'environment',description:'轻风持续',startMemberId:memberId,endMemberId:memberId,startPosition:'before',endPosition:'after',state:'adopted'});
+  const job=worker.enqueue(payload('scene')),old=store.get('events',event.id);old.startPosition='after';old.endPosition='before';store.put('events',old,group.id);
+  let calls=0;t.mock.method(globalThis,'fetch',()=>{calls++;assert.fail('逆序旧事件不得发送')});
+  await worker.tick();assert.equal(calls,0);assert.equal(store.get('jobs',job.id).status,'failed');assert.equal(store.all('attempts',job.id)[0].createdAt,undefined);
+  assert.deepEqual([store.get('settings','audio-usage:inverse-event').reserved,store.get('settings','audio-usage:inverse-event').used],[0,0]);
+  assert.throws(()=>worker.enqueue(payload('scene')),/失效/);assert.equal(store.all('jobs').length,1);assert.equal(store.all('events',group.id).length,1);
+  const diagnosed=domain.enhancement.events(store.get('units',group.id))[0];assert.equal(diagnosed.validity,'needsReview');assert.ok(diagnosed.diagnostics.length);
+});
+
 test("完整候选登记异常后关闭重开，补回原产物不复活unknown或自动重发", async t => {
   const { dir, store, domain, worker, config, closeStore } = setup(t, { callLimit: 1, usageScope: "candidate-recovery" });
   const s = domain.mutate("voice-session.create", { description: "柔和声线" });

@@ -6,6 +6,8 @@
 
 声音创建、多人干声对戏及场景版本已接入工作台。操作和限制见 [增强阶段使用说明](doc/enhancement/release-notes.md)，交付记录见 [增强阶段状态](doc/enhancement/execution-status.md)，逐项证据见 [增强验收矩阵](doc/enhancement/acceptance-matrix.md)。对戏与场景保持实验标识；工程通过和声音听评分别记录。
 
+`e37b7bf` 独立审核后的三项补修及回归范围见 [2026-10-02 审核补修记录](doc/enhancement/audit-fix-2026-10-02.md)。
+
 ## 启动
 
 需要 Node.js 22.13 或更新版本，以及可执行的 FFmpeg / FFprobe。

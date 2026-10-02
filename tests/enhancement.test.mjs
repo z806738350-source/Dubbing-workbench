@@ -119,6 +119,51 @@ test('GU08 同设置失败保留匹配旧声音，改字后旧组仅历史；迟
   assert.equal(e.register({...done.job,status:'unknown'},done.a,done.audio),false);assert.deepEqual(e.resolve(c.id).map(r=>r.s.id),before);
 });
 
+test('F1 异常旧组可读诊断和明确解除，严格编排不静默遗漏成员',async t=>{
+  for (const defect of ['missing','retired','excluded','blank']) await t.test(defect,t=>{
+    const {store,d,c,e,edit,complete,mutateUnit}=setup(t),ids=d.list(c.id).map(s=>s.id),u=edit('unit.create',{ids:ids.slice(0,2)});
+    complete(u.id);
+    if(defect==='missing')store.db.prepare('DELETE FROM segments WHERE id=?').run(ids[0]);
+    else {const s=store.get('segments',ids[0]);if(defect==='blank')s.text=' ';else s[defect]=true;store.put('segments',s,c.id);}
+    const current=store.get('units',u.id),before=store.all('segments');
+    assert.throws(()=>e.resolve(c.id));
+    const inspected=e.inspectArrangement(c.id);assert.deepEqual(inspected.rows,[]);assert.ok(inspected.issues.length);
+    const viewed=e.view(current);assert.ok(viewed.diagnostics.length);assert.deepEqual(viewed.members,ids.slice(0,2));assert.equal(viewed.variants.dry.history.length,1);
+    const preview=e.preview({kind:'dissolve',chapterId:c.id,revision:store.get('chapters',c.id).revision,id:u.id,entityRevision:current.revision});
+    assert.deepEqual(preview.items.map(i=>i.id),ids.slice(0,2));assert.equal(preview.items[0].mode,'dry');assert.ok(preview.items[0].diagnostics.length);
+    mutateUnit('unit.dissolve',current);assert.equal(store.get('units',u.id).state,'dissolved');assert.deepEqual(store.get('units',u.id).members,ids.slice(0,2));assert.deepEqual(store.all('segments'),before);
+  });
+});
+
+test('F3 持续事件按语义位置拒绝同句逆序，旧坏事件可诊断和显式修正',async t=>{
+  for(const kind of ['environment','music'])await t.test(kind,t=>{
+    const {store,d,c,e,edit}=setup(t),id=d.list(c.id)[0].id;
+    const event=data=>edit('event.create',{unitId:id,entityRevision:store.get('units',id).revision,kind,description:'持续铺底',startMemberId:id,endMemberId:id,state:'adopted',...data});
+    for(const [startPosition,endPosition] of [['after','before'],['after','during'],['during','before']])assert.throws(()=>event({startPosition,endPosition}),/顺序|范围/);
+    assert.equal(store.all('events',id).length,0);
+    const valid=event({startPosition:'before',endPosition:'after'});assert.equal(valid.validity,'valid');
+    assert.doesNotThrow(()=>e.input(store.get('units',id),'scene'));
+    const old=store.get('events',valid.id);old.startPosition='after';old.endPosition='before';store.put('events',old,id);
+    const diagnosed=e.events(store.get('units',id))[0];assert.equal(diagnosed.validity,'needsReview');assert.ok(diagnosed.diagnostics.some(s=>/顺序|范围/.test(s)));
+    assert.throws(()=>e.prepare({kind:'unit-generate',chapterId:c.id,revision:store.get('chapters',c.id).revision,unitId:id,mode:'scene'},{model:'seed-audio-1.0'}),/失效|顺序|范围/);
+    assert.throws(()=>e.addEvents(id,[{...old,id:undefined}],store.get('units',id).revision),/顺序|范围/);
+    const updated=edit('event.update',{unitId:id,id:old.id,entityRevision:store.get('units',id).revision,eventRevision:old.revision,startPosition:'before',endPosition:'after'});
+    assert.equal(updated.validity,'needsReview');
+    const verified=edit('event.reconfirm',{unitId:id,id:old.id,entityRevision:store.get('units',id).revision,eventRevision:updated.revision});assert.equal(verified.validity,'valid');
+    assert.doesNotThrow(()=>e.input(store.get('units',id),'scene'));
+  });
+});
+
+test('F2 拆组确认重验后台产物登记后的编排版本，过期预览不切成员mode或解除组',t=>{
+  const {store,d,c,e,edit,complete,mutateUnit}=setup(t),ids=d.list(c.id).map(s=>s.id);
+  complete(ids[0],'dry');const scene=complete(ids[0],'scene'),u=edit('unit.create',{ids:ids.slice(0,2)});
+  const current=store.get('units',u.id),cBefore=store.get('chapters',c.id),preview=e.preview({kind:'dissolve',chapterId:c.id,revision:cBefore.revision,id:u.id,entityRevision:current.revision});
+  const newer=complete(ids[0],'dry'),unitsBefore=store.all('units',c.id);assert.notEqual(newer.audio.id,preview.items[0].audioId);
+  assert.equal(store.get('chapters',c.id).revision,cBefore.revision);assert.notEqual(store.get('chapters',c.id).arrangement,preview.arrangement);
+  assert.throws(()=>mutateUnit('unit.dissolve',current,{arrangement:preview.arrangement}),{status:409});assert.equal(store.get('units',u.id).state,'pending');assert.deepEqual(store.all('units',c.id),unitsBefore);assert.equal(store.get('units',ids[0]).variants.dry.current,newer.audio.id);
+  mutateUnit('unit.dissolve',current,{arrangement:store.get('chapters',c.id).arrangement});assert.equal(store.get('units',ids[0]).mode,'dry');assert.equal(store.get('units',ids[0]).variants.scene.current,scene.audio.id);
+});
+
 test('EX03 请求等效角色纠正保留声音匹配但不沿用组检查',t=>{
   const {store,d,c,p,e,edit,complete,mutateUnit}=setup(t),rows=d.list(c.id),u=edit('unit.create',{ids:rows.slice(0,2).map(s=>s.id)}),done=complete(u.id);
   mutateUnit('unit.review',u,{mode:'dry',audioId:done.audio.id,basis:e.basis(store.get('units',u.id),'dry'),state:'passed'});

@@ -174,6 +174,7 @@ export interface Job {
   createdAt: string;
 }
 export interface SoundEvent {
+  diagnostics?: string[];
   unitRevision?: number;
   chapterRevision?: number;
   id: string;
@@ -203,6 +204,7 @@ export interface UnitVariant {
   status: {validity: string; review: string; audio: AudioRecord | null; prompt: string; promptIssues: string[]; basis: Record<string, unknown>;input?:{template:string}|null};
 }
 export interface GenerationUnit {
+  diagnostics?: string[];
   chapterRevision?: number;
   id: string;
   chapterId: string;
@@ -215,6 +217,7 @@ export interface GenerationUnit {
   variants: {dry: UnitVariant; scene: UnitVariant};
 }
 export interface ChapterDetail extends Chapter {
+  arrangementIssues?: string[];
   reviewItems?: {id:string;audioId:string|null;basis:Record<string,unknown>}[];
   playbackItems: {id: string; unitId?: string; members?: string[]; mode?: "dry" | "scene"; audioId: string | null; basis: Record<string, unknown>; validity: string; review?: string}[];
   units?: GenerationUnit[];

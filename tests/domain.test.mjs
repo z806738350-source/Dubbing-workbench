@@ -82,6 +82,46 @@ test("片段保存返回精确章节修订供后续草稿保存，另页更新�
   assert.equal(store.get("segments",original.id).text,"等待保存时继续编辑。");
   assert.equal(store.get("segments",other.id).performance,"另一页面已保存的指导。");
 });
+
+test('F1 活动及待生成组空白正文的最终排除状态不能绕过结构保护', async t => {
+  for (const state of ['active','pending']) await t.test(state, t => {
+    const {store,d,c,v,update}=setup(t),rows=d.list(c.id);
+    for (const s of rows) update('segment.update',{id:s.id,voiceId:v.id,roleConfirmed:true,identityConfirmed:true});
+    const group=update('unit.create',{ids:rows.map(s=>s.id)});group.state=state;store.put('units',group,c.id);
+    update('segment.update',{id:rows[0].id,text:rows[0].text+'非空修改',excluded:false});
+    const before={chapter:store.get('chapters',c.id),segments:store.all('segments',c.id),units:store.all('units',c.id)};
+    for (const text of ['', ' \t\n']) for (const excluded of [false,undefined,true]) {
+      assert.throws(()=>update('segment.update',{id:rows[0].id,text,...(excluded===undefined?{}:{excluded})}),{status:409});
+      assert.deepEqual(store.get('chapters',c.id),before.chapter);assert.deepEqual(store.all('segments',c.id),before.segments);assert.deepEqual(store.all('units',c.id),before.units);
+    }
+  });
+});
+
+test('F1 旧异常活动组可读诊断和显式解除，正式编排仍严格拒绝', async t => {
+  for (const fault of ['excluded','missing']) await t.test(fault, t => {
+    const {store,d,c,v,update}=setup(t),rows=d.list(c.id);
+    for (const s of rows) update('segment.update',{id:s.id,voiceId:v.id,roleConfirmed:true,identityConfirmed:true});
+    const group=update('unit.create',{ids:rows.map(s=>s.id)}),input=d.enhancement.input(group,'dry'),basis=d.enhancement.basis(group,'dry');
+    const history=[uid(),uid()].map(id=>({id,path:v.path,input,prompt:compile(input),basis,review:{audioId:id,basis,state:'passed'}}));
+    for (const audio of history) store.put('audios',audio,c.id);
+    Object.assign(group.variants.dry,{previous:history[0].id,approved:history[0].id,current:history[1].id,review:history[1].review});group.state='active';store.put('units',group,c.id);
+    if (fault==='missing') store.remove('segments',rows[0].id);
+    else store.put('segments',{...store.get('segments',rows[0].id),text:'',excluded:true},c.id);
+    const beforeChapter=store.get('chapters',c.id),beforeGroup=store.get('units',group.id);
+    const state=d.snapshot().chapters.find(row=>row.id===c.id),chapter=d.chapter(c.id);
+    assert.equal(state.productionStatus,'编排需修复');assert.ok(state.arrangementIssues.length);assert.ok(chapter.arrangementIssues.length);
+    const shown=chapter.units.find(u=>u.id===group.id);assert.ok(shown.diagnostics.length);assert.deepEqual(shown.variants.dry.history.map(a=>a.id),history.map(a=>a.id));assert.equal(shown.variants.dry.status.review,'pending');assert.deepEqual(chapter.playbackItems,[]);assert.deepEqual(chapter.reviewItems,[]);
+    assert.deepEqual(store.get('chapters',c.id),beforeChapter);assert.deepEqual(store.get('units',group.id),beforeGroup);
+    assert.throws(()=>d.enhancement.resolve(c.id));assert.throws(()=>d.enhancement.prepareRender({kind:'master'},beforeChapter));
+    const preview=d.enhancement.preview({kind:'dissolve',chapterId:c.id,revision:beforeChapter.revision,id:group.id,entityRevision:group.revision});
+    assert.deepEqual(preview.items.map(row=>row.id),group.members);assert.ok(preview.items.some(row=>row.diagnostics.length));
+    update('unit.dissolve',{id:group.id,entityRevision:group.revision});
+    assert.equal(store.get('units',group.id).state,'dissolved');assert.deepEqual(d.chapter(c.id).arrangementIssues,[]);
+    assert.deepEqual(d.enhancement.resolve(c.id).flatMap(row=>row.s.members),d.list(c.id).filter(s=>!s.excluded).map(s=>s.id));
+    assert.throws(()=>d.enhancement.prepareRender({kind:'export',format:'wav',confirm:true},store.get('chapters',c.id)),/缺少匹配音频/);
+    assert.deepEqual(store.all('audios',c.id),history);
+  });
+});
 test("章节重排更新交换双方修订，拒绝旧页面重复移动且保留已有音频", t => {
   const {store,d,p,c,v} = setup(t);
   const middle = d.mutate("chapter.create", {projectId:p.id,title:"第二章",source:"中间章。",segment:true});

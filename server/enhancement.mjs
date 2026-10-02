@@ -41,8 +41,10 @@ export function createEnhancement(store, d) {
   });
   function getUnit(id) { return store.get('units', id); }
   function members(u) {
+    if (!u.members.length) fail('生成单元没有成员，请先解除组并核对', 409);
     const rows = u.members.map(id => store.get('segments', id));
     if (rows.some(s => s.retired || s.excluded || s.chapterId !== u.chapterId)) fail('生成单元成员已变化，请先解除组并核对', 409);
+    if (rows.some(s => typeof s.text !== 'string' || !s.text.trim())) fail('生成单元成员正文为空，请先解除组并核对', 409);
     const all = d.list(u.chapterId), start = all.findIndex(s => s.id === u.members[0]);
     if (!same(all.slice(start, start + rows.length).map(s => s.id), u.members)) fail('组成员顺序或连续范围已变化', 409);
     return rows;
@@ -57,9 +59,9 @@ export function createEnhancement(store, d) {
     }) };
   }
   function eventView(e, u = getUnit(e.unitId)) {
-    let valid = false;
-    try { valid = u.state !== 'dissolved' && same(e.basis, eventBasis(u, e)); } catch { /* deleted anchors remain reviewable history */ }
-    return { ...e, validity: valid && !e.needsReview ? 'valid' : 'needsReview' };
+    let valid = false; const diagnostics = [];
+    try { assertEventRange(u, e); valid = u.state !== 'dissolved' && same(e.basis, eventBasis(u, e)); } catch (error) { diagnostics.push(error.message); }
+    return { ...e, diagnostics, validity: valid && !e.needsReview ? 'valid' : 'needsReview' };
   }
   function invalidateEvents(chapterId) {
     for (const u of store.all('units', chapterId)) for (const e of store.all('events', u.id)) {
@@ -131,7 +133,8 @@ export function createEnhancement(store, d) {
     }).map(a => { let matched = false; try { matched = !!identity && !storedAudioUnavailable(store,a) && same(identity,requestIdentity(a.input,a.prompt)); } catch {} return { ...a, matched, selected: u.variants[mode].current === a.id }; });
   }
   function view(u) {
-    return { ...u, guidance: u.variants[u.mode].guidance ?? (u.mode === 'dry' ? u.guidance || '' : ''), variants: Object.fromEntries(['dry', 'scene'].map(mode => [mode, { ...u.variants[mode], status: status(u, mode), history:history(u,mode) }])), status: status(u), events: events(u) };
+    const diagnostics = []; try { members(u); } catch (error) { diagnostics.push(error.message); }
+    return { ...u, diagnostics, guidance: u.variants[u.mode].guidance ?? (u.mode === 'dry' ? u.guidance || '' : ''), variants: Object.fromEntries(['dry', 'scene'].map(mode => [mode, { ...u.variants[mode], status: status(u, mode), history:history(u,mode) }])), status: status(u), events: events(u) };
   }
   function resolve(chapterId) {
     const all = d.list(chapterId);
@@ -150,6 +153,10 @@ export function createEnhancement(store, d) {
     }
     if (!same(result.flatMap(r => r.s.members), included.map(s => s.id))) fail('当前编排必须按章顺序覆盖每条有效台词一次', 409);
     return result;
+  }
+  function inspectArrangement(chapterId) {
+    try { return { rows: resolve(chapterId), issues: [] }; }
+    catch (error) { return { rows: [], issues: [error.message] }; }
   }
   function setReview(u, mode, state, currentBasis) {
     const v = u.variants[mode];
@@ -199,17 +206,24 @@ export function createEnhancement(store, d) {
     if (structural && store.all('units', p.chapterId).some(u => u.kind === 'group' && ['active', 'pending'].includes(u.state) && (!ids.length || u.members.some(id => ids.includes(id))))) fail('结构修改前请先解除相关活动或待生成组', 409);
     if (['segment.review','segment.restore'].includes(action) && store.all('units', p.chapterId).some(u => u.kind === 'group' && u.state === 'active' && u.members.includes(p.id))) fail('当前按整组检查或恢复，请使用组版本操作', 409);
   }
+  function assertEventRange(u, e) {
+    const positions = ['before','during','after'];
+    if (e.startMemberId || e.endMemberId) {
+      const start = u.members.indexOf(e.startMemberId), end = u.members.indexOf(e.endMemberId);
+      if (start < 0 || end < start) fail('持续声音事件边界不属于本单元或顺序错误');
+      const startPosition = e.startPosition || 'before', endPosition = e.endPosition || 'after';
+      if (![startPosition, endPosition].every(v => positions.includes(v))) fail('声音事件位置无效');
+      if (start === end && positions.indexOf(startPosition) > positions.indexOf(endPosition)) fail('持续声音事件的结束位置早于开始位置，语义范围顺序错误');
+    } else {
+      if (!u.members.includes(e.memberId) || !positions.includes(e.position)) fail('事件锚点必须是本单元的明确成员ID及位置');
+    }
+  }
   function validateEvent(u, item) {
     if (!['environment', 'effect', 'music'].includes(item.kind)) fail('声音事件类型无效');
     const e = { ...item, id: item.id || uid(), unitId: u.id, description: text(item.description, '声音事件描述', 1500), state: item.state || 'draft' };
     if (!['draft', 'adopted', 'removed'].includes(e.state)) fail('声音事件采用状态无效');
-    if (e.startMemberId || e.endMemberId) {
-      if (!u.members.includes(e.startMemberId) || !u.members.includes(e.endMemberId) || u.members.indexOf(e.startMemberId) > u.members.indexOf(e.endMemberId)) fail('持续声音事件边界不属于本单元或顺序错误');
-      e.startPosition = e.startPosition || 'before'; e.endPosition = e.endPosition || 'after';
-      if (![e.startPosition, e.endPosition].every(v => ['before','during','after'].includes(v))) fail('声音事件位置无效');
-    } else {
-      if (!u.members.includes(e.memberId) || !['before','during','after'].includes(e.position)) fail('事件锚点必须是本单元的明确成员ID及位置');
-    }
+    assertEventRange(u, e);
+    if (e.startMemberId || e.endMemberId) { e.startPosition ||= 'before'; e.endPosition ||= 'after'; }
     const evidence = e.evidence || { kind: '用户创作选择', quote: '', reason: '' };
     if (!['原文明示','上下文推断','创作建议','用户创作选择'].includes(evidence.kind)) fail('声音事件依据分类无效');
     if (typeof (evidence.quote || '') !== 'string' || typeof (evidence.reason || '') !== 'string' || (evidence.quote || '').length > 3000 || (evidence.reason || '').length > 3000) fail('声音事件依据格式无效');
@@ -310,11 +324,23 @@ export function createEnhancement(store, d) {
     if (p.kind === 'group') return groupPlan(p);
     const c = d.editable(p.chapterId, p.revision), u = getUnit(p.id);
     if (u.chapterId !== c.id) fail('单元不属于当前章'); revision(u, p.entityRevision);
-    if (p.kind === 'dissolve') return { unit: view(u), items: u.members.map(id => { const single = getUnit(id), st = status(single, 'dry'); return { id, audioId: single.variants.dry.current, validity: st.validity, review: st.review }; }), events: events(u).filter(e => e.state === 'adopted') };
+    if (p.kind === 'dissolve') return { unit: view(u), items: dissolvePlan(u), arrangement: c.arrangement, events: events(u).filter(e => e.state === 'adopted') };
     const mode = p.mode || u.mode, input = buildInput(u, mode);
     if (p.kind === 'template') return { before: compile(input), after: compile({ ...input, template: p.template }), from: input.template, to: p.template };
     if (p.kind === 'restore') { const a = store.get('audios', p.audioId); const differences = []; if (!same(input.members, a.input.members)) differences.push('成员正文、角色或表演设置不同'); if (!same(input.referenceVoiceIds, a.input.referenceVoiceIds)) differences.push('实际参考声音不同'); if (!same(input.config, a.input.config)) differences.push('有效数值配置不同'); if (input.template !== a.input.template) differences.push('提示模板不同'); if (input.guidance !== a.input.guidance) differences.push('单元指导不同'); if (!same(input.events, a.input.events)) differences.push('已采用声音事件不同'); return { input:a.input,basis:a.basis,currentInput:input,differences,identityChanged:!same(a.basis,basis(u,mode)) }; }
     fail('预览类型无效');
+  }
+  function dissolvePlan(u) {
+    if (u.kind !== 'group' || !['active','pending'].includes(u.state)) fail('只能解除活动或待生成组');
+    return u.members.map(id => {
+      const s = store.maybe('segments', id), single = store.maybe('units', id), diagnostics = [];
+      if (!s) diagnostics.push(`成员缺失（${id}）`);
+      else if (s.chapterId !== u.chapterId || s.retired || s.excluded) diagnostics.push('成员已改变、停用或排除，请核对');
+      else { try { d.validate(s, store.get('chapters',u.chapterId)); } catch (error) { diagnostics.push(error.message); } }
+      const st = single?.kind === 'single' && single.chapterId === u.chapterId ? status(single,'dry') : null;
+      if (!st) diagnostics.push('原单条生成单元缺失或已改变');
+      return { id, mode: 'dry', audioId: st?.audio?.id || null, validity: st?.validity || 'missing', review: st?.review || 'pending', diagnostics: [...new Set([...diagnostics, ...(st?.promptIssues || [])])] };
+    });
   }
   function mutate(action, p) {
     if (action === 'voice-candidate.discard') {
@@ -352,7 +378,11 @@ export function createEnhancement(store, d) {
       if (p.guidance !== undefined) { if (u.kind === 'single' && (p.mode || u.mode) === 'dry') fail('单条干声表演请使用片段编辑，不能保存未生效的组指导'); if (typeof p.guidance !== 'string' || p.guidance.length > 2000) fail('组指导最多 2000 字'); const mode = p.mode || u.mode; if (!['dry','scene'].includes(mode)) fail('目标类型无效'); u.variants[mode].guidance = p.guidance; u.variants[mode].revision++; if (mode === 'dry') u.guidance = p.guidance; }
       if (p.template !== undefined) fail('请使用明确的模板切换操作');
     } else if (action === 'unit.dissolve') {
-      if (u.kind !== 'group') fail('只能解除分组');
+      if (p.arrangement !== undefined && p.arrangement !== c.arrangement) fail('拆组预览后的编排已变化，请重新预览',409);
+      for (const item of dissolvePlan(u)) {
+        const single = store.maybe('units',item.id);
+        if (single?.kind === 'single' && single.chapterId === c.id && single.mode !== 'dry') { single.mode = 'dry'; single.revision++; store.put('units',single,c.id); }
+      }
       u.state = 'dissolved'; u.membershipRevision++;
       for (const j of store.all('jobs', c.id).filter(active)) if (store.all('attempts', j.id).some(a => a.unitId === u.id)) { j.stop = true; store.put('jobs', j, c.id); }
       d.touch(c, false, true);
@@ -409,5 +439,5 @@ export function createEnhancement(store, d) {
     const blocked = store.all('units', c.id).filter(u => u.kind === 'group' && u.state === 'active' || u.kind === 'single' && u.mode === 'scene');
     if (selected.some(s => blocked.some(u => u.members.includes(s.id)))) fail('当前片段属于活动组或场景单元，请按单元生成或明确切回干声', 409);
   }
-  return { invalidateEvents, history, assertLegacyGeneration, syncLegacy, syncLegacySegment, features, getUnit, members, input: buildInput, basis, status, view, resolve, events, eventBasis, addEvents, snapshot, prepare, prepareRender, validateDispatch, register, setAttemptStatus, preview, mutate, assertStructural };
+  return { invalidateEvents, history, assertLegacyGeneration, syncLegacy, syncLegacySegment, features, getUnit, members, input: buildInput, basis, status, view, resolve, inspectArrangement, events, eventBasis, assertEventRange, addEvents, snapshot, prepare, prepareRender, validateDispatch, register, setAttemptStatus, preview, dissolvePlan, mutate, assertStructural };
 }
