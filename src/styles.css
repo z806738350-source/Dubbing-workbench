@@ -2096,3 +2096,46 @@ input[type="range"]::-moz-range-thumb {
 .issue-judgment .spoken-text { font-size:17px; margin-bottom:10px; }
 
 .save-conflict button,.draft-notice button { min-height:40px; }
+
+/* Hallmark · visual review fixes · retain the existing palette and 17px reading size */
+.tabs button[aria-pressed="true"] { color: var(--color-ink); background: var(--color-paper); font-weight: 600; }
+.voice-scope .tabs { padding: 4px; border: 1px solid var(--color-rule); border-radius: var(--radius-md); background: var(--color-canvas); gap: 4px; }
+.voice-scope .tabs button { flex: 1; min-height: 38px; border: 1px solid transparent; }
+.voice-scope .tabs button[aria-pressed="true"] { color: var(--color-accent); background: var(--color-selected); border-color: var(--color-accent); }
+.chapter-heading { min-height: 0; flex-wrap: wrap; gap: 8px 16px; padding: 12px 20px 8px; }
+.chapter-heading > div:first-child { flex: 1; min-width: 0; }
+.chapter-heading .production-steps { flex: 0 0 auto; order: 1; border: 0; padding: 0; background: transparent; gap: 12px; }
+.chapter-actions { order: 2; }
+.chapter-heading .production-steps button { min-height: 26px; font-size: 13px; }
+.chapter-heading p progress { margin-left: 10px; width: 72px; height: 4px; vertical-align: middle; accent-color: var(--color-accent); }
+.script-tools { padding-block: 8px; }
+.creation-tools { padding-block: 6px; }
+.column-head { padding-block: 5px; }
+.group-strip { align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 9px 12px; }
+.group-strip > div:first-child { display: grid; gap: 2px; }
+.group-strip strong { font-size: 14px; color: var(--color-ink); }
+.group-strip span { font-size: 12px; color: var(--color-muted); }
+.group-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.group-actions .text-button { min-height: 32px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.inspector-head { gap: 8px; }
+.inspector-head strong { flex: 1; min-width: 0; }
+.inspector-unit { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding: 0 20px 10px; font-size: 12px; color: var(--color-muted); }
+.inspector-unit button { display: inline-flex; align-items: center; gap: 4px; }
+.unit-safe-result { padding: 16px; background: var(--color-selected); border: 1px solid var(--color-rule); border-radius: var(--radius-md); margin-bottom: 18px; }
+.unit-safe-result h3 { margin: 0 0 8px; }
+.unit-safe-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.unit-member-range { margin-block: 12px; color: var(--color-ink); }
+.unit-edit-settings > summary { min-height: 40px; display: flex; align-items: center; font-weight: 600; cursor: pointer; }
+.dialog-footer:has(.unit-submit-scope) { display: block; }
+.unit-submit { display: grid; gap: 12px; width: 100%; }
+.unit-submit-scope { margin: 0; font-size: 13px; line-height: 1.6; color: var(--color-muted); }
+.unit-submit-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.selected-task { background: var(--color-selected); border-radius: var(--radius-md); }
+@media (max-width: 1100px) { .chapter-heading .production-steps { flex-basis: 100%; order: 3; } }
+@media (max-width: 760px) { .chapter-heading { padding-inline: 16px; } .chapter-heading .production-steps { gap: 4px 10px; } .chapter-heading p progress { display: none; } .group-strip { padding: 8px; } .group-actions { gap: 4px 12px; } }
+
+.inspector-identity { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.inspector-identity .field { min-width: 0; margin-bottom: 8px; }
+.inspector-identity .select-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.inspector-identity-options > summary { min-height: 32px; padding-block: 6px; cursor: pointer; color: var(--color-secondary); font-size: 13px; }

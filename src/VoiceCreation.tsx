@@ -61,8 +61,8 @@ function SessionEditor({ session, draftId, enabled, configured, audioTools, rout
       created(savedSession.current, draft.error || undefined, resume); void refresh().catch(() => {});
     }
   }, [draft.targetId]);
-  const currentJob = jobs.find(job => job.sessionId === session?.id && ["queued", "running"].includes(job.status));
-  const latestJob = jobs.filter(job => job.sessionId === session?.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const currentJob = session?.id ? jobs.find(job => job.sessionId === session.id && ["queued", "running"].includes(job.status)) : undefined;
+  const latestJob = session?.id ? jobs.filter(job => job.sessionId === session.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] : undefined;
   const unknown = latestJob?.status === "unknown";
   const actualProject = target?.projectId || projectId, actualChapter = target?.chapterId || chapterId;
   const generate = async () => {

@@ -111,3 +111,20 @@ test('partial text analysis with one unknown batch cannot be renewed by ordinary
   await assert.rejects(submitOperation('text', payload), /结果不明/);
   await assert.rejects(submitOperation('text', { ...payload, grantId: 'new' }), /结果不明/); assert.equal(sent, 1);
 });
+
+test('rechecked generation keeps the same key, confirms its failed 409 receipt, then uses a new operation ID only on explicit start', async () => {
+  const calls=[];let saved;
+  const {submitOperation}=await setup(async(path,body)=>{
+    calls.push({path,body});
+    if(path==='/operations/plan')return {chapterId:'chapter',revision:1,arrangement:2,audioRequests:1};
+    if(!body)return saved;
+    saved=receipt(body,calls.filter(call=>call.path==='/operations'&&call.body).length===1?{outcome:'needsInput',jobIds:[],error:'编排已变化',errorStatus:409}:{});return saved;
+  });
+  const payload={kind:'generateSelection',chapterId:'chapter',revision:1,arrangement:1,ids:['one'],grantId:'grant'};
+  const failed=await submitOperation('generate:chapter',payload);assert.equal(failed.errorStatus,409);assert.equal(failed.jobIds.length,0);
+  const plan=await globalThis.taskOperationApi('/operations/plan',{kind:'generateSelection',chapterId:'chapter',revision:1,ids:['one']});
+  assert.equal(calls.filter(call=>call.path==='/operations').length,1);
+  const renewed=await submitOperation('generate:chapter',{...payload,arrangement:plan.arrangement});
+  assert.notEqual(renewed.operationId,failed.operationId);assert.deepEqual(calls.map(call=>call.path),['/operations','/operations/plan','/operations/'+failed.operationId,'/operations']);
+  assert.equal(calls[2].body,undefined);assert.equal(calls[3].body.arrangement,2);
+});

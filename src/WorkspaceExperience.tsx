@@ -7,8 +7,9 @@ import type { DraftRecord } from './drafts';
 import { withSavedDrafts, draftScopeRevision, hasLiveDraft } from './autosave';
 import { submitOperation } from './taskOperations';
 import VoiceCreation from './VoiceCreation';
+import TaskAuthorization from './TaskAuthorization';
 import type { VoiceTarget } from './VoiceCreation';
-import type { ChapterDetail, Role, State, Voice } from './types';
+import type { ChapterDetail, GenerationPlan, Role, State, Voice } from './types';
 
 export type WorkspaceIssue = { key:string; title:string; detail:string; kind:'structure'|'identity'|'voice'|'request'|'audio'|'advice'; ids:string[]; roleId?:string; unitId?:string; mode?:'dry'|'scene' };
 export function chapterIssues(chapter:ChapterDetail, roles:Role[], voices:Voice[]):WorkspaceIssue[] {
@@ -168,6 +169,32 @@ export function RecoveryCenter({chapter,state,onClose,onRecovered}:{chapter:Chap
     {records.map(({id,entry})=>{const target=targetFor(id,entry);return <article className="issue-card" key={entry.key}><h3>{target.label}</h3><Status kind={entry.status==='active'?'warning':'neutral'}>{entry.status==='active'?'其他页面正在编辑':entry.status==='orphan'?'关闭页面遗留':'本页暂存'}</Status><details><summary>查看暂存内容</summary><pre className="draft-preview">{JSON.stringify(entry.data?.draft,null,2)}</pre></details>{entry.error&&<p className="error-inline">{entry.error}</p>}{!loading&&target.kind==='unknown'&&<p className="hint">对应对象已不在当前资料中，或暂存格式尚不支持定位。原内容仍保留，可查看并复制。</p>}<div className="button-row">
       {!entry.error&&<button className="button" disabled={pending||loading||entry.status==='active'||target.kind==='unknown'} onClick={()=>void(async()=>{setPending(true);setError('');try{if(entry.status==='orphan'){if(hasLiveDraft(id))throw new Error('本页还有未完成编辑或待确认保存，请先处理，不能覆盖。');await recoverDraft(id,entry);}await onRecovered(id,target);}catch(e){setError((e as Error).message);await reload();}finally{setPending(false);}})()}>{entry.status==='current'?'返回编辑':'恢复并返回编辑'}</button>}
       <button className="text-button" disabled={pending||entry.status==='active'} onClick={()=>void(async()=>{setPending(true);setError('');try{if(entry.status==='current'){if(!clearDraft(id,entry.raw,true))throw new Error('暂存已变化，请重新查看');}else await discardDraft(id,entry);await reload();}catch(e){setError((e as Error).message);}finally{setPending(false);}})()}>放弃这份暂存</button></div></article>;})}
+    {error&&<p className="error-inline" role="alert">{error}</p>}
+  </Dialog>;
+}
+export function GeneratePlan({plan,chapter,model,grantId,unknown,routeBlocked,retryUnknown,resumeRoute,busy,onGrant,onRetryUnknown,onResumeRoute,onGenerate,onRecheck,onClose}:{plan:GenerationPlan;chapter:ChapterDetail;model?:string;grantId:string|null;unknown:boolean;routeBlocked:boolean;retryUnknown:boolean;resumeRoute:boolean;busy:boolean;onGrant:(id:string|null)=>void;onRetryUnknown:(value:boolean)=>void;onResumeRoute:(value:boolean)=>void;onGenerate:()=>Promise<void>;onRecheck:()=>Promise<void>;onClose:()=>void}){
+  const [invalid,setInvalid]=useState(false),[pending,setPending]=useState(false),[error,setError]=useState(''),[updated,setUpdated]=useState(false);
+  const execute=async(recheck:boolean)=>{
+    if(pending||busy||!recheck&&invalid)return;
+    setPending(true);setError('');
+    try{if(recheck){await onRecheck();setInvalid(false);setUpdated(true);}else await onGenerate();}
+    catch(e){if((e as {status?:number}).status===409)setInvalid(true);else setError((e as Error).message);}
+    finally{setPending(false);}
+  };
+  return <Dialog title="生成这次待办" presentation="sidepanel" onClose={onClose} footer={invalid
+    ? <button className="button primary" disabled={busy||pending} onClick={()=>void execute(true)}>{pending?'正在重新核对…':'重新核对生成范围'}</button>
+    : plan.audioRequests===0 ? <button className="button primary" disabled={busy||pending} onClick={onClose}>完成核对</button>
+    : <button className="button primary" disabled={busy||pending||!grantId||(routeBlocked&&!resumeRoute)||(unknown&&!retryUnknown)} onClick={()=>void execute(false)}>{pending?'正在提交…':`开始生成 ${plan.audioRequests} 个声音`}</button>}>
+    {invalid&&<div className="task-outcome" role="alert"><h3>内容已变化，本次未发送</h3><p>先免费重新核对生成范围。更新后的范围会在这里展示，再由你决定开始生成。</p></div>}
+    {!invalid&&updated&&<p className="hint" role="status">已按当前内容重新核对，请查看下面的范围后再开始生成。</p>}
+    <p className="task-panel-summary">{invalid?'之前核对的范围：':'本次覆盖 '}{plan.memberIds.length} 条台词，其中 {plan.units.filter(u=>u.reuse).length} 个已有声音直接复用；实际发送 {plan.audioRequests} 次音频请求。</p>
+    <div className="task-member-list">{plan.units.map(unit=><p key={unit.unitId}>{unit.members.length>1?'一起演绎':'单句'} · 第 {unit.members.map(id=>{const segment=chapter.segments.find(s=>s.id===id);return segment?segment.order+1:'已移除';}).join('、')} 条 · {unit.mode==='scene'?'声音背景':'纯人声'} · {unit.reuse?'复用已有声音':'生成新声音'}</p>)}</div>
+    {!invalid&&plan.audioRequests>0&&<>
+      <TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="生成所列台词" steps={["unit-generate"]} model={model} requests={plan.audioRequests} voiceIds={[...new Set(chapter.segments.filter(s=>plan.memberIds.includes(s.id)).flatMap(s=>s.voiceId?[s.voiceId]:[]))]} onReady={onGrant} disabled={busy||pending}/>
+      {unknown&&<label className="check-label warning"><input type="checkbox" checked={retryUnknown} disabled={busy||pending} onChange={e=>onRetryUnknown(e.target.checked)}/>上次结果不明，可能已计费；明确再发送上述请求。</label>}
+      {routeBlocked&&<label className="check-label warning"><input type="checkbox" checked={resumeRoute} disabled={busy||pending} onChange={e=>onResumeRoute(e.target.checked)}/>已核对接口权限与额度，恢复本次声音请求。</label>}
+    </>}
+    {!invalid&&plan.audioRequests===0&&<p className="hint">当前范围已有匹配声音，可以直接复用，无需发送新的配音请求。</p>}
     {error&&<p className="error-inline" role="alert">{error}</p>}
   </Dialog>;
 }

@@ -43,7 +43,7 @@ import AnalysisDialog from "./AnalysisDialog";
 import { ObjectDraftTools, useObjectDraft } from "./ObjectDraft";
 import { saveAction, speechDraftProblem, withSavedDrafts, draftScopeRevision } from "./autosave";
 import { useDraftSaveStatus } from "./ObjectDraft";
-import { chapterIssues, IssueCenter, ProjectOverview, VoicePicker, RecoveryCenter, QuickHelp, type RecoveryTarget } from "./WorkspaceExperience";
+import { chapterIssues, IssueCenter, ProjectOverview, VoicePicker, RecoveryCenter, QuickHelp, GeneratePlan, type RecoveryTarget } from "./WorkspaceExperience";
 import TaskAuthorization from "./TaskAuthorization";
 import { submitOperation } from "./taskOperations";
 import VoiceCreation from "./VoiceCreation";
@@ -137,6 +137,9 @@ export default function App() {
   const [readingSize,setReadingSize] = useState(Number(localStorage.getItem("reading-size"))||17);
   const [grantId,setGrantId] = useState<string|null>(null);
   const [generationPlan,setGenerationPlan] = useState<{plan:GenerationPlan;ids:string[];regenerate:boolean;retryUnknown:boolean;resumeRoute:boolean}|null>(null);
+  const [taskRecord,setTaskRecord] = useState<{jobId:string;attempt:{id:string;status:string;mode?:string;error?:string}}|null>(null);
+  const taskRecordRef=useRef<HTMLElement>(null),unitPanelRef=useRef(unitPanelId);
+  unitPanelRef.current=unitPanelId;
   const onDraftChange = useCallback((id:string,dirty:boolean)=>setDraftIds(prev=>dirty ? (prev.includes(id) ? prev : [...prev,id]) : prev.filter(x=>x!==id)),[]);
 
   const bookmarks = useRef<Record<string, string>>({});
@@ -194,6 +197,7 @@ export default function App() {
   chapterRef.current = chapterId;
   stateRef.current = state;
   playerRef.current = player;
+  useEffect(()=>{if(modal==="tasks"&&taskRecord)taskRecordRef.current?.focus();},[modal,taskRecord?.attempt.id]);
   const refreshPending = useRef<Promise<void>|null>(null);
   const refresh = useCallback(() => {
     if(refreshPending.current)return refreshPending.current;
@@ -392,8 +396,7 @@ export default function App() {
     if(target.kind==='voice-session'){setVoiceLibrarySession(target.voiceSessionId);setVoiceLibraryCreate(true);setModal('voices');return;}
     setVoiceLibrarySession(undefined);setVoiceLibraryCreate(true);setModal('voices');
   },[chapter?.id,draftSignal]);
-  const generate = async (ids:string[], _whole=false, options:Record<string,unknown>={}) => {
-    const context=chapter;
+  const generate = async (ids:string[], _whole=false, options:Record<string,unknown>={}, context=chapter) => {
     if(!context||!ids.length)throw new Error("没有需要生成的台词。可以先试听现有声音。");
     const units=(context.units||[]).filter(u=>u.state==='active'&&u.members.some(id=>ids.includes(id)));
     const members=[...new Set([...ids,...units.flatMap(u=>u.members)])];
@@ -404,7 +407,7 @@ export default function App() {
       const revision=draftScopeRevision("chapter:"+context.id,context.revision);
       const plan=await api<GenerationPlan>("/operations/plan",{kind:"generateSelection",chapterId:context.id,revision,ids,regenerate:options.regenerate===true});
       if(chapterRef.current!==context.id)return;
-      if(!plan.audioRequests){setNotice("所选范围已有匹配声音，已复用；无需发送新的配音请求。");return;}
+      if(!plan.audioRequests){setGenerationPlan(null);setNotice("所选范围已有匹配声音，已复用；无需发送新的配音请求。");return;}
       setGrantId(null);
       setGenerationPlan({plan,ids,regenerate:options.regenerate===true,retryUnknown:false,resumeRoute:false});
       setInspectorOpen(false);
@@ -418,10 +421,10 @@ export default function App() {
     await withSavedDrafts("chapter:"+chapter.id,dependencies,async()=>{
       if(chapterRef.current!==request.plan.chapterId)throw new Error("章节已切换，本次未发送。");
       if(request.plan.memberIds.some(id=>hasDraft(id))||request.plan.units.some(p=>{const u=chapter.units?.find(u=>u.id===p.unitId);return u&&unitHasDraft(u,chapter.events||[],p.mode);}))throw new Error("相关其他页面的草稿仍需处理，本次未发送。");
-      if(draftScopeRevision("chapter:"+chapter.id,request.plan.revision)!==request.plan.revision)throw new Error("生成范围在核对后已变化，请重新打开生成待办。");
+      if(draftScopeRevision("chapter:"+chapter.id,request.plan.revision)!==request.plan.revision)throw Object.assign(new Error("生成范围在核对后已变化，请重新核对生成范围。"),{status:409});
       audio.current?.pause();setPlayer(null);
       const receipt=await submitOperation("generate:"+chapter.id,{kind:"generateSelection",chapterId:chapter.id,revision:request.plan.revision,arrangement:request.plan.arrangement,ids:request.ids,regenerate:request.regenerate,grantId,...(request.retryUnknown?{retryUnknown:true}:{}),...(request.resumeRoute?{resumeRoute:true}:{})},state?.jobs||[]);
-      if(receipt.error)throw new Error(receipt.error);
+      if(receipt.error)throw Object.assign(new Error(receipt.error),{status:receipt.errorStatus});
       if(chapterRef.current!==request.plan.chapterId)return;
       setGenerationPlan(null);setNotice("已开始制作，成功结果和历史都会保留。");await refresh();
     });
@@ -643,7 +646,7 @@ export default function App() {
   );
   const inspector = chapter && <>
     <div className="tabs panel-tabs" aria-label="工作面板">
-      <button aria-pressed={panelMode === "settings"} className={panelMode === "settings" ? "active" : ""} onClick={()=>setPanelMode("settings")}>片段设置</button>
+      <button aria-pressed={panelMode === "settings"} className={panelMode === "settings" ? "active" : ""} onClick={()=>setPanelMode("settings")}>台词编辑</button>
       <button aria-pressed={panelMode === "analysis"} className={panelMode === "analysis" ? "active" : ""} onClick={()=>setPanelMode("analysis")}>AI 整理</button>
     </div>
     <div className="panel-content" hidden={panelMode !== "settings"}>
@@ -673,7 +676,7 @@ export default function App() {
           <p className="hint">{chapter.source.length} 字原文 · {segments.length} 条片段</p>
         </div>
         <div className="inspector-section">
-          <h3>制作方式</h3><p>逐条干声</p>
+          <h3>制作方式</h3><p>逐句纯人声</p>
           <p className="hint">选择片段后，在这里调整角色、声音与表演。</p>
         </div>
       </div>}
@@ -761,25 +764,24 @@ export default function App() {
           ) : (
             <>
               <section className="chapter-heading">
-                <div><button className="title-button" onClick={()=>setModal("rename")} disabled={locked}><h1>{chapter.title}</h1><MoreHorizontal size={18}/></button><p>{total} 条台词 · {ready} 条声音就绪 · {passed} 条听评通过</p></div>
+                <div><button className="title-button" onClick={()=>setModal("rename")} disabled={locked}><h1>{chapter.title}</h1><MoreHorizontal size={18}/></button><p>{total} 条台词 · {ready} 条声音就绪 · {passed} 条听评通过 <progress max={total||1} value={ready} aria-label="声音准备进度"/></p></div>
                 <div className="chapter-actions">
-                  <button className="button" onClick={()=>setModal("issues")}>需要你处理{issues.length?` · ${issues.length}`:""}</button>
+                  {!criticalIssues.length&&<button className="button" onClick={()=>setModal("issues")}>{issues.length?`需要你处理 · ${issues.length}`:"查看问题"}</button>}
                   <button className="button primary" disabled={busy||locked||!connectionReady} onClick={()=>{
                     if(saveStatus==='conflict'||saveStatus==='unreliable'){setModal('recovery');return;}
                     if(!segments.length||criticalIssues.length){if(!segments.length){setPanelMode('analysis');if(window.innerWidth<1216)setInspectorOpen(true);}else setModal('issues');return;}
                     if(ready<total){void run(()=>generate(segments.filter(s=>!s.excluded&&effectiveStatus(s).validity!=='matched').map(s=>s.id),true));return;}
                     if(passed<total){void playChapter();return;}
                     setModal('export');
-                  }}>{locked?'正在制作…':saveStatus==='conflict'?'处理保存冲突':!segments.length?'AI准备剧本':criticalIssues.length?'处理制作条件':ready<total?'生成待办':passed<total?'整章试听':'导出成品'}</button>
+                  }}>{locked?'正在制作…':saveStatus==='conflict'?'处理保存冲突':!segments.length?'AI准备剧本':criticalIssues.length?`需要你处理 · ${issues.length}`:ready<total?'生成待办':passed<total?'整章试听':'导出成品'}</button>
                 </div>
-              </section>
               <nav className="production-steps" aria-label="章节制作步骤">
                 <button onClick={()=>setModal('chapter')}><span>1</span>导入文字</button>
                 <button className={panelMode==='analysis'?'active':''} onClick={()=>{setPanelMode('analysis');if(window.innerWidth<1216)setInspectorOpen(true);}}><span>2</span>AI准备</button>
                 <button className={panelMode==='settings'?'active':''} onClick={()=>{setPanelMode('settings');setInspectorOpen(false);}}><span>3</span>试听与修改</button>
                 <button onClick={()=>setModal('export')}><span>4</span>导出成品</button>
-                <div className="step-progress"><span>{ready}/{total} 声音就绪</span><progress max={total||1} value={ready} aria-label="声音准备进度"/></div>
               </nav>
+              </section>
               {locked && (
                 <div className="task-banner" role="status">
                   <AudioLines size={17} />
@@ -922,6 +924,8 @@ export default function App() {
                       const rowUnit = grouped || chapter.units?.find(u=>u.kind === "single" && u.state === "active" && u.id === s.id);
                       const rowAudio = rowUnit?.variants[rowUnit.mode].current || s.current;
                       const rowStatus = effectiveStatus(s);
+                      const groupOrders = grouped?.members.map(id=>(segments.find(item=>item.id===id)?.order??0)+1)||[];
+                      const groupRange = groupOrders.length>1?`${groupOrders[0]}—${groupOrders.at(-1)}`:String(groupOrders[0]||"");
                       return (
                         <article
                           id={"segment-" + s.id}
@@ -930,7 +934,14 @@ export default function App() {
                           data-group-id={grouped?.id || ""}
                           className={`script-row ${selected === s.id ? "selected" : ""} ${currentSegment === s.id ? "playing" : ""} ${s.excluded ? "excluded" : ""}`}
                         >
-                          {grouped && grouped.members[0] === s.id && <button className="group-strip" onClick={()=>openUnit(grouped.id)}>一起演绎 · 第 {grouped.members.map(id=>(segments.find(s=>s.id===id)?.order??0)+1).join("、")} 条 · {grouped.mode === "scene"?"带声音背景":"对白干声"}<ChevronRight size={14}/></button>}
+                          {grouped && visible.find(item=>grouped.members.includes(item.id))?.id === s.id && <div className="group-strip">
+                            <div><strong>第 {groupRange} 句一起演绎</strong><span>{grouped.mode === "scene"?"有声音背景":"纯人声"} · 重做会影响这 {grouped.members.length} 句</span></div>
+                            <div className="group-actions">
+                              <button className="text-button" disabled={!connectionReady||!rowAudio||rowStatus.validity==="broken"||locked} onClick={()=>{setCurrentMembers(grouped.members);setCurrentSegment(grouped.members[0]);void startPlay("audios",rowAudio!,`第 ${groupRange} 句一起演绎`,undefined,false,{id:grouped.id,mode:grouped.mode,audioId:rowAudio!,basis:grouped.variants[grouped.mode].status.basis,state:grouped.state});}}><Play size={14}/>试听整段{rowStatus.validity==="stale"?"旧声音":""}</button>
+                              <button className="text-button" onClick={()=>openUnit(grouped.id)}>调整这段</button>
+                              <button className="text-button" disabled={locked||busy} onClick={()=>void run(()=>generate(grouped.members,false,{regenerate:true}))}>重做这 {grouped.members.length} 句</button>
+                            </div>
+                          </div>}
                           <div className="row-gutter">
                             <input
                               type="checkbox"
@@ -974,7 +985,6 @@ export default function App() {
                               )}
                             </span>
                             <span className="spoken-text">{s.text}</span>
-                            {grouped && <span className="performance">来自对戏组 · {grouped.members.length} 条共同生成 · {grouped.mode === "scene" ? "场景版本" : "干声版本"}</span>}
                             {s.performance && (
                               <span className="performance">
                                 <SlidersHorizontal size={12} />
@@ -1010,7 +1020,7 @@ export default function App() {
                                 ].includes(s.latest) ? names[s.latest] : ""}</span>
                                 <div className="row-actions">
                                   <button className="icon" aria-label={`为第 ${s.order+1} 条选声音`} onClick={()=>openVoice(s.roleId,s.id)}><Users size={15}/></button>
-                                  <button
+                                  {!grouped&&<><button
                                     className="icon"
                                     aria-label={`试听第 ${s.order + 1} 条${rowStatus.validity === "stale" ? "旧版" : ""}`}
                                     disabled={!connectionReady || !rowAudio || rowStatus.validity === "broken" || locked}
@@ -1054,7 +1064,7 @@ export default function App() {
                                     }
                                   >
                                     <Check size={16} />
-                                  </button>
+                                  </button></>}
                                 </div>
                               </>
                             )}
@@ -1115,7 +1125,7 @@ export default function App() {
                       ? `${chapter?.coverage.valid ? "与导出共用同一母版" : "当前剧本试听，内容尚未完整"}${transitioning ? " · 片段间过渡" : ""}`
                       : player.kind === "voices"
                         ? "参考声音"
-                        : "单条试听"
+                        : "声音试听"
                     : `${ready} / ${total} 条音频就绪`}
                 </span>
               </div>
@@ -1282,15 +1292,26 @@ export default function App() {
       </Dialog>}
       {unitPanelId && chapter && state && chapter.units?.find(u=>u.id === unitPanelId) && <UnitPanel key={unitPanelId} unit={chapter.units.find(u=>u.id === unitPanelId)!}
         initialMode={unitInitialMode} initialEventId={unitInitialEvent} chapter={chapter} roles={roles} state={state} locked={locked} connected={connectionReady} refresh={refresh} close={()=>setUnitPanelId(null)} open={openMember}
+        onTask={async(jobId,attemptId)=>{
+          const expectedChapter=chapter.id,expectedUnit=unitPanelId;
+          const attempts=await api<{id:string;status:string;mode?:string;error?:string}[]>("/attempts/"+jobId);
+          if(chapterRef.current!==expectedChapter||unitPanelRef.current!==expectedUnit)return;
+          const attempt=attempts.find(item=>item.id===attemptId);
+          if(!attempt)throw new Error("这次记录尚未找到，请刷新任务记录。");
+          await refresh();if(chapterRef.current!==expectedChapter||unitPanelRef.current!==expectedUnit)return;
+          setTaskRecord({jobId,attempt});setUnitPanelId(null);setModal("tasks");
+        }}
         play={(id,title,historical)=>{const unit=chapter.units!.find(u=>u.id === unitPanelId)!;const mode=unit.variants.scene.current === id ? "scene" : "dry";setCurrentMembers(unit.kind === "group" && !historical ? unit.members : []);
           void startPlay("audios",id,title,undefined,!!historical,historical ? undefined : {id:unit.id,mode,audioId:id,basis:unit.variants[mode].status.basis,state:unit.state});}}/>}
-      {generationPlan && chapter && <Dialog title="生成这次待办" presentation="sidepanel" onClose={()=>setGenerationPlan(null)} footer={<button className="button primary" disabled={busy||!grantId||(state?.settings.routeBlocked&&!generationPlan.resumeRoute)||(generationUnknown&&!generationPlan.retryUnknown)} onClick={()=>void run(submitGeneration)}>开始生成 {generationPlan.plan.audioRequests} 个声音</button>}>
-        <p className="task-panel-summary">本次覆盖 {generationPlan.plan.memberIds.length} 条台词，其中 {generationPlan.plan.units.filter(u=>u.reuse).length} 个已有声音直接复用；实际发送 {generationPlan.plan.audioRequests} 次音频请求。</p>
-        <div className="task-member-list">{generationPlan.plan.units.map(unit=><p key={unit.unitId}>{unit.members.length>1?'一起演绎':'单句'} · 第 {unit.members.map(id=>(segments.find(s=>s.id===id)?.order??0)+1).join('、')} 条 · {unit.mode==='scene'?'声音背景':'对白干声'} · {unit.reuse?'复用已有声音':'生成新声音'}</p>)}</div>
-        <TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="生成所列台词" steps={["unit-generate"]} model={state?.settings.model} requests={generationPlan.plan.audioRequests} voiceIds={[...new Set(segments.filter(s=>generationPlan.plan.memberIds.includes(s.id)).flatMap(s=>s.voiceId?[s.voiceId]:[]))]} onReady={setGrantId}/>
-        {generationUnknown&&<label className="check-label warning"><input type="checkbox" checked={generationPlan.retryUnknown} onChange={e=>setGenerationPlan({...generationPlan,retryUnknown:e.target.checked})}/>上次结果不明，可能已计费；明确再发送上述请求。</label>}
-        {state?.settings.routeBlocked&&<label className="check-label warning"><input type="checkbox" checked={generationPlan.resumeRoute} onChange={e=>setGenerationPlan({...generationPlan,resumeRoute:e.target.checked})}/>已核对接口权限与额度，恢复本次声音请求。</label>}
-      </Dialog>}
+      {generationPlan && chapter && <GeneratePlan plan={generationPlan.plan} chapter={chapter} model={state?.settings.model} grantId={grantId} unknown={generationUnknown} routeBlocked={!!state?.settings.routeBlocked} retryUnknown={generationPlan.retryUnknown} resumeRoute={generationPlan.resumeRoute} busy={busy}
+        onGrant={setGrantId} onRetryUnknown={value=>setGenerationPlan({...generationPlan,retryUnknown:value})} onResumeRoute={value=>setGenerationPlan({...generationPlan,resumeRoute:value})} onGenerate={submitGeneration} onClose={()=>setGenerationPlan(null)} onRecheck={async()=>{
+          const request=generationPlan;
+          const current=await api<ChapterDetail>("/chapters/"+request.plan.chapterId);
+          if(chapterRef.current!==current.id)throw new Error("章节已切换，请回到原章节核对。");
+          setChapter(current);await refresh();
+          await generate(request.ids,false,{regenerate:request.regenerate},current);
+          if(chapterRef.current!==current.id)throw Object.assign(new Error("章节已切换，请回到原章节核对。"),{status:409});
+        }}/>}
       {navOpen && (
         <Dialog title="项目与章节" onClose={() => setNavOpen(false)}>
           <div className="mobile-nav">{nav}</div>
@@ -1607,11 +1628,17 @@ export default function App() {
         </Dialog>
       )}
       {modal === "tasks" && state && (
-        <Dialog title="任务记录" onClose={() => setModal(null)} wide>
+        <Dialog title="任务记录" onClose={() => {setModal(null);setTaskRecord(null);}} wide>
+          {taskRecord&&<section className="task-outcome" tabIndex={-1} ref={taskRecordRef}>
+            <h3>这次{taskRecord.attempt.mode==="scene"?"声音背景":"纯人声"}生成记录</h3>
+            <p>结果：{names[taskRecord.attempt.status]||taskRecord.attempt.status}。{taskRecord.attempt.status==="unknown"?"可能已计费；查看记录和试听已有声音均不会重新发送。":"已有声音和历史保留。"}</p>
+            {taskRecord.attempt.error&&<p className="error-inline">{taskRecord.attempt.error}</p>}
+            <p className="hint">请求记录 {taskRecord.attempt.id}</p>
+          </section>}
           <div className="task-list">
             {state.jobs.length ? (
               state.jobs.map((j) => (
-                <div className="task-row" key={j.id}>
+                <div className={"task-row"+(taskRecord?.jobId===j.id?" selected-task":"")} key={j.id}>
                   <span className="task-icon">
                     <AudioLines size={19} />
                   </span>
@@ -1626,7 +1653,7 @@ export default function App() {
                             : j.kind === "voice-create"
                               ? "声音创建"
                               : j.kind === "unit-generate"
-                                ? j.mode === "scene" ? "场景版本生成" : "对戏干声生成"
+                                ? j.mode === "scene" ? "声音背景生成" : j.mode === "dry" ? "纯人声生成" : "声音生成（各段当前版本）"
                             : "导出成品"}{" "}
                       ·{" "}
                       {j.kind === "voice-create"
@@ -2503,16 +2530,15 @@ function Editor({
   return (
     <>
       <div className="inspector-head">
-        <strong>片段设置</strong>
-        <span>第 {s.order + 1} 条</span>
+        <strong>第 {s.order + 1} 句 · {roles.find(role=>role.id===draft.roleId)?.name||"未分配角色"}</strong>
         {onVoice && <button className="button small" disabled={locked || controller.frozen} onClick={()=>onVoice(draft.roleId,s.id)}>选声音</button>}
       </div>
-      {unit && <div className="inspector-section"><button className="text-button" onClick={onUnit}>打开{unit.kind === "group" ? "对戏组" : "单条"}干声 / 场景版本</button>{unit.kind === "group" && <p className="hint">本条属于活动对戏组，修改将影响整组。结构编辑或排除前先解除分组。</p>}</div>}
+      {unit && (unit.kind === "group" || unit.mode === "scene") && <div className="inspector-unit"><button className="text-button" onClick={onUnit}>{unit.kind === "group" ? `调整整段 ${unit.members.length} 句` : "调整声音背景"}<ChevronRight size={14}/></button>{unit.kind === "group" && <span>修改后会重做整段</span>}</div>}
       <div className="inspector-tabs tabs">
         {[
           ["settings", "声音与表演"],
           ["original", "原文"],
-          ["prompt", "提示词"],
+          ["prompt", "详细设置"],
         ].map(([id, name]) => (
           <button
             key={id}
@@ -2533,6 +2559,7 @@ function Editor({
                   角色资料
                 </button>
               </div>
+              <div className="inspector-identity">
               <Field label="朗读角色">
                 <Select
                   label="朗读角色"
@@ -2584,6 +2611,7 @@ function Editor({
                   }
                 />
               </Field>
+              </div>
               <div className="field-source">
                 <span>
                   {draft.voiceSource === "override"
@@ -2604,6 +2632,7 @@ function Editor({
                   </button>
                 )}
               </div>
+              <details className="inspector-identity-options" open={!draft.roleConfirmed||!draft.identityConfirmed}><summary>身份核对与内容类型</summary>
               <Field label="内容类型">
                 <Select
                   label="内容类型"
@@ -2631,6 +2660,7 @@ function Editor({
                 />
                 已核对角色和声音身份
               </label>
+              </details>
             </div>
             <div className="inspector-section">
               <h3>朗读正文</h3>
@@ -2672,7 +2702,7 @@ function Editor({
                   </button>
                 ))}
               </div>
-              <p className="hint">只描述怎么说，不改写台词。当前为干声模式，不加入音乐或环境音效。生成时会将正文、表演要求和参考录音发送至配音服务。
+              <p className="hint">只描述怎么说，不改写台词。当前制作纯人声，不加入音乐或环境音效。生成时会将正文、表演要求和参考录音发送至配音服务。
               {Array.from(draft.text).length > 350 && <span className="warning"> 本条较长，可能接近或超过单次时长，请按语义拆分。字数不是精确时长预测。</span>}
               {draft.voiceId && !voices.find(v => v.id === draft.voiceId)?.tested && <span className="hint"> 当前参考尚未验证，可先试听或生成测试样音。</span>}</p>
               {!!s.promptIssues?.length && <p className="error-inline">{s.promptIssues.join("；")}</p>}
