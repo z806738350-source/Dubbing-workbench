@@ -137,6 +137,8 @@ export default function App() {
   const [readingSize,setReadingSize] = useState(Number(localStorage.getItem("reading-size"))||17);
   const [grantId,setGrantId] = useState<string|null>(null);
   const [generationPlan,setGenerationPlan] = useState<{plan:GenerationPlan;ids:string[];regenerate:boolean;retryUnknown:boolean;resumeRoute:boolean}|null>(null);
+  const generationIntent=useRef(0);
+  const closeGeneration=()=>{generationIntent.current++;setGenerationPlan(null);};
   const [taskRecord,setTaskRecord] = useState<{jobId:string;attempt:{id:string;status:string;mode?:string;error?:string}}|null>(null);
   const taskRecordRef=useRef<HTMLElement>(null),unitPanelRef=useRef(unitPanelId);
   unitPanelRef.current=unitPanelId;
@@ -194,6 +196,7 @@ export default function App() {
     chapterRef = useRef(chapterId),
     stateRef = useRef(state),
     playerRef = useRef(player);
+  if(chapterRef.current!==chapterId)generationIntent.current++;
   chapterRef.current = chapterId;
   stateRef.current = state;
   playerRef.current = player;
@@ -375,7 +378,7 @@ export default function App() {
   const pickChapter = (id: string) => {
     chapterRef.current=id;
     pendingPlay.current=null;pendingPlaySnapshot.current=null;
-    setGenerationPlan(null);setGrantId(null);setVoiceTarget(null);setUnitPanelId(null);setUnitInitialMode(undefined);
+    closeGeneration();setGrantId(null);setVoiceTarget(null);setUnitPanelId(null);setUnitInitialMode(undefined);
     audio.current?.pause();
     setPlayer(null);
     setChapterId(id);
@@ -396,34 +399,41 @@ export default function App() {
     if(target.kind==='voice-session'){setVoiceLibrarySession(target.voiceSessionId);setVoiceLibraryCreate(true);setModal('voices');return;}
     setVoiceLibrarySession(undefined);setVoiceLibraryCreate(true);setModal('voices');
   },[chapter?.id,draftSignal]);
-  const generate = async (ids:string[], _whole=false, options:Record<string,unknown>={}, context=chapter) => {
+  const generate = async (ids:string[], _whole=false, options:Record<string,unknown>={}, context=chapter, intent?:number) => {
+    const expected=intent??++generationIntent.current;
+    const current=()=>generationIntent.current===expected&&chapterRef.current===context?.id;
+    if(intent===undefined)setGenerationPlan(null);
     if(!context||!ids.length)throw new Error("没有需要生成的台词。可以先试听现有声音。");
     const units=(context.units||[]).filter(u=>u.state==='active'&&u.members.some(id=>ids.includes(id)));
     const members=[...new Set([...ids,...units.flatMap(u=>u.members)])];
     const dependencies=members.map(id=>"segment:"+id).concat(units.flatMap(u=>["unit:"+u.id,"unit:"+u.id+"/"+u.mode,...(u.mode==='scene'?["events:"+u.id]:[])]));
-    await withSavedDrafts("chapter:"+context.id,dependencies,async()=>{
-      if(chapterRef.current!==context.id)return;
+    try{await withSavedDrafts("chapter:"+context.id,dependencies,async()=>{
+      if(!current())return;
       if(members.some(id=>hasDraft(id))||units.some(u=>unitHasDraft(u,context.events||[],u.mode)))throw new Error('相关台词或声音背景有其他页面/遗留编辑，请先在本机暂存中处理。');
       const revision=draftScopeRevision("chapter:"+context.id,context.revision);
       const plan=await api<GenerationPlan>("/operations/plan",{kind:"generateSelection",chapterId:context.id,revision,ids,regenerate:options.regenerate===true});
-      if(chapterRef.current!==context.id)return;
+      if(!current())return;
       if(!plan.audioRequests){setGenerationPlan(null);setNotice("所选范围已有匹配声音，已复用；无需发送新的配音请求。");return;}
       setGrantId(null);
       setGenerationPlan({plan,ids,regenerate:options.regenerate===true,retryUnknown:false,resumeRoute:false});
       setInspectorOpen(false);
-    });
+    });}catch(error){if(current())throw error;}
   };
+  const planIntent=generationIntent.current;
   const generationUnknown = generationPlan?.plan.units.some(planned=>chapter?.units?.find(u=>u.id===planned.unitId)?.variants[planned.mode].latest === "unknown" || segments.some(s=>planned.members.includes(s.id)&&s.latest==="unknown")) || false;
   const submitGeneration = async () => {
     if(!generationPlan||!chapter||!grantId)return;
     const request=generationPlan;
+    const intent=generationIntent.current;
     const dependencies=request.plan.memberIds.map(id=>"segment:"+id).concat(request.plan.units.flatMap(u=>["unit:"+u.unitId,"unit:"+u.unitId+"/"+u.mode,...(u.mode==="scene"?["events:"+u.unitId]:[])]));
     await withSavedDrafts("chapter:"+chapter.id,dependencies,async()=>{
+      if(generationIntent.current!==intent)return;
       if(chapterRef.current!==request.plan.chapterId)throw new Error("章节已切换，本次未发送。");
       if(request.plan.memberIds.some(id=>hasDraft(id))||request.plan.units.some(p=>{const u=chapter.units?.find(u=>u.id===p.unitId);return u&&unitHasDraft(u,chapter.events||[],p.mode);}))throw new Error("相关其他页面的草稿仍需处理，本次未发送。");
       if(draftScopeRevision("chapter:"+chapter.id,request.plan.revision)!==request.plan.revision)throw Object.assign(new Error("生成范围在核对后已变化，请重新核对生成范围。"),{status:409});
       audio.current?.pause();setPlayer(null);
       const receipt=await submitOperation("generate:"+chapter.id,{kind:"generateSelection",chapterId:chapter.id,revision:request.plan.revision,arrangement:request.plan.arrangement,ids:request.ids,regenerate:request.regenerate,grantId,...(request.retryUnknown?{retryUnknown:true}:{}),...(request.resumeRoute?{resumeRoute:true}:{})},state?.jobs||[]);
+      if(generationIntent.current!==intent||chapterRef.current!==request.plan.chapterId){await refresh();return;}
       if(receipt.error)throw Object.assign(new Error(receipt.error),{status:receipt.errorStatus});
       if(chapterRef.current!==request.plan.chapterId)return;
       setGenerationPlan(null);setNotice("已开始制作，成功结果和历史都会保留。");await refresh();
@@ -563,7 +573,7 @@ export default function App() {
             if (c) pickChapter(c.id);
             else {
               chapterRef.current = "";
-              setChapterId("");
+              closeGeneration();setChapterId("");
               setChapter(null);
             }
           }}
@@ -1304,13 +1314,17 @@ export default function App() {
         play={(id,title,historical)=>{const unit=chapter.units!.find(u=>u.id === unitPanelId)!;const mode=unit.variants.scene.current === id ? "scene" : "dry";setCurrentMembers(unit.kind === "group" && !historical ? unit.members : []);
           void startPlay("audios",id,title,undefined,!!historical,historical ? undefined : {id:unit.id,mode,audioId:id,basis:unit.variants[mode].status.basis,state:unit.state});}}/>}
       {generationPlan && chapter && <GeneratePlan plan={generationPlan.plan} chapter={chapter} model={state?.settings.model} grantId={grantId} unknown={generationUnknown} routeBlocked={!!state?.settings.routeBlocked} retryUnknown={generationPlan.retryUnknown} resumeRoute={generationPlan.resumeRoute} busy={busy}
-        onGrant={setGrantId} onRetryUnknown={value=>setGenerationPlan({...generationPlan,retryUnknown:value})} onResumeRoute={value=>setGenerationPlan({...generationPlan,resumeRoute:value})} onGenerate={submitGeneration} onClose={()=>setGenerationPlan(null)} onRecheck={async()=>{
+        onGrant={id=>{if(generationIntent.current===planIntent)setGrantId(id);}} onRetryUnknown={value=>{if(generationIntent.current===planIntent)setGenerationPlan(current=>current?{...current,retryUnknown:value}:null);}} onResumeRoute={value=>{if(generationIntent.current===planIntent)setGenerationPlan(current=>current?{...current,resumeRoute:value}:null);}} onGenerate={submitGeneration} onClose={closeGeneration} onRecheck={async()=>{
           const request=generationPlan;
-          const current=await api<ChapterDetail>("/chapters/"+request.plan.chapterId);
-          if(chapterRef.current!==current.id)throw new Error("章节已切换，请回到原章节核对。");
-          setChapter(current);await refresh();
-          await generate(request.ids,false,{regenerate:request.regenerate},current);
-          if(chapterRef.current!==current.id)throw Object.assign(new Error("章节已切换，请回到原章节核对。"),{status:409});
+          const intent=++generationIntent.current;
+          const current=()=>generationIntent.current===intent&&chapterRef.current===request.plan.chapterId;
+          try{
+          const fresh=await api<ChapterDetail>("/chapters/"+request.plan.chapterId);
+          if(!current())return;
+          setChapter(fresh);await refresh();
+          if(!current())return;
+          await generate(request.ids,false,{regenerate:request.regenerate},fresh,intent);
+          }catch(error){if(current())throw error;}
         }}/>}
       {navOpen && (
         <Dialog title="项目与章节" onClose={() => setNavOpen(false)}>
@@ -1335,7 +1349,7 @@ export default function App() {
               projectRef.current = p.id;
               setProjectId(p.id);
               chapterRef.current = "";
-              setChapterId("");
+              closeGeneration();setChapterId("");
               setChapter(null);
               await refresh();
               setModal(null);
