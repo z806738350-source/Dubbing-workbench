@@ -278,13 +278,22 @@
     "textDispatches": 1,
     "material": "self-authored text and newly generated candidate references only",
     "billVerified": false,
-    "listening": "pending human judgement",
-    "automaticRetries": 0
+    "listening": "passed human review, confirmed by user on 2026-10-02",
+    "automaticRetries": 0,
+    "humanReview": {
+      "status": "passed",
+      "reviewedSuccessfulAudioFiles": 24,
+      "confirmationDate": "2026-10-02",
+      "confirmationSource": "user message in current conversation",
+      "confirmation": "24份真实样本已经经过人工审核，没有问题",
+      "scope": "entire batch of 24 successful real-provider samples",
+      "evidenceLevel": "human review confirmed by user"
+    }
   },
   "release": {
-    "voiceCreation": "engineering passed, listening pending",
-    "dialogue": "engineering passed, experimental, listening pending",
-    "scene": "engineering passed, experimental, listening pending"
+    "voiceCreation": "engineering passed, batch human review passed",
+    "dialogue": "engineering passed, experimental, batch human review passed",
+    "scene": "engineering passed, experimental, batch human review passed"
   },
   "privacy": "No keys, novel text, runtime data, actual provider request logs or generated audio included in this summary.",
   "eventReviewFixCommit": "e59786bf90ad5cbc58d44bf5862c57204acee84d"
