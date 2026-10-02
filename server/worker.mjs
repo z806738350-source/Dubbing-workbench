@@ -112,14 +112,23 @@ export function createWorker(store, domain, config) {
     domain.enhancement?.assertLegacyGeneration?.(c, selected);
     return selected;
   }
-  function enqueue(p) {
+  function prepareEnhancement(p) {
+    const prepared = domain.enhancement.prepare(p, config);
+    if (p.kind === "unit-generate") {
+      prepared.arrangement = store.get("chapters", p.chapterId).arrangement;
+      if (p.arrangement !== undefined && p.arrangement !== prepared.arrangement) fail("实际声音编排在核对后已变化，请重新查看生成范围", 409);
+    }
+    return prepared;
+  }
+  function enqueue(p, checked) {
     return store.transaction(() => {
       const existing = existingCommand(p);
       if (existing) return existing;
       if (["voice-create", "unit-generate"].includes(p.kind)) {
         if (!config.key) fail("请先配置 Kunpo API Key");
         if (routeBlocked() && !p.resumeRoute) fail("接口已暂停，请核对配置后重新启用");
-        const prepared = domain.enhancement.prepare(p, config);
+        const prepared = prepareEnhancement(p);
+        if (checked && !same(prepared, checked)) fail("生成范围、声音版本或设置在预检期间已变化，本批尚未入队", 409);
         const job = { ...prepared.job, id: uid(), commandId: p.commandId, request: requestOf(p), kind: p.kind, chapterId: prepared.job.chapterId || "", status: "queued", done: 0, total: prepared.attempts.length, stop: false, createdAt: new Date().toISOString() };
         const attempts = prepared.attempts.map(a => ({ ...a, id: uid(), jobId: job.id, status: "queued", prompt: compile(a.input), model: a.input.model }));
         for (const a of attempts) {
@@ -690,6 +699,7 @@ export function createWorker(store, domain, config) {
     async submit(p) {
       const existing = existingCommand(p);
       if (existing) return existing;
+      let checked;
       // Decode every required file before accepting the batch; enqueue rechecks revisions and locks after awaits.
       if (p.kind === "voice-test" || !p.kind || p.kind === "generate") {
         const rows = p.kind === "voice-test" ? [{ voiceId: p.voiceId }] : preflight(domain.editable(p.chapterId, p.revision), p.ids || [], p.whole);
@@ -700,8 +710,8 @@ export function createWorker(store, domain, config) {
           catch { fail(`参考声音「${v.name || id}」损坏或缺失，或不符合 30 秒/10 MB 规格；本批尚未入队`); }
         }
       } else if (p.kind === "unit-generate") {
-        const prepared = domain.enhancement.prepare(p, config, true);
-        for (const id of new Set(prepared.attempts.flatMap(referenceIds))) {
+        checked = prepareEnhancement(p);
+        for (const id of new Set(checked.attempts.flatMap(referenceIds))) {
           const v = store.get("voices", id);
           if (["stopped", "deleted"].includes(v.state) || !v.path) fail("参考声音已停用或删除");
           try { await inspectReference(v); }
@@ -715,7 +725,7 @@ export function createWorker(store, domain, config) {
           if (!await validateStoredAudio(store, a)) fail(`第 ${(s.order ?? index) + 1} 条音频损坏或缺失，请恢复备份或明确重做；本批未提交`);
         }
       }
-      return enqueue(p);
+      return enqueue(p, checked);
     },
     tick,
     recover,

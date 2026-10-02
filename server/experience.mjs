@@ -18,11 +18,12 @@ export function decide(s, field, source, extra = {}) {
 export function humanChanges(before, after, action, payload) {
   const fields = ['text','roleId','voiceId','voiceSource','performance','type','config','excluded'];
   const changed = fields.filter(field => !same(before[field], after[field]));
+  const confirming = action === 'segment.confirm' && Array.isArray(payload.ids) && payload.ids.includes(after.id);
   after.protectedFields = [...new Set([...(before.protectedFields || []), ...changed])];
-  if (changed.includes('roleId') || changed.includes('type') || before.roleConfirmed !== after.roleConfirmed || action === 'segment.confirm') decide(after,'role','human');
-  if (changed.includes('voiceId') || changed.includes('voiceSource') || changed.includes('roleId') || before.identityConfirmed !== after.identityConfirmed || action === 'segment.confirm' && payload.roleOnly !== true) decide(after,'identity',action === 'role.update' || payload.resetVoice ? 'inherited' : 'human');
+  if (changed.includes('roleId') || changed.includes('type') || before.roleConfirmed !== after.roleConfirmed || confirming) decide(after,'role','human');
+  if (changed.includes('voiceId') || changed.includes('voiceSource') || changed.includes('roleId') || before.identityConfirmed !== after.identityConfirmed || confirming && payload.roleOnly !== true) decide(after,'identity',action === 'role.update' || payload.resetVoice ? 'inherited' : 'human');
   if (changed.includes('performance')) after.decisions = {...after.decisions,performance:{source:'human',at:now(),values:after.performance}};
-  return changed.length || action === 'segment.confirm' || !same(before.decisions,after.decisions);
+  return changed.length || confirming || !same(before.decisions,after.decisions);
 }
 function grantFor(store, config, request, kind) {
   const c = request.chapterId ? store.get('chapters',request.chapterId) : null;
@@ -199,8 +200,7 @@ export function createExperience(store, domain, worker, analysis, config) {
         } else if (p.kind === 'generateSelection') {
           const selected = plan(p); op.result = {plan:selected};
           if (!selected.audioRequests) { op.steps.completed = true; op.outcome = 'completed'; save(op); return view(op); }
-          // Enhancement preparation already reads each unit's current mode when no override is supplied.
-          payload = {...payload,kind:'unit-generate',unitIds:selected.unitIds,...(p.mode ? {mode:p.mode} : {})};
+          payload = {...payload,kind:'unit-generate',revision:selected.revision,arrangement:selected.arrangement,unitIds:selected.unitIds,...(p.mode ? {mode:p.mode} : {})};
         } else if (p.kind === 'voiceCandidate') payload = {...payload,kind:'voice-create',sessionId:p.sessionId,entityRevision:p.entityRevision};
         else if (p.kind === 'export') payload = {...payload,requireGrant:false,kind:'export',arrangement:p.arrangement,reviewItems:p.reviewItems,confirm:p.confirm === true,format:p.format};
         else fail('组合操作类型无效');

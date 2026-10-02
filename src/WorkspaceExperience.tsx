@@ -10,7 +10,7 @@ import VoiceCreation from './VoiceCreation';
 import type { VoiceTarget } from './VoiceCreation';
 import type { ChapterDetail, Role, State, Voice } from './types';
 
-export type WorkspaceIssue = { key:string; title:string; detail:string; kind:'structure'|'identity'|'voice'|'request'|'audio'|'advice'; ids:string[]; roleId?:string; unitId?:string };
+export type WorkspaceIssue = { key:string; title:string; detail:string; kind:'structure'|'identity'|'voice'|'request'|'audio'|'advice'; ids:string[]; roleId?:string; unitId?:string; mode?:'dry'|'scene' };
 export function chapterIssues(chapter:ChapterDetail, roles:Role[], voices:Voice[]):WorkspaceIssue[] {
   const issues:WorkspaceIssue[]=[];
   if(chapter.arrangementIssues?.length) issues.push({key:'structure',kind:'structure',title:'编排需要修复',detail:chapter.arrangementIssues.join('；'),ids:[],unitId:chapter.units?.find(u=>u.diagnostics?.length)?.id});
@@ -24,9 +24,19 @@ export function chapterIssues(chapter:ChapterDetail, roles:Role[], voices:Voice[
     const pendingIdentity=segments.filter(s=>s.roleConfirmed&&s.voiceId&&!s.identityConfirmed);
     if(pendingIdentity.length)issues.push({key:'sound-identity:'+roleId,kind:'identity',title:`核对${name}使用的声音`,detail:`${pendingIdentity.length} 条声音身份尚未确认。明确选用声音后继续。`,ids:pendingIdentity.map(s=>s.id),roleId});
   }
-  const unknown=chapter.segments.filter(s=>!s.excluded&&s.latest==='unknown');
+  const playing=new Set(chapter.playbackItems.map(item=>item.unitId||item.id));
+  const units=(chapter.units||[]).filter(unit=>playing.has(unit.id)||unit.state==='pending'&&unit.members.some(id=>chapter.segments.some(s=>s.id===id&&!s.excluded)));
+  const represented=new Set(units.flatMap(unit=>unit.members));
+  for(const unit of units) for(const mode of ['dry','scene'] as const){
+    const latest=unit.variants[mode].latest;
+    if(!['unknown','failed'].includes(latest))continue;
+    const matching=chapter.playbackItems.some(item=>item.audioId&&item.validity==='matched'&&(item.unitId===unit.id||(item.members||[item.id]).some(id=>unit.members.includes(id))));
+    const name=mode==='scene'?'声音背景':unit.kind==='group'?'对戏':'声音';
+    issues.push({key:`${latest}:${unit.id}:${mode}`,kind:'request',title:latest==='unknown'?`${name}新结果待核对`:`${name}生成失败`,detail:(latest==='unknown'?`${unit.members.length} 条的新结果待核对，可能已计费。先核对这次任务；只有明确再次发送时才重试。`:`${unit.members.length} 条的最新生成失败，已有音频和历史保留。`)+(matching?' 原有匹配声音仍可试听。':''),ids:unit.members,unitId:unit.id,mode});
+  }
+  const unknown=chapter.segments.filter(s=>!s.excluded&&!represented.has(s.id)&&s.latest==='unknown');
   if(unknown.length)issues.push({key:'unknown',kind:'request',title:'有生成请求结果不明',detail:`${unknown.length} 条可能已经计费。先检查任务记录；只有明确再发送时才重试。`,ids:unknown.map(s=>s.id)});
-  const failed=chapter.segments.filter(s=>!s.excluded&&s.latest==='failed');
+  const failed=chapter.segments.filter(s=>!s.excluded&&!represented.has(s.id)&&s.latest==='failed');
   if(failed.length)issues.push({key:'failed',kind:'request',title:'部分声音生成失败',detail:`${failed.length} 条失败，已有音频和历史保留。`,ids:failed.map(s=>s.id)});
   const rework=chapter.playbackItems.filter(s=>s.review==='rework');
   if(rework.length)issues.push({key:'rework',kind:'audio',title:'有试听后标记的返工',detail:`${rework.length} 个声音单元需重做。修改后只生成受影响范围。`,ids:rework.flatMap(s=>s.members||[s.id])});
@@ -36,7 +46,7 @@ export function chapterIssues(chapter:ChapterDetail, roles:Role[], voices:Voice[
   if(pending.length)issues.push({key:'ai-advice',kind:'advice',title:'AI有表演建议等待选择',detail:`${pending.length} 项需判断，保持当前表演也可以继续制作。可查看建议与原文依据后一次采用。`,ids:pending.flatMap(i=>i.segmentId?[i.segmentId]:[])});
   return issues;
 }
-export function IssueCenter({chapter,roles,voices,onClose,onLocate,onVoice,onSource,onUnit,onTasks,onConfirm,onAI}:{chapter:ChapterDetail;roles:Role[];voices:Voice[];onClose:()=>void;onLocate:(id:string)=>void;onVoice:(roleId:string)=>void;onSource:()=>void;onUnit:(id:string)=>void;onTasks:()=>void;onConfirm:(ids:string[])=>Promise<unknown>;onAI:()=>void}){
+export function IssueCenter({chapter,roles,voices,onClose,onLocate,onVoice,onSource,onUnit,onTasks,onConfirm,onAI}:{chapter:ChapterDetail;roles:Role[];voices:Voice[];onClose:()=>void;onLocate:(id:string)=>void;onVoice:(roleId:string)=>void;onSource:()=>void;onUnit:(id:string,mode?:'dry'|'scene')=>void;onTasks:()=>void;onConfirm:(ids:string[])=>Promise<unknown>;onAI:()=>void}){
   const [error,setError]=useState(''),[pending,setPending]=useState(false);
   const issues=chapterIssues(chapter,roles,voices);
   return <Dialog title="需要你处理" presentation="sidepanel" onClose={onClose}>
@@ -45,7 +55,7 @@ export function IssueCenter({chapter,roles,voices,onClose,onLocate,onVoice,onSou
     {issues.map(issue=><article className="issue-card" key={issue.key}><span className="eyebrow">{({structure:'内容与编排',identity:'需要判断',voice:'选择声音',request:'任务结果',audio:'试听返工',advice:'可选创作建议'})[issue.kind]}</span><h3>{issue.title}</h3><p>{issue.detail}</p>
       {issue.kind!=='identity'&&issue.ids.length>0&&<blockquote>{chapter.segments.find(s=>s.id===issue.ids[0])?.text}</blockquote>}
       <div className="button-row">
-        {issue.kind==='advice' ? <button className="button" onClick={onAI}>查看AI建议</button> : issue.kind==='voice'||issue.key.startsWith('sound-identity:') ? <button className="button primary" onClick={()=>issue.roleId&&onVoice(issue.roleId)}>选声音</button> : issue.unitId ? <button className="button primary" onClick={()=>onUnit(issue.unitId!)}>修复编排</button> : issue.kind==='request' ? <button className="button" onClick={onTasks}>查看任务</button> : issue.ids.length ? <button className="button" onClick={()=>onLocate(issue.ids[0])}>定位并修改</button> : <button className="button" onClick={onSource}>查看原文</button>}
+        {issue.kind==='advice' ? <button className="button" onClick={onAI}>查看AI建议</button> : issue.kind==='voice'||issue.key.startsWith('sound-identity:') ? <button className="button primary" onClick={()=>issue.roleId&&onVoice(issue.roleId)}>选声音</button> : issue.unitId ? <button className="button primary" onClick={()=>onUnit(issue.unitId!,issue.mode)}>{issue.kind==='request'?'核对生成任务':'修复编排'}</button> : issue.kind==='request' ? <button className="button" onClick={onTasks}>查看任务</button> : issue.ids.length ? <button className="button" onClick={()=>onLocate(issue.ids[0])}>定位并修改</button> : <button className="button" onClick={onSource}>查看原文</button>}
 
       </div>
       {issue.kind==='identity'&&issue.key.startsWith('identity:')&&issue.ids.map(id=><div className="issue-judgment" key={id}><span className="eyebrow">第 {(chapter.segments.find(s=>s.id===id)?.order||0)+1} 条</span><p className="spoken-text">{chapter.segments.find(s=>s.id===id)?.text}</p><div className="button-row"><button className="button small" onClick={()=>onLocate(id)}>修改这一句</button><button className="text-button" disabled={pending} onClick={()=>void(async()=>{setPending(true);setError('');try{await onConfirm([id]);}catch(e){setError((e as Error).message);}finally{setPending(false);}})()}>这一句归属正确</button></div></div>)}
