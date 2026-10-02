@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { fail, same, text, uid } from './store.mjs';
 import { compile, templateOf } from './templates.mjs';
 import { storedAudioUnavailable } from './audio.mjs';
+import { configurationDecided } from './experience.mjs';
 
 export const sampleText = '清晨的风吹过窗边，我把桌上的书合上，准备出门。';
 export const defaultFeatures = { voiceCreation: true, groups: true, scenes: true };
@@ -45,6 +46,7 @@ export function createEnhancement(store, d) {
     const rows = u.members.map(id => store.get('segments', id));
     if (rows.some(s => s.retired || s.excluded || s.chapterId !== u.chapterId)) fail('生成单元成员已变化，请先解除组并核对', 409);
     if (rows.some(s => typeof s.text !== 'string' || !s.text.trim())) fail('生成单元成员正文为空，请先解除组并核对', 409);
+    if (rows.length === 1) return rows; // One existing member is always a contiguous chapter range.
     const all = d.list(u.chapterId), start = all.findIndex(s => s.id === u.members[0]);
     if (!same(all.slice(start, start + rows.length).map(s => s.id), u.members)) fail('组成员顺序或连续范围已变化', 409);
     return rows;
@@ -76,7 +78,7 @@ export function createEnhancement(store, d) {
     if (!['dry', 'scene'].includes(mode)) fail('生成类型无效');
     const rows = members(u), first = rows[0];
     for (const s of rows) d.validate(s, store.get('chapters', u.chapterId));
-    if (forGeneration && rows.some(s => !s.roleConfirmed || !s.identityConfirmed || !s.voiceId)) fail('请先完成全部成员的角色和声音身份确认');
+    if (forGeneration && rows.some(s => !configurationDecided(s) || !s.voiceId)) fail('请先完成全部成员的角色和声音身份确认');
     if (rows.some(s => !same(s.config, first.config) || (s.model || 'seed-audio-1.0') !== (first.model || 'seed-audio-1.0'))) fail('成员数值配置或模型不同，请先明确统一设置', 409);
     if (u.kind === 'group' && rows.some(s => s.template !== first.template)) fail('成员模板不同，请先明确统一模板', 409);
     const referenceVoiceIds = [], slots = [];
@@ -113,12 +115,13 @@ export function createEnhancement(store, d) {
   function requestIdentity(input, prompt) {
     return [input.model || 'seed-audio-1.0', prompt ?? compile(input), input.referenceVoiceIds || (input.voiceId ? [input.voiceId] : []), rates(input.config)];
   }
+  const compatibleReviewBasis = (u, mode, review, audio) => u.kind === 'single' && mode === 'dry' ? d.reviewBasis(review?.basis, audio?.model) : review?.basis;
   function status(u, mode = u.mode) {
     const v = u.variants[mode], a = v.current ? store.maybe('audios', v.current) : null;
     let input = null, currentBasis = null, prompt = '', promptIssues = [];
     try { input = buildInput(u, mode); currentBasis = basis(u, mode); prompt = compile(input); } catch(e) { promptIssues = [e.message]; }
     const validity = !a ? 'missing' : storedAudioUnavailable(store, a) ? 'broken' : input && same(requestIdentity(input, prompt), requestIdentity(a.input, a.prompt)) ? 'matched' : 'stale';
-    const review = validity === 'matched' && v.review?.audioId === v.current && same(v.review.basis, currentBasis) ? v.review.state : 'pending';
+    const review = validity === 'matched' && v.review?.audioId === v.current && same(compatibleReviewBasis(u,mode,v.review,a), currentBasis) ? v.review.state : 'pending';
     return { validity, review, audio: a, basis: currentBasis, prompt, promptIssues, input };
   }
   function history(u, mode) {
@@ -178,7 +181,7 @@ export function createEnhancement(store, d) {
     if (p.kind === 'export') {
       if (!['wav', 'mp3'].includes(p.format)) fail('导出格式无效');
       if (!d.coverage(c, all).valid) fail('原文覆盖不完整，不能正式导出');
-      if (included.some(s => !s.roleConfirmed || !s.identityConfirmed)) fail('请完成角色和声音身份核对');
+      if (included.some(s => !configurationDecided(s))) fail('请完成角色和声音身份核对');
       if (rows.some(r => r.review === 'rework')) fail('仍有需返工的单元');
       if (p.arrangement !== c.arrangement || !same(p.reviewItems, reviewItems)) fail('章节版本已变化，请重新检查后导出', 409);
       if (!p.confirm && rows.some(r => r.review !== 'passed')) fail('请先确认待检查的音频');
@@ -427,7 +430,7 @@ export function createEnhancement(store, d) {
       }
       u.mode = mode;
       const rework = v.review?.state === 'rework', old = v.current; v.current = a.id; if (old !== a.id) v.previous = old;
-      v.review = !rework && a.review && same(a.review.basis, basis(u, mode)) ? a.review : { audioId: a.id, basis: basis(u, mode), state: rework ? 'rework' : 'pending', at: stamp() };
+      v.review = !rework && a.review && same(compatibleReviewBasis(u,mode,a.review,a), basis(u, mode)) ? a.review : { audioId: a.id, basis: basis(u, mode), state: rework ? 'rework' : 'pending', at: stamp() };
       if (u.kind === 'single' && mode === 'dry') { const s = store.get('segments', u.id); Object.assign(s, { current: v.current, previous: v.previous, review: v.review }); store.put('segments', s, c.id); }
       d.touch(c, false, true);
     } else fail('未知增强操作');

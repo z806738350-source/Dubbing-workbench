@@ -2,7 +2,11 @@ import { useState, useRef, useEffect } from "react";
 import { AlertTriangle } from "lucide-react";
 import { api } from "./api";
 import { Field, Form, Select } from "./components";
-import type { ChapterDetail, Role } from "./types";
+import TaskAuthorization from "./TaskAuthorization";
+import { submitOperation } from "./taskOperations";
+import { draftScopeRevision, withSavedDrafts } from "./autosave";
+import type { ChapterDetail, ExperiencePolicy, ExperienceState, Job, Role } from "./types";
+interface TextPlan { chapterId:string;revision:number;kind:string;memberIds:string[];textRequests:number }
 interface DraftItem {
   id: string;
   editVersion?: number;
@@ -37,6 +41,7 @@ interface Suggestion {
   createdAt?: string;
   draftVersion?: number;
   appliedItemIds?: string[];
+  automation?: {applied:number;needsDecision:number;pendingItemIds?:string[];error?:string};
   roles?: Role[];
   blocks?: { id: number; text: string }[];
   batches?: {
@@ -62,6 +67,9 @@ export default function AnalysisDialog({
   refresh,
   defaultModel,
   contextRevision,
+  onLocate,
+  onIssues,
+  stateJobs = [],
 }: {
   chapter: ChapterDetail;
   roles: Role[];
@@ -69,10 +77,13 @@ export default function AnalysisDialog({
   refresh: () => Promise<void>;
   defaultModel: string;
   contextRevision: number;
+  onLocate?: (segmentId:string) => void;
+  onIssues?: () => void;
+  stateJobs?: Job[];
 }) {
   const [replaceSource, setReplaceSource] = useState(false),
     [source, setSource] = useState(chapter.source);
-  const [kind, setKind] = useState("extract"),
+  const [kind, setKind] = useState(chapter.segments.length ? "director" : "extract"),
     [modelOverride, setModelOverride] = useState<string | null>(null),
     [checked, setChecked] = useState<string[]>([]),
     [ack, setAck] = useState(false);
@@ -82,6 +93,26 @@ export default function AnalysisDialog({
   const [editing, setEditing] = useState<DraftItem | null>(null);
   const [confirmRoles, setConfirmRoles] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
+  const [experience, setExperience] = useState<ExperienceState | null>(null);
+  const [plan, setPlan] = useState<TextPlan | null>(null), [advancedPlan, setAdvancedPlan] = useState<TextPlan | null>(null);
+  const [grantId, setGrantId] = useState<string | null>(null), [advancedGrantId, setAdvancedGrantId] = useState<string | null>(null), [draftGrantId, setDraftGrantId] = useState<string | null>(null);
+  const [preparing, setPreparing] = useState(false), [policySaving, setPolicySaving] = useState(false), [prepareError, setPrepareError] = useState("");
+  const selectedKey = [...selected].sort().join(",");
+  useEffect(() => {
+    let active = true;
+    void api<ExperienceState>("/projects/" + chapter.projectId + "/experience").then(value=>{if(active)setExperience(value);}).catch(error=>{if(active)setPrepareError(error.message);});
+    return ()=>{active=false;};
+  }, [chapter.projectId, chapter.revision]);
+  useEffect(() => {
+    let active = true; setPlan(null);
+    void api<TextPlan>("/operations/plan",{kind:"prepareChapter",chapterId:chapter.id,revision:chapter.revision,ids:selected}).then(value=>{if(active)setPlan(value);}).catch(error=>{if(active)setPrepareError(error.message);});
+    return ()=>{active=false;};
+  }, [chapter.id, chapter.revision, selectedKey]);
+  useEffect(() => {
+    let active = true; setAdvancedPlan(null);
+    void api<TextPlan>("/operations/plan",{kind:"prepareChapter",analysisKind:kind,chapterId:chapter.id,revision:chapter.revision,ids:selected,...(kind==="extract" && replaceSource ? {source:source.replace(/\r\n?/g,"\n")} : {})}).then(value=>{if(active)setAdvancedPlan(value);}).catch(()=>{});
+    return ()=>{active=false;};
+  }, [chapter.id, chapter.revision, selectedKey, kind, replaceSource, source]);
   const draft = drafts.find((d) => d.id === viewId) || drafts.at(-1);
   function editItem(item: DraftItem) {
     if (!draft) return;
@@ -93,14 +124,38 @@ export default function AnalysisDialog({
     draft?.revision === chapter.revision &&
     draft?.contextRevision === contextRevision;
   const working = drafts.some((d) => d.status === "running");
+  async function choosePolicy(mode:ExperiencePolicy["mode"]) {
+    if(!experience)return;
+    setPolicySaving(true);setPrepareError("");
+    try {
+      const policy=await api<ExperiencePolicy>("/experience/policy",{projectId:chapter.projectId,revision:experience.policy.revision,mode});
+      setExperience(value=>value?{...value,policy}:value);
+    } catch(error){setPrepareError((error as Error).message);}
+    finally{setPolicySaving(false);}
+  }
+  async function prepare() {
+    if(!plan || !grantId || !experience?.policy.revision)return;
+    setPreparing(true);setPrepareError("");
+    try {
+      await withSavedDrafts("chapter:"+chapter.id,undefined,async()=>{
+        const revision=draftScopeRevision("chapter:"+chapter.id,chapter.revision);
+        const currentPlan=await api<TextPlan>("/operations/plan",{kind:"prepareChapter",chapterId:chapter.id,revision,ids:selected});
+        if(currentPlan.textRequests!==plan.textRequests || JSON.stringify(currentPlan.memberIds)!==JSON.stringify(plan.memberIds) || currentPlan.kind!==plan.kind){setPlan(currentPlan);await refresh();throw new Error("保存后的分析范围已更新，请核对请求次数后再次准备。");}
+        const result=await submitOperation<{analysis:Suggestion}>("prepare:"+chapter.id,{kind:"prepareChapter",chapterId:chapter.id,revision,ids:selected,model:defaultModel,grantId},stateJobs);
+        if(result.error)throw new Error(result.error);
+        setViewId(result.result.analysis.id);setEditing(null);setChecked([]);setAck(false);
+      });
+      await refresh();
+    } catch(error){setPrepareError((error as Error).message);}
+    finally{setPreparing(false);}
+  }
   const editable =
     applicable && !working && draft?.status !== "applied" && !!draft?.batches;
   async function updateDraft(path: string, data: object) {
     if (!draft) return;
-    await api(path, {
-      id: draft.id,
-      draftVersion: draft.draftVersion,
-      ...data,
+    await withSavedDrafts("chapter:"+chapter.id,undefined,async()=>{
+      if(path==="/analysis/resume" && !draftGrantId)throw new Error("请先允许本次文本分析范围和请求次数。");
+      await api(path, {id:draft.id,draftVersion:draft.draftVersion,...data,...(path==="/analysis/resume" ? {grantId:draftGrantId} : {})});
     });
     await refresh();
   }
@@ -112,25 +167,26 @@ export default function AnalysisDialog({
   const firstInvalid = invalidItems[0];
   return (
     <section className="analysis-panel" aria-label="AI 剧本整理">
-      <div className="tabs analysis-tabs">
-        <button
-          aria-pressed={kind === "extract"}
-          className={kind === "extract" ? "active" : ""}
-          onClick={() => setKind("extract")}
-        >
-          原文分段与角色
-        </button>
-        <button
-          aria-pressed={kind === "director"}
-          className={kind === "director" ? "active" : ""}
-          onClick={() => setKind("director")}
-        >
-          表演指导建议
-        </button>
+      <div className="analysis-prepare">
+        <h3>{chapter.segments.length ? "AI 帮我准备下一步" : "AI 整理这一章"}</h3>
+        <p className="hint">{chapter.segments.length ? "补充表演建议，沿用角色和声音，保留你改过的内容。" : "从原文整理台词与角色；有歧义的地方集中交给你判断。"}</p>
+        <div className="tabs analysis-policy" aria-label="AI 协作方式">
+          <button type="button" aria-pressed={experience?.policy.mode==="smart" && experience.policy.revision>0} disabled={!experience || policySaving || preparing || working} onClick={()=>void choosePolicy("smart")}>AI 先安排</button>
+          <button type="button" aria-pressed={experience?.policy.mode==="review" && experience.policy.revision>0} disabled={!experience || policySaving || preparing || working} onClick={()=>void choosePolicy("review")}>逐项审阅</button>
+        </div>
+        <p className="hint">{!experience?.policy.revision ? "先选择本项目的协作方式。" : experience.policy.mode==="smart" ? "明确说话人和常规表演可自动进入初稿，疑点、强烈表演与人工修改仍由你决定。AI 安排不会标记为试听通过。" : "所有建议先保存在草稿中，审阅后再应用。"}</p>
+        {plan && <>
+          <p className="hint">{plan.kind==="extract" ? "整章原文" : selected.length ? `所选 ${plan.memberIds.length} 条台词` : `本章 ${plan.memberIds.length} 条台词`} · 本次 {plan.textRequests} 次文本请求</p>
+          <TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="准备这一章" step="text" steps={[plan.kind]} model={defaultModel} requests={plan.textRequests} onReady={setGrantId} disabled={preparing || working}/>
+        </>}
+        <button type="button" className="button primary" disabled={!plan || !grantId || !experience?.policy.revision || preparing || working} onClick={()=>void prepare()}>{working ? "正在准备…" : preparing ? "正在保存并准备…" : "准备这一章"}</button>
+        {prepareError && <p className="error-inline" role="alert">{prepareError}</p>}
       </div>
       {draft && <div className="analysis-summary" aria-live="polite">
-        <div><strong>{draft.status === "running" ? "正在分析" : draft.status === "applied" ? "已应用" : !applicable ? "草稿已过期" : invalidItems.length ? `${invalidItems.length} 条需校对` : current ? "草稿待审阅" : "草稿需要处理"}</strong><span>{draft.items.length} 条标注 · {draft.doneChunks || 0}/{draft.totalChunks || 1} 批</span></div>
+        <div><strong>{draft.status === "running" ? "正在分析" : draft.automation ? `AI 已安排 ${draft.automation.applied} 条 · 需你判断 ${draft.automation.needsDecision} 条` : draft.status === "applied" ? "已应用" : !applicable ? "草稿已过期" : invalidItems.length ? `${invalidItems.length} 条需校对` : current ? "草稿待审阅" : "草稿需要处理"}</strong><span>{draft.items.length} 条标注 · {draft.doneChunks || 0}/{draft.totalChunks || 1} 批</span></div>
         {editable && firstInvalid && <button type="button" className="text-button" onClick={() => editItem(firstInvalid)}>校对第 {draft.items.indexOf(firstInvalid) + 1} 条</button>}
+        {!!draft.automation?.needsDecision && onIssues && <button type="button" className="text-button" onClick={onIssues}>集中处理疑点</button>}
+        {experience?.changes.some(change=>change.changeId===draft.id && !change.undoneAt) && <Form primary={false} label="撤销这次 AI 安排" children={null} onSubmit={async()=>{await withSavedDrafts("chapter:"+chapter.id,undefined,async()=>{await api("/experience/undo",{changeId:draft.id,revision:draftScopeRevision("chapter:"+chapter.id,chapter.revision)});});await refresh();}}/>}
       </div>}
       <div className="analysis-results">
       {draft && (
@@ -163,10 +219,12 @@ export default function AnalysisDialog({
               切换面板不影响分析。已接收的草稿会保留；期间修改正式内容会使本轮建议过期。
             </p>
           )}
+          {editable && <TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="继续或重做本轮分析" step="text" steps={[draft.kind]} model={draft.model} requests={Math.max(1,draft.batches?.filter(b=>b.status!=="received").length || 0)} onReady={setDraftGrantId} disabled={working}/>}
           {draft.batches?.some((b) => b.status !== "received") && editable && (
             <Form
               key={`${draft.id}:${draft.draftVersion}`}
               label="继续未完成部分"
+              busy={!draftGrantId}
               revision={draft.draftVersion}
               onSubmit={async (f, draftVersion) =>
                 updateDraft("/analysis/resume", {
@@ -206,6 +264,7 @@ export default function AnalysisDialog({
                 <Form
                   key={`${draft.id}:${b.id}:${draft.draftVersion}`}
                   label="重新分析本批"
+                  busy={!draftGrantId}
                   revision={draft.draftVersion}
                   onSubmit={async (f, draftVersion) =>
                     updateDraft("/analysis/resume", {
@@ -287,8 +346,8 @@ export default function AnalysisDialog({
                   <input
                     type="checkbox"
                     aria-label={`采用 ${item.text.slice(0, 16)} 的建议`}
-                    checked={draft.status === "applied" ? !!draft.appliedItemIds?.includes(item.id) : checked.includes(item.id)}
-                    disabled={!current}
+                    checked={!!draft.appliedItemIds?.includes(item.id) || checked.includes(item.id)}
+                    disabled={!current || !!draft.appliedItemIds?.includes(item.id)}
                     onChange={(e) =>
                       setChecked((v) =>
                         e.target.checked
@@ -307,6 +366,7 @@ export default function AnalysisDialog({
                         "表演建议"}
                     </strong>
                     <span>{item.evidence}</span>
+                    {!!draft.automation && draft.appliedItemIds?.includes(item.id) && <span>AI 已安排</span>}
                     {item.uncertain && (
                       <span className="warning">{draft.kind === "extract" ? "角色待确认" : "建议待核对"}</span>
                     )}
@@ -330,6 +390,8 @@ export default function AnalysisDialog({
                       <AlertTriangle size={14} /> {item.issues.join("；")}
                     </p>
                   )}
+                  {onLocate && (item.segmentId || chapter.segments.some(s=>s.analysisOrigin?.draftId===draft.id && s.analysisOrigin.itemId===item.id)) && <button type="button" className="text-button" onClick={()=>{const id=item.segmentId || chapter.segments.find(s=>s.analysisOrigin?.draftId===draft.id && s.analysisOrigin.itemId===item.id)?.id;if(id)onLocate(id);}}>前往这句</button>}
+                  {chapter.segments.some(s=>(s.id===item.segmentId || s.analysisOrigin?.draftId===draft.id && s.analysisOrigin.itemId===item.id) && s.protectedFields?.includes('performance')) && <Form primary={false} label="允许 AI 下次安排这句表演" children={<p className="hint">当前人工表演仍保留；只解除这一句的表演保护。</p>} onSubmit={async()=>{const segment=chapter.segments.find(s=>s.id===item.segmentId || s.analysisOrigin?.draftId===draft.id && s.analysisOrigin.itemId===item.id);if(!segment)return;await withSavedDrafts("chapter:"+chapter.id,["segment:"+segment.id],async()=>{await api("/experience/unprotect",{chapterId:chapter.id,revision:draftScopeRevision("chapter:"+chapter.id,chapter.revision),segmentId:segment.id,field:"performance"});});await refresh();}}/>}
                   {editable && (
                     <div className="analysis-actions">
                       <button
@@ -360,13 +422,10 @@ export default function AnalysisDialog({
             <Form
               label={draft.kind === "extract" ? "应用校对稿" : "应用本轮选择"}
               onSubmit={async () => {
-                await api("/analysis/apply", {
-                  id: draft.id,
-                  draftVersion: draft.draftVersion,
-                  revision: chapter.revision,
-                  selected: checked,
-                  replaceConfirmed: ack,
-                  confirmRoles,
+                await withSavedDrafts("chapter:"+chapter.id,undefined,async()=>{
+                  await api("/analysis/apply", {
+                    id:draft.id,draftVersion:draft.draftVersion,revision:draftScopeRevision("chapter:"+chapter.id,chapter.revision),selected:checked,replaceConfirmed:ack,confirmRoles,
+                  });
                 });
                 await refresh();
               }}
@@ -402,11 +461,16 @@ export default function AnalysisDialog({
         </div>
       )}
       {!draft && (
-        <div className="analysis-empty"><h3>先整理，再决定</h3><p className="hint">标注原文或补充表演建议，审阅后再应用。</p></div>
+        <div className="analysis-empty"><p className="hint">准备完成后，AI 安排和需要你判断的地方会显示在这里。</p></div>
       )}
       </div>
       <div className="analysis-composer">
-        {draft && <button type="button" className="analysis-composer-toggle" aria-expanded={composerExpanded} onClick={() => setComposerExpanded(v => !v)}><span>{composerExpanded ? "收起分析设置" : "发起新一轮分析"}</span><span aria-hidden="true">{composerExpanded ? "−" : "+"}</span></button>}
+        <button type="button" className="analysis-composer-toggle" aria-expanded={composerExpanded} onClick={() => setComposerExpanded(v => !v)}><span>{composerExpanded ? "收起高级整理" : "高级整理与原文替换"}</span><span aria-hidden="true">{composerExpanded ? "−" : "+"}</span></button>
+        {composerExpanded && <>
+        <div className="tabs analysis-tabs">
+          <button type="button" aria-pressed={kind==="director"} className={kind==="director"?"active":""} onClick={()=>setKind("director")}>表演建议</button>
+          <button type="button" aria-pressed={kind==="extract"} className={kind==="extract"?"active":""} onClick={()=>setKind("extract")}>重新整理原文与角色</button>
+        </div>
         <div className="analysis-context" aria-label="本次分析范围">
           <span className="analysis-reference">{chapter.title}</span>
           {kind === "director" && selected.length ? <>
@@ -415,23 +479,21 @@ export default function AnalysisDialog({
             {selected.length>3 && <span>另 {selected.length-3} 条</span>}
           </> : <span>{kind === "extract" ? "整章原文" : "本章全部片段"}</span>}
         </div>
-        {(!draft || composerExpanded) && <>
+        {advancedPlan && <TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="高级整理" step="text" steps={[kind]} model={model} requests={advancedPlan.textRequests} onReady={setAdvancedGrantId} disabled={working}/>}
       <Form
         label={draft?.status === "running" ? "分析中…" : "生成校对草稿"}
-        busy={working}
+        busy={working || !advancedGrantId || !advancedPlan}
         revision={chapter.revision}
-        onSubmit={async (_, revision) => {
-          await api("/analysis", {
-            chapterId: chapter.id,
-            revision,
-            kind,
-            model,
-            ids: selected,
-            ...(kind === "extract" && replaceSource
-              ? { source: source.replace(/\r\n?/g, "\n") }
-              : {}),
+        onSubmit={async () => {
+          await withSavedDrafts("chapter:"+chapter.id,undefined,async()=>{
+            const revision=draftScopeRevision("chapter:"+chapter.id,chapter.revision);
+            const payload={kind:"prepareChapter",analysisKind:kind,autoApply:false,chapterId:chapter.id,revision,model,ids:selected,grantId:advancedGrantId,...(kind==="extract" && replaceSource?{source:source.replace(/\r\n?/g,"\n")}: {})};
+            const currentPlan=await api<TextPlan>("/operations/plan",payload);
+            if(currentPlan.textRequests!==advancedPlan?.textRequests){setAdvancedPlan(currentPlan);await refresh();throw new Error("保存后的分析请求数已变化，请核对后再次提交。");}
+            const operation=await submitOperation<{analysis:Suggestion}>("advanced-analysis:"+chapter.id,payload,stateJobs);
+            if(operation.error)throw new Error(operation.error);
+            setViewId(operation.result.analysis.id);
           });
-          setViewId("");
           setEditing(null);
           setChecked([]);
           setAck(false);
@@ -468,7 +530,7 @@ export default function AnalysisDialog({
           <input value={model} onChange={(e) => setModelOverride(e.target.value)} />
         </Field>
         {modelOverride !== null && <button type="button" className="text-button analysis-default-model" onClick={() => setModelOverride(null)}>使用默认模型</button>}
-        <p className="hint">将本章文字与相关角色资料发送至文本服务整理，按服务商规则计费。建议须审阅后应用。</p>
+        <p className="hint">本次 {advancedPlan?.textRequests || "—"} 次文本请求。只生成可校对草稿；重新分段及原文替换仍需明确应用。</p>
         </div>
       </Form>
       </>}

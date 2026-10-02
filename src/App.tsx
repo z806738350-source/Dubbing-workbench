@@ -40,6 +40,12 @@ import { api, action } from "./api";
 import { readDraft, writeDraft, clearDraft, hasDraft, listDrafts, recoverDraft, discardDraft, finishDraftSave } from "./drafts";
 import type { DraftRecord } from "./drafts";
 import AnalysisDialog from "./AnalysisDialog";
+import { ObjectDraftTools, useObjectDraft } from "./ObjectDraft";
+import { saveAction, speechDraftProblem, withSavedDrafts, draftScopeRevision } from "./autosave";
+import { useDraftSaveStatus } from "./ObjectDraft";
+import { chapterIssues, IssueCenter, ProjectOverview, VoicePicker, RecoveryCenter, QuickHelp, type RecoveryTarget } from "./WorkspaceExperience";
+import TaskAuthorization from "./TaskAuthorization";
+import { submitOperation } from "./taskOperations";
 import VoiceCreation from "./VoiceCreation";
 import UnitPanel, { CreateGroup, unitHasDraft } from "./UnitPanel";
 import { Dialog, Empty, ErrorBanner, ErrorContext, Field, Form, Select, Status } from "./components";
@@ -56,6 +62,7 @@ import type {
   AudioRecord,
   VoiceSession,
   GenerationUnit,
+  GenerationPlan,
 } from "./types";
 
 const names: Record<string, string> = {
@@ -97,6 +104,10 @@ const active = (s: string) => ["queued", "running"].includes(s);
 const connectionMessage = "无法连接本地工作区，已暂停试听。连接恢复后将先核对版本。";
 type UnitPlayback = {id:string;mode:"dry"|"scene";audioId:string;basis:Record<string,unknown>;state:string};
 type Modal =
+  | "overview"
+  | "issues"
+  | "recovery"
+  | "help"
   | "project"
   | "project-rename"
   | "chapter"
@@ -115,16 +126,23 @@ export default function App() {
   const [unitPanelId, setUnitPanelId] = useState<string|null>(null);
   const [currentMembers, setCurrentMembers] = useState<string[]>([]);
   const [draftIds,setDraftIds] = useState<string[]>([]);
-  const [,setDraftSignal] = useState(0);
+  const [draftSignal,setDraftSignal] = useState(0);
+  const recoveryTarget = useRef<RecoveryTarget|null>(null);
+  const [voiceTarget,setVoiceTarget] = useState<{roleId?:string;segmentId?:string;tab?:"create";sessionId?:string}|null>(null);
+  const [voiceLibraryCreate,setVoiceLibraryCreate] = useState(false);
+  const [voiceLibrarySession,setVoiceLibrarySession] = useState<string>();
+  const [unitInitialEvent,setUnitInitialEvent] = useState<string>();
+  const [unitInitialMode,setUnitInitialMode] = useState<"dry"|"scene">();
+  const [density,setDensity] = useState(localStorage.getItem("reading-density")||"comfortable");
+  const [readingSize,setReadingSize] = useState(Number(localStorage.getItem("reading-size"))||17);
+  const [grantId,setGrantId] = useState<string|null>(null);
+  const [generationPlan,setGenerationPlan] = useState<{plan:GenerationPlan;ids:string[];regenerate:boolean;retryUnknown:boolean;resumeRoute:boolean}|null>(null);
   const onDraftChange = useCallback((id:string,dirty:boolean)=>setDraftIds(prev=>dirty ? (prev.includes(id) ? prev : [...prev,id]) : prev.filter(x=>x!==id)),[]);
 
   const bookmarks = useRef<Record<string, string>>({});
   const pendingPlay = useRef<string | null>(null);
+  const pendingPlaySnapshot = useRef<{arrangement:number;items:ChapterDetail["playbackItems"]}|null>(null);
   const [oldPreview, setOldPreview] = useState<Segment | null>(null);
-  const [generationConfirm, setGenerationConfirm] = useState<{
-    ids: string[];
-    whole: boolean;
-  } | null>(null);
   useEffect(() => {
     const close = () => {
       if (window.innerWidth >= 1216) setInspectorOpen(false);
@@ -176,7 +194,10 @@ export default function App() {
   chapterRef.current = chapterId;
   stateRef.current = state;
   playerRef.current = player;
-  const refresh = useCallback(async () => {
+  const refreshPending = useRef<Promise<void>|null>(null);
+  const refresh = useCallback(() => {
+    if(refreshPending.current)return refreshPending.current;
+    const request=(async()=>{
     try {
     const s = await api<State>("/state");
     setState(s);
@@ -199,7 +220,12 @@ export default function App() {
         const master = c.masters.find((m) => m.arrangement === c.arrangement);
         if (master) {
           pendingPlay.current = null;
-          setNotice(c.coverage.valid ? "整章试听已准备好，点击播放开始试听。" : "当前剧本试听已准备好，原文内容尚未完整。点击播放检查现有片段。");
+          const intent=pendingPlaySnapshot.current;pendingPlaySnapshot.current=null;
+          if(intent&&intent.arrangement===c.arrangement&&JSON.stringify(intent.items)===JSON.stringify(c.playbackItems)&&document.visibilityState==='visible'&&!s.jobs.some(j=>j.chapterId===id&&active(j.status))){
+            const bookmark=bookmarks.current[id],point=master.mapping.find(x=>x.segmentId===bookmark||x.unitId===bookmark||x.members?.includes(bookmark));
+            if(bookmark&&!point){delete bookmarks.current[id];setNotice('断点已变化，试听已准备好，请重新选择播放位置。');}
+            else setPlayer({kind:'masters',id:master.id,title:c.title,chapterId:id,arrangement:c.arrangement,playbackItems:c.playbackItems,master,resumeAt:(point?.startFrame||0)/master.sampleRate});
+          }else setNotice('整章试听已准备好；播放意图或版本已变化，请点击播放继续。');
         } else if (
           !s.jobs.some(
             (j) =>
@@ -233,6 +259,9 @@ export default function App() {
       setError(connectionMessage);
       throw new Error(connectionMessage);
     }
+    })();
+    refreshPending.current=request.finally(()=>{refreshPending.current=null;});
+    return refreshPending.current;
   }, []);
   useEffect(() => {
     void refresh().catch((e) => {
@@ -310,6 +339,12 @@ export default function App() {
     locked = !!job;
   const selectedUnit = chapter?.units?.find(u=>u.kind === "group" && u.state === "active" && u.members.includes(selected)) || chapter?.units?.find(u=>u.kind === "single" && u.members.includes(selected));
   const openMember = (id:string) => { setUnitPanelId(null); setSelected(id); if(window.innerWidth < 1216)setInspectorOpen(true); };
+  const saveStatus = useDraftSaveStatus("chapter:"+chapterId);
+  const issues = chapter ? chapterIssues(chapter,roles,voices) : [];
+  const criticalIssues = issues.filter(i=>i.kind !== "audio" && i.kind !== "request" && i.kind !== "advice");
+  const openVoice = (roleId?:string,segmentId?:string) => {setModal(null);setInspectorOpen(false);setVoiceTarget({roleId,segmentId});};
+  const openUnit = (id:string,mode?:"dry"|"scene",eventId?:string)=>{setInspectorOpen(false);setModal(null);setUnitInitialMode(mode);setUnitInitialEvent(eventId);setUnitPanelId(id);};
+  const locate = (id:string)=>{setModal(null);setSelected(id);setFilter("all");setSearch("");setPanelMode("settings");if(window.innerWidth<1216)setInspectorOpen(true);setTimeout(()=>document.getElementById("segment-"+id)?.scrollIntoView({block:"center"}),0);};
   const effectiveStatus = (s:Segment) => chapter?.playbackItems.find(item=>item.id === s.id || item.members?.includes(s.id)) || s;
   const visible = segments.filter((s) => {
     if (
@@ -334,73 +369,62 @@ export default function App() {
       (s) => !s.excluded && s.review === "passed",
     ).length;
   const pickChapter = (id: string) => {
+    chapterRef.current=id;
+    pendingPlay.current=null;pendingPlaySnapshot.current=null;
+    setGenerationPlan(null);setGrantId(null);setVoiceTarget(null);setUnitPanelId(null);setUnitInitialMode(undefined);
     audio.current?.pause();
     setPlayer(null);
     setChapterId(id);
     setNavOpen(false);
     setInspectorOpen(false);
   };
-  const generate = async (
-    ids: string[],
-    whole = false,
-    options: Record<string, unknown> = {},
-  ) => {
-    if (!ids.length)
-      throw new Error("没有可生成的待办。需返工片段请先勾选；结果不明项请单独核对后重试。");
-    if (ids.some(id=>draftIds.includes(id) || hasDraft(id)))
-      throw new Error("所选片段有未保存草稿，请先保存或明确放弃后再生成。");
-    const units = chapter?.units?.filter(u=>u.state === "active" && u.members.some(id=>ids.includes(id))) || [];
-    if(units.some(u=>unitHasDraft(u, chapter?.events || []))) {
-      setUnitPanelId(units.find(u=>unitHasDraft(u,chapter?.events || []))!.id);
-      throw new Error("所选生成单元有指导或事件草稿，请在已打开的面板逐份处理。");
+  useEffect(()=>{
+    const target=recoveryTarget.current;if(!target)return;
+    if(target.chapterId&&chapter?.id!==target.chapterId)return;
+    recoveryTarget.current=null;
+    if(target.kind==='segment'&&target.segmentId){locate(target.segmentId);return;}
+    if((target.kind==='unit'||target.kind==='event')&&target.unitId){openUnit(target.unitId,target.mode,target.kind==='event'?target.eventId||'new':undefined);return;}
+    if(target.kind==='new-group'){setChecked(target.ids||[]);openUnit('create');return;}
+    if(target.kind==='voice-context'){
+      if(target.contextKey)localStorage.setItem(target.contextKey,'new');
+      if(target.roleId||target.segmentId){setInspectorOpen(false);setModal(null);setVoiceTarget({roleId:target.roleId,segmentId:target.segmentId,tab:"create"});return;}
     }
-    if(units.some(u=>u.kind === "group" || u.mode === "scene")) {
-      setUnitPanelId(units.find(u=>u.kind === "group" || u.mode === "scene")!.id);
-      throw new Error("所选范围包含对戏或场景单元，请核对整单元的成员及费用后明确生成。");
-    }
-    if (
-      !options.confirmed &&
-      (state?.settings.routeBlocked ||
-        segments.some((s) => ids.includes(s.id) && s.latest === "unknown"))
-    ) {
-      setGenerationConfirm({ ids, whole });
-      return;
-    }
-    const payload = {
-      kind: "generate",
-      chapterId,
-      revision: chapter?.revision,
-      ids,
-      whole,
-      ...options,
-    };
-    const signature = JSON.stringify(payload);
-    let saved: { signature: string; commandId: string } | null = null;
-    try {
-      saved = JSON.parse(
-        sessionStorage.getItem("pending-generation") || "null",
-      );
-    } catch {
-      sessionStorage.removeItem("pending-generation");
-    }
-    const commandId =
-      saved?.signature === signature ? saved.commandId : crypto.randomUUID();
-    sessionStorage.setItem(
-      "pending-generation",
-      JSON.stringify({ signature, commandId }),
-    );
-    try {
-      audio.current?.pause();
-      setPlayer(null);
-      await api("/jobs", { ...payload, commandId });
-      sessionStorage.removeItem("pending-generation");
-    } catch (e) {
-      if ((e as { status?: number }).status)
-        sessionStorage.removeItem("pending-generation");
-      throw e;
-    }
-    setGenerationConfirm(null);
-    await refresh();
+    if(target.kind==='voice-session'){setVoiceLibrarySession(target.voiceSessionId);setVoiceLibraryCreate(true);setModal('voices');return;}
+    setVoiceLibrarySession(undefined);setVoiceLibraryCreate(true);setModal('voices');
+  },[chapter?.id,draftSignal]);
+  const generate = async (ids:string[], _whole=false, options:Record<string,unknown>={}) => {
+    const context=chapter;
+    if(!context||!ids.length)throw new Error("没有需要生成的台词。可以先试听现有声音。");
+    const units=(context.units||[]).filter(u=>u.state==='active'&&u.members.some(id=>ids.includes(id)));
+    const members=[...new Set([...ids,...units.flatMap(u=>u.members)])];
+    const dependencies=members.map(id=>"segment:"+id).concat(units.flatMap(u=>["unit:"+u.id,"unit:"+u.id+"/"+u.mode,...(u.mode==='scene'?["events:"+u.id]:[])]));
+    await withSavedDrafts("chapter:"+context.id,dependencies,async()=>{
+      if(chapterRef.current!==context.id)return;
+      if(members.some(id=>hasDraft(id))||units.some(u=>unitHasDraft(u,context.events||[],u.mode)))throw new Error('相关台词或声音背景有其他页面/遗留编辑，请先在本机暂存中处理。');
+      const revision=draftScopeRevision("chapter:"+context.id,context.revision);
+      const plan=await api<GenerationPlan>("/operations/plan",{kind:"generateSelection",chapterId:context.id,revision,ids,regenerate:options.regenerate===true});
+      if(chapterRef.current!==context.id)return;
+      if(!plan.audioRequests){setNotice("所选范围已有匹配声音，已复用；无需发送新的配音请求。");return;}
+      setGrantId(null);
+      setGenerationPlan({plan,ids,regenerate:options.regenerate===true,retryUnknown:false,resumeRoute:false});
+      setInspectorOpen(false);
+    });
+  };
+  const generationUnknown = generationPlan?.plan.units.some(planned=>chapter?.units?.find(u=>u.id===planned.unitId)?.variants[planned.mode].latest === "unknown" || segments.some(s=>planned.members.includes(s.id)&&s.latest==="unknown")) || false;
+  const submitGeneration = async () => {
+    if(!generationPlan||!chapter||!grantId)return;
+    const request=generationPlan;
+    const dependencies=request.plan.memberIds.map(id=>"segment:"+id).concat(request.plan.units.flatMap(u=>["unit:"+u.unitId,"unit:"+u.unitId+"/"+u.mode,...(u.mode==="scene"?["events:"+u.unitId]:[])]));
+    await withSavedDrafts("chapter:"+chapter.id,dependencies,async()=>{
+      if(chapterRef.current!==request.plan.chapterId)throw new Error("章节已切换，本次未发送。");
+      if(request.plan.memberIds.some(id=>hasDraft(id))||request.plan.units.some(p=>{const u=chapter.units?.find(u=>u.id===p.unitId);return u&&unitHasDraft(u,chapter.events||[],p.mode);}))throw new Error("相关其他页面的草稿仍需处理，本次未发送。");
+      if(draftScopeRevision("chapter:"+chapter.id,request.plan.revision)!==request.plan.revision)throw new Error("生成范围在核对后已变化，请重新打开生成待办。");
+      audio.current?.pause();setPlayer(null);
+      const receipt=await submitOperation("generate:"+chapter.id,{kind:"generateSelection",chapterId:chapter.id,revision:request.plan.revision,arrangement:request.plan.arrangement,ids:request.ids,regenerate:request.regenerate,grantId,...(request.retryUnknown?{retryUnknown:true}:{}),...(request.resumeRoute?{resumeRoute:true}:{})},state?.jobs||[]);
+      if(receipt.error)throw new Error(receipt.error);
+      if(chapterRef.current!==request.plan.chapterId)return;
+      setGenerationPlan(null);setNotice("已开始制作，成功结果和历史都会保留。");await refresh();
+    });
   };
   const startPlay = async (
     kind: string,
@@ -410,6 +434,7 @@ export default function App() {
     standalone = false,
     unitSession?: UnitPlayback,
   ) => {
+    pendingPlay.current=null;pendingPlaySnapshot.current=null;
     if (!connectionReady) { setError(connectionMessage); return; }
     if (kind !== "voices" && !standalone && chapter) {
       try {
@@ -475,27 +500,24 @@ export default function App() {
       return;
     }
     const el = audio.current!;
-    el.src = `/api/media/${player.kind}/${player.id}`;
+    el.src = player.kind === "demo" ? "/demo.mp3" : `/api/media/${player.kind}/${player.id}`;
     el.load();
     void el.play().catch(() => setPlaying(false));
   }, [player]);
-  const playChapter = () =>
-    run(async () => {
-      if (!chapter) return;
-      const master = chapter.masters.find(
-        (m) => m.arrangement === chapter.arrangement,
-      );
-      if (master) await startPlay("masters", master.id, chapter.title, master);
-      else {
-        await api("/jobs", {
-          kind: "master",
-          chapterId,
-          revision: chapter.revision,
-          commandId: crypto.randomUUID(),
-        });
-        pendingPlay.current = chapterId;
-      }
+  const playChapter = () => run(async()=>{
+    if(!chapter)return;
+    await withSavedDrafts('chapter:'+chapter.id,undefined,async()=>{
+      const fresh=await api<ChapterDetail>('/chapters/'+chapter.id);
+      if(fresh.playbackItems.some(item=>item.validity!=='matched'))throw new Error('有效修改已保存。请先生成待更新的声音，再整章试听。');
+      const master=fresh.masters.find(m=>m.arrangement===fresh.arrangement);
+      if(master){await startPlay('masters',master.id,fresh.title,master);return;}
+      await api('/jobs',{kind:'master',chapterId:chapter.id,revision:fresh.revision,commandId:crypto.randomUUID()});
+      pendingPlay.current=chapter.id;pendingPlaySnapshot.current={arrangement:fresh.arrangement,items:fresh.playbackItems};
+      setNotice('正在本机准备整章试听，完成后继续播放；不调用配音模型。');
     });
+  });
+  useEffect(()=>{const visibility=()=>{if(document.visibilityState!=='visible'&&pendingPlay.current){pendingPlay.current=null;pendingPlaySnapshot.current=null;}};document.addEventListener('visibilitychange',visibility);return()=>document.removeEventListener('visibilitychange',visibility);},[]);
+  const playDemo = () => {setModal(null);void startPlay("demo","welcome","免费演示 · 本机语音",undefined,true);};
   const closeOldPreview = () => {
     audio.current?.pause();
     setPlayer(null);
@@ -552,6 +574,7 @@ export default function App() {
         </button>
       </div>
       {project && <button className="text-button project-rename" onClick={() => setModal("project-rename")}>重命名项目</button>}
+      <button className="nav-item" onClick={() => {setNavOpen(false);setModal("overview");}}><FolderOpen size={17}/>项目总览</button>
       <button className="nav-item current" onClick={() => setNavOpen(false)}>
         <BookOpen size={17} />
         章节工作台
@@ -598,6 +621,8 @@ export default function App() {
         )}
       </div>
       <div className="nav-bottom">
+        <button className="nav-item" onClick={()=>{setNavOpen(false);setModal("recovery");}}><RotateCcw size={16}/>本机暂存</button>
+        <button className="nav-item" onClick={()=>{setNavOpen(false);setModal("help");}}><BookOpen size={16}/>使用帮助</button>
         <button className="nav-item" onClick={() => setModal("tasks")}>
           <RefreshCw size={16} />
           任务记录
@@ -611,7 +636,7 @@ export default function App() {
         </button>
         <div className="local-info">
           <span className="status-dot" />
-          本地工作区<span>v0.1</span>
+          本地工作区<span>体验升级版</span>
         </div>
       </div>
     </>
@@ -624,7 +649,7 @@ export default function App() {
     <div className="panel-content" hidden={panelMode !== "settings"}>
       {selectedSegment ? (
                     <Editor
-                      key={selectedSegment.id}
+                      key={selectedSegment.id+":"+draftSignal}
                       segment={selectedSegment}
                       onDraftChange={onDraftChange}
                       templates={state?.templates || []}
@@ -637,8 +662,9 @@ export default function App() {
                       run={run}
                       generate={(ids) => generate(ids)}
                       onRoles={() => setModal("roles")}
+                      onVoice={openVoice}
                       unit={selectedUnit}
-                      onUnit={()=>selectedUnit && setUnitPanelId(selectedUnit.id)}
+                      onUnit={()=>selectedUnit && openUnit(selectedUnit.id)}
                     />
       ) : <div className="inspector-scroll">
         <div className="inspector-section">
@@ -655,12 +681,12 @@ export default function App() {
     <div className="panel-content" hidden={panelMode !== "analysis"}>
       <AnalysisDialog key={chapter.id} contextRevision={project?.contextRevision || 0}
         defaultModel={state?.settings.textModel || "gemini-3.8-flash"}
-        chapter={chapter} roles={roles} selected={checked} refresh={refresh}/>
+        chapter={chapter} roles={roles} selected={checked} refresh={refresh} onLocate={locate} onIssues={()=>setModal("issues")} stateJobs={state?.jobs||[]}/>
     </div>
   </>;
   return (
     <ErrorContext.Provider value={{ message: error, dismiss: () => setError("") }}>
-      <div className="app-shell">
+      <div className={"app-shell density-"+density} style={{"--reading-size":readingSize+"px"} as React.CSSProperties}>
         <aside className="sidebar">{nav}</aside>
         <main className="workspace">
           <header className="topbar">
@@ -680,7 +706,7 @@ export default function App() {
             <div className="topbar-actions">
               <span className="local-save">
                 <Check size={13} />
-                本地工作区
+                {saveStatus === "saved" ? "已保存" : saveStatus === "saving" ? "保存中…" : saveStatus === "conflict" ? "保存冲突" : saveStatus === "local" ? "本机暂存" : "本地工作区"}
               </span>
               <button
                 className="button small"
@@ -689,8 +715,9 @@ export default function App() {
                 <AudioLines size={14} />
                 <span className="desktop-label">任务</span>
               </button>
+              <button className="icon" aria-label="使用帮助" onClick={()=>setModal("help")}><BookOpen size={17}/></button>
               <button
-                className="button primary small"
+                className="button small"
                 disabled={!chapter || locked}
                 onClick={() => setModal("export")}
               >
@@ -729,112 +756,36 @@ export default function App() {
               }
             >
               按章整理文本，为角色选择声音，逐条试听与打磨。
+              <button className="button demo-entry" onClick={playDemo}><Play size={16}/>免费试听演示</button>
             </Empty>
           ) : (
             <>
               <section className="chapter-heading">
-                <div>
-                  <div className="chapter-label">
-                    章节制作 <span>逐条干声</span>
-                  </div>
-                  <button
-                    className="title-button"
-                    onClick={() => setModal("rename")}
-                    disabled={locked}
-                  >
-                    <h1>{chapter.title}</h1>
-                    <MoreHorizontal size={18} />
-                  </button>
-                  <p>
-                    {total} 条朗读片段 <span>·</span>{" "}
-                    {chapter.source
-                      ? `${Array.from(chapter.source).length.toLocaleString()} 字原文`
-                      : "手工剧本"}{" "}
-                    <span>·</span> {new Set(segments.map(s => s.roleId)).size} 个角色
-                  </p>
-                </div>
+                <div><button className="title-button" onClick={()=>setModal("rename")} disabled={locked}><h1>{chapter.title}</h1><MoreHorizontal size={18}/></button><p>{total} 条台词 · {ready} 条声音就绪 · {passed} 条听评通过</p></div>
                 <div className="chapter-actions">
-                  <button
-                    className="button"
-                    disabled={locked}
-                    onClick={() => { setPanelMode("analysis"); if(window.innerWidth < 1216) setInspectorOpen(true); }}
-                  >
-                    <Sparkles size={15} />
-                    整理剧本
-                  </button>
-                  <button
-                    className="button"
-                    disabled={locked}
-                    onClick={() => setModal("source")}
-                  >
-                    <FileText size={15} />
-                    原文
-                  </button>
-                  <button
-                    className="button"
-                    disabled={locked}
-                    onClick={() => setModal("manual")}
-                  >
-                    <Plus size={15} />
-                    片段
-                  </button>
-                  <button
-                    className="button primary"
-                    disabled={locked || busy || !total}
-                    title="补做缺失、待更新和已勾选的需返工片段；结果不明项需单独核对"
-                    onClick={() =>
-                      run(() =>
-                        generate(
-                          segments
-                            .filter(
-                              (s) =>
-                                !s.excluded &&
-                                s.latest !== "unknown" &&
-                                (s.validity !== "matched" ||
-                                  (s.review === "rework" && checked.includes(s.id))),
-                            )
-                            .map((s) => s.id),
-                          true,
-                        ),
-                      )
-                    }
-                  >
-                    <AudioLines size={16} />
-                    生成待办
-                  </button>
+                  <button className="button" onClick={()=>setModal("issues")}>需要你处理{issues.length?` · ${issues.length}`:""}</button>
+                  <button className="button primary" disabled={busy||locked||!connectionReady} onClick={()=>{
+                    if(saveStatus==='conflict'||saveStatus==='unreliable'){setModal('recovery');return;}
+                    if(!segments.length||criticalIssues.length){if(!segments.length){setPanelMode('analysis');if(window.innerWidth<1216)setInspectorOpen(true);}else setModal('issues');return;}
+                    if(ready<total){void run(()=>generate(segments.filter(s=>!s.excluded&&effectiveStatus(s).validity!=='matched').map(s=>s.id),true));return;}
+                    if(passed<total){void playChapter();return;}
+                    setModal('export');
+                  }}>{locked?'正在制作…':saveStatus==='conflict'?'处理保存冲突':!segments.length?'AI准备剧本':criticalIssues.length?'处理制作条件':ready<total?'生成待办':passed<total?'整章试听':'导出成品'}</button>
                 </div>
               </section>
-              <div className="chapter-summary">
-                <div className="completion">
-                  <span
-                    style={{
-                      transform: `scaleX(${total ? passed / total : 0})`,
-                    }}
-                  />
-                </div>
-                <span>
-                  <strong>{passed}</strong> / {total} 已检查
-                </span>
-                <span className="summary-extra">{ready} 条音频就绪 · {segments.filter(s => !s.excluded && (!s.roleConfirmed || !s.identityConfirmed)).length} 待确认 · {segments.filter(s => !s.excluded && s.validity === "stale").length} 待更新 · {segments.filter(s => !s.excluded && s.validity === "matched" && s.review === "pending").length} 待检查</span>
-                {!chapter.coverage.valid && (
-                  <span className="warning">
-                    原文有 {chapter.coverage.gaps} 字未覆盖
-                  </span>
-                )}
-                <button
-                  className="text-button"
-                  onClick={() => setModal("roles")}
-                >
-                  管理角色
-                  <ChevronRight size={12} />
-                </button>
-              </div>
+              <nav className="production-steps" aria-label="章节制作步骤">
+                <button onClick={()=>setModal('chapter')}><span>1</span>导入文字</button>
+                <button className={panelMode==='analysis'?'active':''} onClick={()=>{setPanelMode('analysis');if(window.innerWidth<1216)setInspectorOpen(true);}}><span>2</span>AI准备</button>
+                <button className={panelMode==='settings'?'active':''} onClick={()=>{setPanelMode('settings');setInspectorOpen(false);}}><span>3</span>试听与修改</button>
+                <button onClick={()=>setModal('export')}><span>4</span>导出成品</button>
+                <div className="step-progress"><span>{ready}/{total} 声音就绪</span><progress max={total||1} value={ready} aria-label="声音准备进度"/></div>
+              </nav>
               {locked && (
                 <div className="task-banner" role="status">
                   <AudioLines size={17} />
                   <div>
                     <strong>
-                      {job.kind === "generate"
+                      {["generate","unit-generate"].includes(job.kind)
                         ? "正在生成配音"
                         : job.kind === "master"
                           ? chapter.coverage.valid ? "正在准备整章试听" : "正在准备当前剧本试听"
@@ -846,9 +797,10 @@ export default function App() {
                       · 本章暂时只读，可前往其他章节
                     </span>
                   </div>
+                  {job.kind === "master" && pendingPlay.current && <button className="text-button" onClick={()=>{pendingPlay.current=null;pendingPlaySnapshot.current=null;setNotice("已取消准备完成后自动播放，试听文件仍会保留。");}}>取消自动播放</button>}
                   <button
                     className="button small"
-                    disabled={job.stop || job.kind !== "generate"}
+                    disabled={job.stop || !["generate","unit-generate"].includes(job.kind)}
                     onClick={() =>
                       run(() => mutate("job.stop", { id: job.id }))
                     }
@@ -889,10 +841,16 @@ export default function App() {
                       />
                     </div>
                   </div>
+                  <div className="creation-tools" role="group" aria-label="创作与显示">
+                    <button className="button small" disabled={locked||state?.settings.features?.groups===false} onClick={()=>{if(checked.length<2){setNotice("勾选两条或更多连续对白，再点一起演绎。");return;}openUnit("create");}}><Users size={15}/>一起演绎</button>
+                    <button className="button small" disabled={locked||!selectedUnit||state?.settings.features?.scenes===false} onClick={()=>selectedUnit&&openUnit(selectedUnit.id,"scene")}><AudioLines size={15}/>声音背景</button>
+                    <button className="text-button" onClick={()=>openUnit("list")}>历史与版本</button>
+                    <details className="workspace-more"><summary>更多</summary><div><button onClick={()=>setModal("source")}>查看原文</button><button onClick={()=>setModal("manual")}>添加台词</button><button onClick={()=>setModal("roles")}>角色资料</button><button onClick={()=>{const value=density==="compact"?"comfortable":"compact";setDensity(value);localStorage.setItem("reading-density",value);}}>切换{density==="compact"?"舒适":"紧凑"}密度</button><label>正文字号<input aria-label="正文字号" type="range" min="17" max="34" value={readingSize} onChange={e=>{setReadingSize(Number(e.target.value));localStorage.setItem("reading-size",e.target.value);}}/></label></div></details>
+                  </div>
                   {checked.length > 0 && (
                     <div className="selection-bar" role="group" aria-label="所选片段操作">
                       <span>已选 {checked.length} 条</span>
-                      <button className="text-button" disabled={locked || checked.length < 2 || state?.settings.features?.groups === false} onClick={()=>setUnitPanelId("create")}>创建连续对戏组 · 实验</button>
+                      <button className="text-button" disabled={locked || checked.length < 2 || state?.settings.features?.groups === false} onClick={()=>openUnit("create")}>一起演绎</button>
                       <button
                         className="text-button"
                         disabled={locked}
@@ -925,7 +883,7 @@ export default function App() {
                       </button>
                     </div>
                   )}
-                  <button className="text-button" onClick={()=>setUnitPanelId("list")}>对戏组与声音版本</button>
+
                   {!!chapter.arrangementIssues?.length && <p className="error-inline" role="alert">当前编排需修复：{chapter.arrangementIssues.join("；")}。请打开对戏组与声音版本处理后，再准备整章试听或导出。</p>}
                   <div className="script-column-head">
                     <input
@@ -969,8 +927,10 @@ export default function App() {
                           id={"segment-" + s.id}
                           data-group-playing={currentMembers.includes(s.id)}
                           key={s.id}
+                          data-group-id={grouped?.id || ""}
                           className={`script-row ${selected === s.id ? "selected" : ""} ${currentSegment === s.id ? "playing" : ""} ${s.excluded ? "excluded" : ""}`}
                         >
+                          {grouped && grouped.members[0] === s.id && <button className="group-strip" onClick={()=>openUnit(grouped.id)}>一起演绎 · 第 {grouped.members.map(id=>(segments.find(s=>s.id===id)?.order??0)+1).join("、")} 条 · {grouped.mode === "scene"?"带声音背景":"对白干声"}<ChevronRight size={14}/></button>}
                           <div className="row-gutter">
                             <input
                               type="checkbox"
@@ -990,8 +950,8 @@ export default function App() {
                             className="row-content"
                             onClick={() => {
                               setSelected(s.id);
+                              setPanelMode("settings");
                               if (window.innerWidth < 1216) {
-                                setPanelMode("settings");
                                 setInspectorOpen(true);
                               }
                             }}
@@ -1049,6 +1009,7 @@ export default function App() {
                                   "queued",
                                 ].includes(s.latest) ? names[s.latest] : ""}</span>
                                 <div className="row-actions">
+                                  <button className="icon" aria-label={`为第 ${s.order+1} 条选声音`} onClick={()=>openVoice(s.roleId,s.id)}><Users size={15}/></button>
                                   <button
                                     className="icon"
                                     aria-label={`试听第 ${s.order + 1} 条${rowStatus.validity === "stale" ? "旧版" : ""}`}
@@ -1074,7 +1035,7 @@ export default function App() {
                                   >
                                     <Play size={14} />
                                   </button>
-                                  <button className="icon" aria-label={`重新生成第 ${s.order + 1} 条`} title={draftIds.includes(s.id) || hasDraft(s.id) ? "先保存或放弃本条草稿" : "使用已保存设置重新生成"} disabled={locked || busy || draftIds.includes(s.id) || hasDraft(s.id)} onClick={()=>void run(()=>generate([s.id]))}><RefreshCw size={14}/></button>
+                                  <button className="icon" aria-label={`重新生成第 ${s.order + 1} 条`} title="保存有效修改后，只重做受影响声音" disabled={locked || busy} onClick={()=>void run(()=>generate([s.id],false,{regenerate:true}))}><RefreshCw size={14}/></button>
                                   <button
                                     className="icon"
                                     aria-label={`检查通过第 ${s.order + 1} 条`}
@@ -1132,7 +1093,7 @@ export default function App() {
                     <span>
                       {visible.length} / {segments.length} 条
                     </span>
-                    <span>正文与表演指导分开保存</span>
+                    <span>有效修改自动保存 · 正文 {readingSize}px</span>
                   </div>
                 </section>
                 <aside className={`inspector ${panelMode === "analysis" ? "analysis-active" : ""}`}>
@@ -1272,6 +1233,7 @@ export default function App() {
             void run(async () => {
               await api("/jobs", {kind: "master", chapterId, revision: chapter.revision, commandId: crypto.randomUUID()});
               pendingPlay.current = chapterId;
+              pendingPlaySnapshot.current = {arrangement:chapter.arrangement,items:chapter.playbackItems};
               await refresh();
             });
           } else setError("音频无法播放，文件可能缺失或格式不受支持。请恢复文件或重新生成本条。");
@@ -1306,7 +1268,7 @@ export default function App() {
           }
         }}
       />
-      {unitPanelId === "create" && chapter && <CreateGroup chapter={chapter} ids={checked} roles={roles} enabled={!locked && state?.settings.features?.groups !== false} refresh={refresh} close={()=>setUnitPanelId(null)} open={openMember} created={(unit,warning)=>{
+      {unitPanelId === "create" && chapter && <CreateGroup chapter={chapter} ids={checked} roles={roles} enabled={!locked && state?.settings.features?.groups !== false} state={state||undefined} refresh={refresh} close={()=>setUnitPanelId(null)} open={openMember} created={(unit,warning)=>{
         if(chapterRef.current !== unit.chapterId)return;
         setChapter(c=>c && c.id === unit.chapterId ? {...c,revision:unit.chapterRevision || c.revision,units:[...(c.units || []).filter(u=>u.id !== unit.id),unit]} : c);
         setUnitPanelId(unit.id);
@@ -1319,37 +1281,16 @@ export default function App() {
         </button>)}
       </Dialog>}
       {unitPanelId && chapter && state && chapter.units?.find(u=>u.id === unitPanelId) && <UnitPanel key={unitPanelId} unit={chapter.units.find(u=>u.id === unitPanelId)!}
-        chapter={chapter} roles={roles} state={state} locked={locked} connected={connectionReady} refresh={refresh} close={()=>setUnitPanelId(null)} open={openMember}
+        initialMode={unitInitialMode} initialEventId={unitInitialEvent} chapter={chapter} roles={roles} state={state} locked={locked} connected={connectionReady} refresh={refresh} close={()=>setUnitPanelId(null)} open={openMember}
         play={(id,title,historical)=>{const unit=chapter.units!.find(u=>u.id === unitPanelId)!;const mode=unit.variants.scene.current === id ? "scene" : "dry";setCurrentMembers(unit.kind === "group" && !historical ? unit.members : []);
           void startPlay("audios",id,title,undefined,!!historical,historical ? undefined : {id:unit.id,mode,audioId:id,basis:unit.variants[mode].status.basis,state:unit.state});}}/>}
-      {generationConfirm && (
-        <Dialog
-          title="核对后重新生成"
-          onClose={() => setGenerationConfirm(null)}
-        >
-          <Form
-            label="确认并开始"
-            onSubmit={async (f) => {
-              if (f.get("confirm") !== "on")
-                throw new Error("请先核对并勾选确认");
-              await generate(generationConfirm.ids, generationConfirm.whole, {
-                confirmed: true,
-                retryUnknown: true,
-                resumeRoute: true,
-              });
-            }}
-          >
-            <p>
-              本次选择 {generationConfirm.ids.length}{" "}
-              条片段。结果不明的请求可能已经计费；重新发送可能再次计费。若接口曾暂停，请先检查权限和额度。
-            </p>
-            <label className="check-label">
-              <input type="checkbox" name="confirm" />
-              已核对，允许重新发送所选片段
-            </label>
-          </Form>
-        </Dialog>
-      )}
+      {generationPlan && chapter && <Dialog title="生成这次待办" presentation="sidepanel" onClose={()=>setGenerationPlan(null)} footer={<button className="button primary" disabled={busy||!grantId||(state?.settings.routeBlocked&&!generationPlan.resumeRoute)||(generationUnknown&&!generationPlan.retryUnknown)} onClick={()=>void run(submitGeneration)}>开始生成 {generationPlan.plan.audioRequests} 个声音</button>}>
+        <p className="task-panel-summary">本次覆盖 {generationPlan.plan.memberIds.length} 条台词，其中 {generationPlan.plan.units.filter(u=>u.reuse).length} 个已有声音直接复用；实际发送 {generationPlan.plan.audioRequests} 次音频请求。</p>
+        <div className="task-member-list">{generationPlan.plan.units.map(unit=><p key={unit.unitId}>{unit.members.length>1?'一起演绎':'单句'} · 第 {unit.members.map(id=>(segments.find(s=>s.id===id)?.order??0)+1).join('、')} 条 · {unit.mode==='scene'?'声音背景':'对白干声'} · {unit.reuse?'复用已有声音':'生成新声音'}</p>)}</div>
+        <TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="生成所列台词" steps={["unit-generate"]} model={state?.settings.model} requests={generationPlan.plan.audioRequests} voiceIds={[...new Set(segments.filter(s=>generationPlan.plan.memberIds.includes(s.id)).flatMap(s=>s.voiceId?[s.voiceId]:[]))]} onReady={setGrantId}/>
+        {generationUnknown&&<label className="check-label warning"><input type="checkbox" checked={generationPlan.retryUnknown} onChange={e=>setGenerationPlan({...generationPlan,retryUnknown:e.target.checked})}/>上次结果不明，可能已计费；明确再发送上述请求。</label>}
+        {state?.settings.routeBlocked&&<label className="check-label warning"><input type="checkbox" checked={generationPlan.resumeRoute} onChange={e=>setGenerationPlan({...generationPlan,resumeRoute:e.target.checked})}/>已核对接口权限与额度，恢复本次声音请求。</label>}
+      </Dialog>}
       {navOpen && (
         <Dialog title="项目与章节" onClose={() => setNavOpen(false)}>
           <div className="mobile-nav">{nav}</div>
@@ -1400,10 +1341,13 @@ export default function App() {
         <ImportChapter
           projectId={projectId}
           onClose={() => setModal(null)}
-          onCreated={async (id) => {
+          onCreated={async (id,prepare) => {
             pickChapter(id);
             setModal(null);
+            setPanelMode(prepare ? "analysis" : "settings");
+            if(prepare&&window.innerWidth<1216)setInspectorOpen(true);
             await refresh();
+            if(prepare)setNotice("原文已导入。选择AI协作方式和本章文本授权后，开始准备。");
           }}
         />
       )}
@@ -1488,6 +1432,7 @@ export default function App() {
       {rebindOpen && chapter && (
         <RebindDialog
           revision={chapter.revision}
+          roleVoices={chapter.roleVoices}
           rows={chapter.segments.filter((s) => checked.includes(s.id))}
           roles={roles}
           voices={voices}
@@ -1515,6 +1460,10 @@ export default function App() {
       {modal === "voices" && (
         <VoiceLibrary
           voices={voices}
+          projectId={projectId}
+          model={state?.settings.model}
+          initialCreate={voiceLibraryCreate}
+          initialSessionId={voiceLibrarySession}
           sessions={state?.voiceSessions || []}
           creationEnabled={state?.settings.features?.voiceCreation !== false}
           configured={!!state?.settings.configured}
@@ -1547,8 +1496,14 @@ export default function App() {
           locked={locked}
           onClose={() => setModal(null)}
           save={mutate}
+          onVoice={id=>openVoice(id)}
         />
       )}
+      {modal === "overview" && state && <ProjectOverview state={state} projectId={projectId} onClose={()=>setModal(null)} onPick={id=>{setModal(null);pickChapter(id);}} onImport={()=>setModal(projectId?'chapter':'project')} onHelp={()=>setModal('help')}/>}
+      {modal === "issues" && chapter && <IssueCenter chapter={chapter} roles={roles} voices={voices} onClose={()=>setModal(null)} onLocate={locate} onVoice={id=>openVoice(id)} onSource={()=>setModal('source')} onUnit={id=>openUnit(id)} onTasks={()=>setModal('tasks')} onAI={()=>{setModal(null);setPanelMode('analysis');if(window.innerWidth<1216)setInspectorOpen(true);}} onConfirm={async ids=>{await withSavedDrafts('chapter:'+chapter.id,ids.map(id=>'segment:'+id),async()=>{await mutate('segment.confirm',{ids,roleOnly:true,revision:draftScopeRevision('chapter:'+chapter.id,chapter.revision)});});}}/>}
+      {modal === "recovery" && state && <RecoveryCenter state={state} chapter={chapter} onClose={()=>setModal(null)} onRecovered={(_id,target)=>{setModal(null);recoveryTarget.current=target;setDraftSignal(n=>n+1);const targetChapter=target.chapterId || (target.projectId&&target.projectId!==projectId?state.chapters.filter(c=>c.projectId===target.projectId).sort((a,b)=>b.order-a.order)[0]?.id:undefined);if(targetChapter&&targetChapter!==chapterId){recoveryTarget.current={...target,chapterId:targetChapter};pickChapter(targetChapter);}else setDraftSignal(n=>n+1);}}/>}
+      {modal === "help" && <QuickHelp configured={!!state?.settings.configured} onClose={()=>setModal(null)} onDemo={playDemo} onImport={()=>setModal(projectId?'chapter':'project')}/>}
+      {voiceTarget && chapter && state && <VoicePicker key={chapter.id+':'+voiceTarget.roleId+':'+voiceTarget.segmentId} state={state} chapter={chapter} roles={roles} initialTarget={voiceTarget} onClose={()=>setVoiceTarget(null)} onRefresh={refresh} playingId={playing?player?.id:undefined} play={(kind,id,title)=>void startPlay(kind,id,title,undefined,true)} onUsed={()=>{setVoiceTarget(null);setNotice('声音已应用，返回原处继续制作。');}}/>}
       {modal === "settings" && state && (
         <Dialog title="设置与连接" onClose={() => setModal(null)}>
           <div className="settings-status">
@@ -1579,10 +1534,6 @@ export default function App() {
               <dt>生成方式</dt>
               <dd>逐条干声 · 48 kHz</dd>
             </div>
-            <div>
-              <dt>保存位置</dt>
-              <dd>本地工作区</dd>
-            </div>
           </dl>
           <p className="hint">
             密钥只由本地服务读取。生成会按服务商规则计费；超时结果不明时不会自动重试。
@@ -1592,6 +1543,12 @@ export default function App() {
               接口因共享错误暂停。请检查额度和配置后，在任务记录中重新发起。
             </p>
           )}
+          <WorkspaceLocation directory={state.settings.workspaceDirectory} projectCount={state.projects.length} projectName={state.projects.find(p => p.id === projectId)?.name} projectFolders={state.settings.projectFolders} onMoved={async () => {
+            audio.current?.pause();
+            setPlayer(null);
+            setPlaying(false);
+            await refresh();
+          }} />
           <div className="section-rule">
             <h3>增强功能</h3><p className="hint">关闭只停止新建和生成，已有候选、对戏组、场景版本仍可查看、恢复和本地切换。</p>
             {([["voiceCreation","声音创建"],["groups","多人干声对戏 · 实验"],["scenes","场景生成 · 实验"]] as const).map(([key,label])=><label className="check-label" key={key}>
@@ -1644,8 +1601,7 @@ export default function App() {
             <h3>项目数据</h3>
             <p className="hint">
               关闭网页不会停止后台任务；关闭终端或电脑可能中断工作。终端按 Ctrl+C 会停止后续派发并等待在途任务结束。
-              关闭本地服务后备份 data
-              文件夹，包含数据库、参考声音和成品文件。恢复时使用新目录，避免覆盖原数据。
+              关闭本地服务后备份上方显示的整个工作区目录，包含数据库、参考声音和成品文件。恢复时使用新目录，避免覆盖原数据。
             </p>
           </div>
         </Dialog>
@@ -1731,6 +1687,53 @@ export default function App() {
   );
 }
 
+/* Hallmark · component: workspace location · theme: existing Ardot tokens
+ * pre-emit critique: P4 H4 E4 S5 R4 V4 */
+function WorkspaceLocation({ directory, projectCount, projectName, projectFolders, onMoved }: {
+  directory: string; projectCount: number; projectName?: string; projectFolders: boolean; onMoved: () => Promise<void>;
+}) {
+  const [selected, setSelected] = useState('');
+  const [choosing, setChoosing] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  const [source, setSource] = useState(directory);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState('');
+  return <section className="section-rule workspace-location">
+    <div className="workspace-location-heading"><h3>项目保存位置</h3><span className="hint">{projectCount} 个项目</span></div>
+    <p className="workspace-path">{directory || '请重启本地服务以读取实际路径'}</p>
+    {projectFolders && projectName && <p className="hint">当前项目文件夹：<span className="workspace-path-inline">{projectName}/</span></p>}
+    <p className="hint">每个项目以项目名称建立独立文件夹，存放音频和成品。正文、角色和任务统一保存在总目录的数据库中，音色库共用；完整备份请复制整个总目录。</p>
+    <div className="workspace-location-actions">
+      <button className="button secondary" disabled={!directory} onClick={async () => {
+        setCopyError('');
+        try { await navigator.clipboard.writeText(directory); setCopied(true); }
+        catch { setCopyError('复制失败，请选中上方路径手动复制。'); }
+      }}>{copied ? '路径已复制' : '复制路径'}</button>
+      <button className="button secondary" disabled={!directory || choosing || migrating} onClick={async () => {
+        setCopyError(''); setChoosing(true);
+        try {
+          const result = await api<{directory: string | null}>('/workspace/choose', {});
+          if (result.directory) { setSource(directory); setSelected(result.directory); }
+        } catch (error) { setCopyError((error as Error).message); }
+        finally { setChoosing(false); }
+      }}>{choosing ? '请在窗口中选择…' : selected ? '重新选择文件夹' : '更改位置'}</button>
+    </div>
+    {copyError && <p className="error-inline" role="alert">{copyError}</p>}
+    {selected && <Form key={selected} label="迁移全部项目" busy={choosing || selected === directory} successMessage="迁移完成，已使用新位置。原目录保留，后续修改仅保存到新位置。" onSubmit={async () => {
+      setMigrating(true);
+      try {
+        const result = await api<{directory: string}>('/workspace/move', { source, directory: selected });
+        setSource(result.directory); setCopied(false); await onMoved();
+      } finally { setMigrating(false); }
+    }}>
+      <p className="hint">已选择的项目总目录</p>
+      <p className="workspace-path">{selected}</p>
+      {selected === directory && <p className="hint">这是当前保存位置，无需迁移。</p>}
+      <p className="hint">将迁移本工作区全部 {projectCount} 个项目、共用音色库和历史音频。请先保存编辑并停止试听；有任务进行时不能迁移。旧目录保留，下次双击启动使用新位置。</p>
+    </Form>}
+  </section>;
+}
+
 function RenameProject({ project, save, onClose }: { project: Project; save: (a: string, p: Record<string, unknown>) => Promise<unknown>; onClose: () => void }) {
   const [base] = useState(project);
   return <Dialog title="重命名项目" onClose={onClose}>
@@ -1751,8 +1754,9 @@ function ImportChapter({
 }: {
   projectId: string;
   onClose: () => void;
-  onCreated: (id: string) => Promise<void>;
+  onCreated: (id: string, prepare?:boolean) => Promise<void>;
 }) {
+  const [prepare,setPrepare] = useState(true);
   const [source, setSource] = useState(""),
     [title, setTitle] = useState(""),
     [error, setError] = useState(""),
@@ -1762,18 +1766,18 @@ function ImportChapter({
   return (
     <Dialog title="导入章节" onClose={onClose} wide>
       <Form
-        label="导入并按句拆分"
+        label={prepare ? "导入并进入AI准备" : "仅导入并本地分段"}
         onSubmit={async () => {
           if (!source.trim()) throw new Error("请先选择文件或粘贴原文");
           const c = await action<{ id: string }>("chapter.create", {
             projectId,
-            title,
+            title: title.trim() || "新章节",
             source,
             importedSource: imported?.text || source,
             sourceFilename: imported?.name,
-            segment: true,
+            segment: !prepare,
           });
-          await onCreated(c.id);
+          await onCreated(c.id,prepare);
         }}
       >
         <label className="upload-zone">
@@ -1809,7 +1813,7 @@ function ImportChapter({
         </Field>
         <Field
           label="原文预览"
-          hint="也可以直接粘贴文字。初始分段默认归旁白且待确认，不自动判断对白人物。"
+          hint="原文完整保留，不润色正文。AI准备会识别分段和角色。"
         >
           <textarea
             value={source}
@@ -1818,6 +1822,8 @@ function ImportChapter({
             placeholder="在这里粘贴本章原文"
           />
         </Field>
+        <label className="check-label"><input type="checkbox" checked={prepare} onChange={e=>setPrepare(e.target.checked)}/>导入后进入AI准备</label>
+        <p className="hint">取消时仅做本地分段，所有新台词等待角色与声音核对，不产生API费用。</p>
         {error && <p className="error-inline">{error}</p>}
         <div className="source-summary">
           <span>{Array.from(source).length.toLocaleString()} 字符</span>
@@ -1829,6 +1835,10 @@ function ImportChapter({
 }
 
 function VoiceLibrary({
+  projectId,
+  model,
+  initialCreate=false,
+  initialSessionId,
   voices,
   sessions,
   creationEnabled,
@@ -1843,6 +1853,10 @@ function VoiceLibrary({
   onRefresh,
   play,
 }: {
+  projectId?:string;
+  model?:string;
+  initialCreate?:boolean;
+  initialSessionId?:string;
   voices: Voice[];
   sessions: VoiceSession[];
   creationEnabled: boolean;
@@ -1863,8 +1877,11 @@ function VoiceLibrary({
   const [deleting, setDeleting] = useState<Voice | null>(null);
   const [libraryError, setLibraryError] = useState("");
   const [testCommand, setTestCommand] = useState(crypto.randomUUID());
-  const [accepted, setAccepted] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [uploadId,setUploadId] = useState(crypto.randomUUID());
+  const [testGrant,setTestGrant] = useState<string|null>(null);
+  const [testRetry,setTestRetry] = useState(false);
+  const [testResume,setTestResume] = useState(false);
+  const [creating, setCreating] = useState(initialCreate);
   const [upload, setUpload] = useState(false),
     [file, setFile] = useState<File | null>(null),
     [query, setQuery] = useState("");
@@ -1888,21 +1905,27 @@ function VoiceLibrary({
       )}
       {creating ? <>
         <button className="text-button" onClick={()=>setCreating(false)}>返回参考音色列表</button>
-        <VoiceCreation sessions={sessions} voices={voices} jobs={jobs} enabled={creationEnabled} configured={configured} audioTools={audioTools}
+        <VoiceCreation initialSessionId={initialSessionId} projectId={projectId} model={model} sessions={sessions} voices={voices} jobs={jobs} enabled={creationEnabled} configured={configured} audioTools={audioTools}
           routeBlocked={routeBlocked} playingId={playingId} play={(id, title)=>playSample({id, sampleAudioId:id, name:title} as Voice)} refresh={onRefresh} bind={onBind}/>
       </> : testing ? (
         <Form
           label="生成测试样音"
           onSubmit={async (f) => {
-            if (!accepted) throw new Error("请先确认本次付费试音");
+            if(!testGrant||!projectId)throw new Error("请先允许当前项目的试音范围");
+            const unknown=jobs.some(j=>j.voiceId===testing.id&&j.status==='unknown');
+            if(unknown&&!testRetry)throw new Error("上次结果不明，请核对后明确是否再次发送");
+            if(routeBlocked&&!testResume)throw new Error("声音接口已暂停，请核对后明确恢复本次请求");
             await api("/jobs", {
               kind: "voice-test",
               voiceId: testing.id,
               entityRevision: testing.revision ?? 1,
               text: f.get("text"),
               commandId: testCommand,
-              retryUnknown: true,
-              resumeRoute: true,
+              projectId,
+              grantId:testGrant,
+              requireGrant:true,
+              ...(testRetry?{retryUnknown:true}:{}),
+              ...(testResume?{resumeRoute:true}:{}),
             });
             await onRefresh();
             setTesting(null);
@@ -1920,18 +1943,9 @@ function VoiceLibrary({
               rows={4}
             />
           </Field>
-          <p className="hint">
-            将试音正文和这份参考录音发送至配音服务，产生一次调用费用。若此前结果不明，重试可能重复计费。
-            {routeBlocked && " 本次提交也会重新启用已暂停的音频接口。"}
-          </p>
-          <label className="check-label">
-            <input
-              type="checkbox"
-              checked={accepted}
-              onChange={(e) => setAccepted(e.target.checked)}
-            />
-            我已确认，开始付费试音
-          </label>
+          {projectId?<TaskAuthorization projectId={projectId} label="测试所选声音" steps={["voice-test"]} model={model} voiceIds={[testing.id]} onReady={setTestGrant}/>:<p className="warning">先选择项目，再生成测试样音。</p>}
+          {jobs.some(j=>j.voiceId===testing.id&&j.status==='unknown')&&<label className="check-label warning"><input type="checkbox" checked={testRetry} onChange={e=>setTestRetry(e.target.checked)}/>上次结果不明，可能已计费；本次明确再发送一次。</label>}
+          {routeBlocked&&<label className="check-label warning"><input type="checkbox" checked={testResume} onChange={e=>setTestResume(e.target.checked)}/>已检查接口与额度，恢复本次声音请求。</label>}
           <button
             type="button"
             className="text-button"
@@ -1952,6 +1966,7 @@ function VoiceLibrary({
               r.readAsDataURL(file);
             });
             await api("/voices", {
+              uploadId,
               name: f.get("name"),
               filename: file.name,
               data,
@@ -1959,10 +1974,11 @@ function VoiceLibrary({
             await onRefresh();
             setUpload(false);
             setFile(null);
+            setUploadId(crypto.randomUUID());
           }}
         >
           <Field label="音色名称">
-            <input name="name" placeholder="例如：沉稳旁白" />
+            <input name="name" placeholder="例如：沉稳旁白" onChange={()=>setUploadId(crypto.randomUUID())}/>
           </Field>
           <label className="upload-zone">
             <Upload size={25} />
@@ -1971,7 +1987,7 @@ function VoiceLibrary({
             <input
               type="file"
               accept=".wav,.mp3"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              onChange={(e) => {setFile(e.target.files?.[0] || null);setUploadId(crypto.randomUUID());}}
             />
           </label>
           <button
@@ -2058,7 +2074,7 @@ function VoiceLibrary({
                         }
                         onClick={() => {
                           setTesting(v);
-                          setAccepted(false);
+                          setTestGrant(null);setTestRetry(false);setTestResume(false);
                           setTestCommand(crypto.randomUUID());
                         }}
                       >
@@ -2192,9 +2208,11 @@ function Roles({
   locked,
   onClose,
   save,
+  onVoice,
 }: {
   roles: Role[];
   voices: Voice[];
+  onVoice?: (id:string)=>void;
   projectId: string;
   chapter: ChapterDetail | null;
   chapters: State["chapters"];
@@ -2289,6 +2307,7 @@ function Roles({
                   资料已更新，当前未保存的输入仍保留。请核对后重新编辑。
                   <button type="button" className="text-button" onClick={() => { setEditing({ role: roles.find(r => r.id === role.id)!, chapter: currentChapter }); setApplyDefault(false); }}>载入最新资料（放弃本页未保存修改）</button>
                 </div>}
+                <section className="role-voice-primary"><h3>角色声音</h3><p>{voices.find(v=>v.id===role.voiceId)?.name||"还没有选择声音"}</p>{onVoice&&<button type="button" className="button" onClick={()=>onVoice(role.id)}>试听并选声音</button>}</section>
                 <Field label="显示名称">
                   <input name="name" defaultValue={role.name} />
                 </Field>
@@ -2333,7 +2352,7 @@ function Roles({
                     </Field>
                   </>
                 )}
-                <VoiceField voices={voices} initial={role.voiceId || ""} />
+                <details><summary>未来新增台词的角色默认声音</summary><VoiceField voices={voices} initial={role.voiceId || ""} /><p className="hint">这里修改项目默认；日常换声请使用上方“试听并选声音”，只改当前章。</p></details>
                 {!role.narrator && (
                   <label className="check-label">
                     <input
@@ -2435,6 +2454,7 @@ function Editor({
   run,
   generate,
   onRoles,
+  onVoice,
   unit,
   onUnit,
 }: {
@@ -2450,105 +2470,42 @@ function Editor({
   run: (fn: () => Promise<unknown>) => Promise<void>;
   generate: (ids: string[]) => Promise<void>;
   onRoles: () => void;
+  onVoice?: (roleId?:string,segmentId?:string)=>void;
   unit?: GenerationUnit;
   onUnit: () => void;
 }) {
   const enhancedUnit = unit && (unit.kind === "group" || unit.mode === "scene") ? unit : null;
   const activeVariant = enhancedUnit?.variants[enhancedUnit.mode];
-  const cached = (() => {
-    try {
-      return readDraft<Segment>(s.id);
-    } catch {
-      return null;
-    }
-  })();
-  const [draft, setDraft] = useState<Segment>(cached?.draft || { ...s }),
-    [revision, setRevision] = useState<number>(
-      cached?.revision || chapter.revision,
-    ),
-    [dirty, setDirty] = useState(!!cached),
-    [tab, setTab] = useState("settings"),
-    [split, setSplit] = useState(false),
-    [offset, setOffset] = useState(1),
-    [merge, setMerge] = useState(false),
-    [restore, setRestore] = useState<string | null>(null),
-    [templateOpen,setTemplateOpen] = useState(false),
-    [draftList, setDraftList] = useState<DraftRecord<Segment>[] | null>(null),
-    [saving, setSaving] = useState(false);
-  const textarea = useRef<HTMLTextAreaElement>(null);
-  const draftRef = useRef({draft, revision, dirty});
-  draftRef.current = {draft, revision, dirty};
+  const controller = useObjectDraft("segment", s.id, s, chapter.revision, {
+    legacyRaw:true, scope:"chapter:" + chapter.id, chapterRevision:chapter.revision,
+    dependencies:["segment:" + s.id, "role:" + s.roleId, ...(unit?.kind === "group" ? ["unit:" + unit.id] : [])],
+    changes:["segment:" + s.id, ...(unit?.kind === "group" ? ["unit:" + unit.id] : [])],
+    coupled:[["roleId","voiceId","voiceSource","roleConfirmed","identityConfirmed"]], locked,
+    validate:value=>unit?.kind === "group" && value.excluded ? "先取消这段共同演绎，再选择这句不朗读。" : speechDraftProblem(value),
+    persist:async(value, expected, context)=>{
+      const payload:Record<string,unknown>={chapterId:chapter.id,id:s.id,revision:context.chapterRevision ?? expected,autosave:true,
+        text:value.text,performance:value.performance,type:value.type,roleConfirmed:value.roleConfirmed,identityConfirmed:value.identityConfirmed,
+        excluded:value.excluded,config:Object.fromEntries(Object.entries(value.config).map(([key,number])=>[key,Number(number)]))};
+      if(value.roleId !== s.roleId)payload.roleId=value.roleId;
+      if(value.voiceSource === "override" && (value.voiceId !== s.voiceId || s.voiceSource !== "override"))payload.voiceId=value.voiceId;
+      const saved=await saveAction<Segment & {chapterRevision:number}>("segment.update",payload,context.operationId,context.replay);
+      return {value:saved,revision:saved.chapterRevision,chapterRevision:saved.chapterRevision};
+    },
+  });
+  const {draft,base:revision,dirty,saving}=controller;
+  const [tab,setTab]=useState("settings"), [split,setSplit]=useState(false), [offset,setOffset]=useState(1),
+    [merge,setMerge]=useState(false), [restore,setRestore]=useState<string|null>(null), [templateOpen,setTemplateOpen]=useState(false);
+  const textarea=useRef<HTMLTextAreaElement>(null);
   useEffect(()=>onDraftChange(s.id,dirty),[s.id,dirty,onDraftChange]);
-  useEffect(() => {
-    const onSaved = (event: Event) => {
-      const detail = (event as CustomEvent<{id: string; revision: number | null; submitted: string; savedRevision: number}>).detail;
-      if (detail.id !== s.id) return;
-      const current = draftRef.current;
-      if (!current.dirty) return;
-      if (JSON.stringify({draft: current.draft, revision: current.revision}) === detail.submitted) {
-        if (detail.revision === null) setDirty(false);
-        else setRevision(detail.revision);
-      } else {
-        const nextRevision = current.revision === JSON.parse(detail.submitted).revision ? detail.savedRevision : current.revision;
-        writeDraft(s.id, current.draft, nextRevision);
-        onDraftChange(s.id, true);
-        setRevision(nextRevision);
-      }
-    };
-    window.addEventListener("workbench-draft-saved", onSaved);
-    return () => window.removeEventListener("workbench-draft-saved", onSaved);
-  }, [s.id, onDraftChange]);
-  useEffect(() => {
-    if (!dirty) {
-      setDraft({ ...s });
-      setRevision(chapter.revision);
-    }
-  }, [s, chapter.revision, dirty]);
-  useEffect(() => {
-    if (dirty)
-      writeDraft(s.id, draft, revision);
-
-  }, [draft, revision, dirty, s.id]);
-  const edit = (p: Partial<Segment>) => {
-    onDraftChange(s.id,true);
-    setDraft((prev) => ({ ...prev, ...p }));
-    setDirty(true);
-  };
-  const next = chapter.segments.find((x) => x.order === s.order + 1);
-  const saveDraft = async () => {
-    if (saving) return;
-    setSaving(true);
-    try {
-    const submitted = JSON.stringify({draft, revision});
-    const payload: Record<string, unknown> = {
-      id: s.id,
-      revision,
-      text: draft.text,
-      performance: draft.performance,
-      type: draft.type,
-      roleConfirmed: draft.roleConfirmed,
-      identityConfirmed: draft.identityConfirmed,
-      excluded: draft.excluded,
-      config: draft.config,
-    };
-    if (draft.roleId !== s.roleId) payload.roleId = draft.roleId;
-    if (
-      draft.voiceSource === "override" &&
-      (draft.voiceId !== s.voiceId || s.voiceSource !== "override")
-    )
-      payload.voiceId = draft.voiceId;
-    const saved = await save("segment.update", payload) as { chapterRevision: number };
-    const remaining = finishDraftSave<Segment>(s.id, submitted, saved.chapterRevision);
-    onDraftChange(s.id, !!remaining);
-    window.dispatchEvent(new CustomEvent("workbench-draft-saved", {detail: {id: s.id, revision: remaining?.revision ?? null, submitted, savedRevision: saved.chapterRevision}}));
-    } finally { setSaving(false); }
-  };
+  const edit=controller.edit;
+  const next=chapter.segments.find(x=>x.order === s.order+1);
+  const saveDraft=()=>controller.flush();
   return (
     <>
       <div className="inspector-head">
         <strong>片段设置</strong>
         <span>第 {s.order + 1} 条</span>
-        <button className="text-button" onClick={() => run(async () => setDraftList(await listDrafts<Segment>(s.id)))}>查看本机草稿</button>
+        {onVoice && <button className="button small" disabled={locked || controller.frozen} onClick={()=>onVoice(draft.roleId,s.id)}>选声音</button>}
       </div>
       {unit && <div className="inspector-section"><button className="text-button" onClick={onUnit}>打开{unit.kind === "group" ? "对戏组" : "单条"}干声 / 场景版本</button>{unit.kind === "group" && <p className="hint">本条属于活动对戏组，修改将影响整组。结构编辑或排除前先解除分组。</p>}</div>}
       <div className="inspector-tabs tabs">
@@ -2573,13 +2530,13 @@ function Editor({
               <div className="section-heading">
                 <h3>角色与声音</h3>
                 <button className="text-button" onClick={onRoles}>
-                  管理
+                  角色资料
                 </button>
               </div>
               <Field label="朗读角色">
                 <Select
                   label="朗读角色"
-                  disabled={locked}
+                  disabled={locked || controller.frozen}
                   value={draft.roleId}
                   options={roles
                     .filter((r) => !r.archived || r.id === draft.roleId)
@@ -2590,7 +2547,7 @@ function Editor({
                       roleId,
                       roleConfirmed: true,
                       ...(draft.voiceSource === "default"
-                        ? { voiceId: r.voiceId }
+                        ? { voiceId: Object.hasOwn(chapter.roleVoices||{},r.id)?chapter.roleVoices?.[r.id]||null:r.voiceId }
                         : { identityConfirmed: false }),
                     });
                   }}
@@ -2599,7 +2556,7 @@ function Editor({
               <Field label="实际音色">
                 <Select
                   label="实际音色"
-                  disabled={locked}
+                  disabled={locked || controller.frozen}
                   value={draft.voiceId || ""}
                   options={[
                     { value: "", label: "请选择参考音色" },
@@ -2650,7 +2607,7 @@ function Editor({
               <Field label="内容类型">
                 <Select
                   label="内容类型"
-                  disabled={locked}
+                  disabled={locked || controller.frozen}
                   value={draft.type}
                   options={[
                     { value: "narration", label: "叙述旁白" },
@@ -2664,7 +2621,7 @@ function Editor({
                 <input
                   type="checkbox"
                   checked={draft.roleConfirmed && draft.identityConfirmed}
-                  disabled={locked}
+                  disabled={locked || controller.frozen}
                   onChange={(e) =>
                     edit({
                       roleConfirmed: e.target.checked,
@@ -2681,8 +2638,10 @@ function Editor({
                 aria-label="朗读正文"
                 ref={textarea}
                 rows={5}
-                disabled={locked}
+                disabled={locked || controller.frozen}
                 value={draft.text}
+                onCompositionStart={controller.compositionStart}
+                onCompositionEnd={controller.compositionEnd}
                 onChange={(e) => edit({ text: e.target.value })}
               />
               <div className="field-source">
@@ -2695,8 +2654,10 @@ function Editor({
               <textarea
                 aria-label="表演指导"
                 rows={4}
-                disabled={locked}
+                disabled={locked || controller.frozen}
                 value={draft.performance}
+                onCompositionStart={controller.compositionStart}
+                onCompositionEnd={controller.compositionEnd}
                 onChange={(e) => edit({ performance: e.target.value })}
                 placeholder="例如：压低声音，语速稍缓，句尾收轻"
               />
@@ -2704,7 +2665,7 @@ function Editor({
                 {["自然叙述", "平静克制", "轻声提醒", "坚定有力"].map((t) => (
                   <button
                     key={t}
-                    disabled={locked}
+                    disabled={locked || controller.frozen}
                     onClick={() => edit({ performance: t })}
                   >
                     {t}
@@ -2727,13 +2688,13 @@ function Editor({
                   <Field label={label} key={key}>
                     <input
                       type="number"
-                      disabled={locked}
+                      disabled={locked || controller.frozen}
                       value={draft.config[key as keyof typeof draft.config]}
                       onChange={(e) =>
                         edit({
                           config: {
                             ...draft.config,
-                            [key]: Number(e.target.value),
+                            [key]: e.target.value,
                           },
                         })
                       }
@@ -2745,7 +2706,7 @@ function Editor({
                 <input
                   type="checkbox"
                   checked={draft.excluded}
-                  disabled={locked}
+                  disabled={locked || controller.frozen}
                   onChange={(e) => edit({ excluded: e.target.checked })}
                 />
                 从朗读中排除，保留原文记录
@@ -2871,63 +2832,26 @@ function Editor({
             <pre className="prompt-text">{s.prompt}</pre>
           </div>
         )}
+      <ObjectDraftTools controller={controller} title="这一句" inline onError={message=>void run(async()=>{throw new Error(message);})} render={value=><><p className="original-excerpt">{value.text}</p><p className="hint">{value.performance}</p></>}/>
+      {dirty && !controller.error && speechDraftProblem(draft) && <p className="hint">{speechDraftProblem(draft)}</p>}
       </div>
-      {dirty && (
-        <div className="draft-notice">
-          <span>
-            {revision !== chapter.revision
-              ? "正式剧本已更新，草稿仍保留。请核对后重新编辑。"
-              : "修改已暂存为本机草稿，尚未应用。"}
-          </span>
-          <button
-            className="text-button"
-            onClick={() => {
-              clearDraft(s.id);
-              setDirty(false);
-              setDraft({ ...s });
-              setRevision(chapter.revision);
-            }}
-          >
-            放弃草稿
-          </button>
-        </div>
-      )}
       <div className="inspector-actions">
         <button
           className="button"
           disabled={!dirty || locked || saving}
           onClick={() => run(saveDraft)}
         >
-          {saving ? "保存中…" : dirty ? "保存修改" : "已保存"}
+          {controller.label}
         </button>
         <button
           className="button primary"
-          disabled={dirty || locked || s.excluded}
-          onClick={() => run(() => generate([s.id]))}
+          disabled={locked || controller.frozen || draft.excluded}
+          onClick={() => run(() => withSavedDrafts("chapter:" + chapter.id,["segment:" + s.id],()=>generate([s.id])))}
         >
           <AudioLines size={15} />
           {unit?.kind === "group" ? "打开对戏组生成" : unit?.mode === "scene" ? "打开场景版本生成" : s.current ? "重新生成" : "生成本条"}
         </button>
       </div>
-      {draftList && <Dialog title="本机草稿" onClose={() => setDraftList(null)}>
-        <p className="hint">本页草稿请返回编辑区保存或放弃。其他活动页面的草稿由原页面处理；已关闭页面的草稿可逐份恢复或放弃。</p>
-        <button className="button small" onClick={() => run(async () => setDraftList(await listDrafts<Segment>(s.id)))}>刷新草稿列表</button>
-        {!draftList.length && <p>这条片段没有本机草稿。</p>}
-        {draftList.map((entry, i) => <section className="inspector-section" key={entry.key}>
-          <h3>草稿 {i + 1} · {entry.status === "current" ? "本页" : entry.status === "active" ? "其他活动页面" : "已关闭页面"}</h3>
-          <p className="original-excerpt">{entry.data.draft.text}</p>
-          <p>表演指导：{entry.data.draft.performance || "未填写"}</p>
-          <p className="hint">角色：{roles.find(r => r.id === entry.data.draft.roleId)?.name || "未绑定"} · 音色：{voices.find(v => v.id === entry.data.draft.voiceId)?.name || "未绑定"}</p>
-          <p className="hint">语速 {entry.data.draft.config.speech_rate} · 音调 {entry.data.draft.config.pitch_rate} · 音量 {entry.data.draft.config.loudness_rate}{entry.data.revision !== chapter.revision ? " · 正式剧本已更新，恢复后需核对" : ""}</p>
-          {entry.status === "orphan" && <div className="form-row">
-            <button className="button small" disabled={dirty || saving || locked} onClick={() => run(async () => {
-              const restored = await recoverDraft<Segment>(s.id, entry);
-              setDraft(restored.draft); setRevision(restored.revision); setDirty(true); onDraftChange(s.id, true); setDraftList(null);
-            })}>恢复到本页</button>
-            <button className="button small" onClick={() => run(async () => { await discardDraft(s.id, entry); setDraftList(await listDrafts<Segment>(s.id)); })}>放弃这份草稿</button>
-          </div>}
-        </section>)}
-      </Dialog>}
       {templateOpen && <TemplateDialog segment={s} chapter={chapter} templates={templates} save={save} onClose={()=>setTemplateOpen(false)}/>}
       {split && (
         <Dialog title="拆分片段" onClose={() => setSplit(false)}>
@@ -3173,17 +3097,19 @@ function ExportDialog({
         label="确认检查并导出"
         busy={!connectionReady || gap !== c.gap || !!c.arrangementIssues?.length}
         onSubmit={async () => {
-          await api("/jobs", {
+          await withSavedDrafts("chapter:"+c.id, undefined,async()=>{
+          const receipt=await submitOperation("export:"+c.id+":"+format,{
             kind: "export",
             chapterId: c.id,
             revision: confirmation.revision,
             arrangement: confirmation.arrangement,
-            commandId: crypto.randomUUID(),
             format,
             confirm: true,
             reviewItems: confirmation.reviewItems || confirmation.segments
               .filter((s) => !s.excluded)
               .map((s) => ({ id: s.id, audioId: s.current, basis: basis(s) })),
+          });
+          if(receipt.error)throw new Error(receipt.error);
           });
           await onRefresh();
           onClose();
@@ -3223,6 +3149,7 @@ function ExportDialog({
 
 function RebindDialog({
   revision,
+  roleVoices,
   rows,
   roles,
   voices,
@@ -3230,6 +3157,7 @@ function RebindDialog({
   onSave,
 }: {
   revision: number;
+  roleVoices?: Record<string,string|null>;
   rows: Segment[];
   roles: Role[];
   voices: Voice[];
@@ -3268,7 +3196,7 @@ function RebindDialog({
                 {voices.find(
                   (v) =>
                     v.id ===
-                    (s.voiceSource === "override" ? s.voiceId : role?.voiceId),
+                    (s.voiceSource === "override" ? s.voiceId : role&&Object.hasOwn(roleVoices||{},role.id)?roleVoices?.[role.id]:role?.voiceId),
                 )?.name || "待配置"}
                 {s.voiceSource === "override" ? " · 保留本条指定" : ""}
               </span>

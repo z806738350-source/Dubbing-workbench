@@ -15,6 +15,8 @@ import {
   inspect,
 } from "./audio.mjs";
 import { createAnalysis } from "./analysis.mjs";
+import { createExperience } from './experience.mjs';
+import { workspaceDirectory, workspaceConfig as defaultWorkspaceConfig, copyWorkspace, saveWorkspaceLocation, recoverProjectFolders, chooseWorkspaceDirectory } from './workspace.mjs';
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 if (existsSync(join(root, ".env.kunpo")))
@@ -36,11 +38,13 @@ export function settings() {
 }
 export async function startServer({
   port = Number(process.env.PORT || 4318),
-  directory = process.env.DATA_DIR || join(root, "data"),
+  directory = workspaceDirectory(),
   config = settings(),
+  workspaceConfig = defaultWorkspaceConfig,
 } = {}) {
+  directory = resolve(directory);
   await mkdir(directory, { recursive: true });
-  const runtime = join(directory, "runtime.json");
+  let runtime = join(directory, "runtime.json");
   if (existsSync(runtime)) {
     const { pid } = JSON.parse(await readFile(runtime, "utf8"));
     try {
@@ -54,12 +58,14 @@ export async function startServer({
   await writeFile(runtime, JSON.stringify({ pid: process.pid, port }), {
     flag: "wx",
   });
-  let store, domain, worker, analysis, audioTools;
+  let store, domain, worker, analysis, experience, audioTools;
   try {
     store = openStore(directory);
     domain = createDomain(store);
+    recoverProjectFolders(store);
     worker = createWorker(store, domain, config);
     analysis = createAnalysis(store, domain, config);
+    experience = createExperience(store,domain,worker,analysis,config);
     await worker.recover();
     analysis.recover();
     audioTools = await toolsAvailable();
@@ -93,6 +99,7 @@ export async function startServer({
     }
   }
   const referenceReads = new Map();
+  let activeRequests = 0, moving = false, closing = false, movePromise = null, choosingDirectory = false;
   async function serveFile(req, res, file, type) {
     const info = await stat(file);
     const headers = {
@@ -122,6 +129,7 @@ export async function startServer({
     }
   }
   const server = http.createServer(async (req, res) => {
+    let counted = false;
     try {
       const host = req.headers.host || "";
       if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host))
@@ -137,6 +145,51 @@ export async function startServer({
       )
         fail("跨站请求已拒绝", 403);
       const path = new URL(req.url, `http://${host}`).pathname;
+      if (moving || closing) fail('工作区正在迁移或停止，请稍后重试；未保存内容请保留', 503);
+      activeRequests++;
+      counted = true;
+      if (req.method === 'POST' && path === '/api/workspace/choose') {
+        if (choosingDirectory) fail('文件夹选择窗口已打开，请先完成选择', 409);
+        choosingDirectory = true;
+        try { return send(res, 200, { directory: await chooseWorkspaceDirectory() }); }
+        finally { choosingDirectory = false; }
+      }
+      if (req.method === 'POST' && path === '/api/workspace/move') {
+        const p = await body(req);
+        if (p.source !== directory) fail('保存位置已改变，请重新打开设置后再操作', 409);
+        if (activeRequests !== 1 || referenceReads.size || worker.running ||
+            store.all('jobs').some(j => ['queued', 'running'].includes(j.status)) ||
+            store.all('suggestions').some(s => s.status === 'running'))
+          fail('仍有任务或资料正在处理，请等任务结束、停止试听后再迁移', 409);
+        moving = true;
+        movePromise = (async () => {
+          await analysis.close();
+          const target = await copyWorkspace(store, p.directory);
+          let nextStore;
+          try {
+            await writeFile(join(target, 'runtime.json'), JSON.stringify({ pid: process.pid, port: server.address().port }), { flag: 'wx' });
+            nextStore = openStore(target);
+            const nextDomain = createDomain(nextStore), nextWorker = createWorker(nextStore, nextDomain, config), nextAnalysis = createAnalysis(nextStore, nextDomain, config);
+            await saveWorkspaceLocation(target, workspaceConfig);
+            worker.close();
+            analysis.stop();
+            store.close();
+            const oldRuntime = runtime;
+            directory = target;
+            runtime = join(target, 'runtime.json');
+            store = nextStore; domain = nextDomain; worker = nextWorker; analysis = nextAnalysis;
+            experience = createExperience(store,domain,worker,analysis,config);
+            await rm(oldRuntime, { force: true }).catch(() => console.warn('旧位置运行标记未能移除；原资料仍保留。'));
+            return { directory, previousDirectory: p.source };
+          } catch (error) {
+            nextStore?.close();
+            await rm(target, { recursive: true, force: true });
+            throw error;
+          }
+        })();
+        try { return send(res, 200, await movePromise); }
+        finally { moving = false; movePromise = null; }
+      }
       if (req.method === "GET" && path === "/api/state")
         return send(res, 200, {
           ...domain.snapshot(),
@@ -148,6 +201,8 @@ export async function startServer({
             routeBlocked: worker.routeBlocked,
             textModel: textModel(store),
             defaultGap: store.maybe("settings", "models")?.defaultGap ?? 0.5,
+            workspaceDirectory: directory,
+            projectFolders: !!store.maybe('settings', 'project-folders')?.enabled,
             features: domain.enhancement.features(),
             schemaVersion: 2,
             audioUsage: (() => { const u = store.maybe("settings", `audio-usage:${config.usageScope || "audio-calls-v1"}`); return { limit: u?.limit ?? config.callLimit, reserved: u?.reserved || 0, used: u?.used || 0 }; })(),
@@ -166,6 +221,11 @@ export async function startServer({
         return send(res, 200, store.all("attempts", path.split("/").pop()));
       if (req.method === "GET" && path.startsWith("/api/audio-record/"))
         return send(res, 200, store.get("audios", path.split("/").pop()));
+      if (req.method === 'GET' && /^\/api\/projects\/[^/]+\/experience$/.test(path)) return send(res,200,experience.project(path.split('/')[3]));
+      if (req.method === 'GET' && path.startsWith('/api/operations/')) return send(res,200,experience.get(decodeURIComponent(path.split('/').pop())));
+      if (req.method === 'POST' && path === '/api/operations/plan') return send(res,200,experience.plan(await body(req)));
+      if (req.method === 'POST' && path === '/api/operations') return send(res,200,await experience.run(await body(req)));
+      if (req.method === 'POST' && /^\/api\/experience\/(policy|grant|revoke|undo|unprotect)$/.test(path)) return send(res,200,experience[path.split('/').pop()](await body(req)));
       if (req.method === "POST" && path === "/api/enhancement-preview")
         return send(res, 200, domain.enhancement.preview(await body(req)));
       if (req.method === "POST" && path === "/api/voices/candidate")
@@ -182,6 +242,8 @@ export async function startServer({
         return send(res, 200, analysis.resume(await body(req)));
       if (req.method === "POST" && path === "/api/action") {
         const p = await body(req);
+        if (p.action === 'project.rename' && store.maybe('projects', p.id)?.folder && (activeRequests !== 1 || referenceReads.size))
+          fail('资料正在读取或保存，请稍后再改项目名称', 409);
         if (["segment.review", "unit.review", "unit.restore", "unit.select-result"].includes(p.action)) {
           if (!audioTools) fail("请先配置音频处理程序以核对文件");
           const a = store.get("audios", p.audioId);
@@ -203,6 +265,8 @@ export async function startServer({
       }
       if (req.method === "POST" && path === "/api/voices")
         return send(res, 200, await uploadVoice(store, await body(req)));
+      if (req.method === "GET" && /^\/api\/voices\/[^/]+$/.test(path))
+        return send(res,200,store.get('voices',decodeURIComponent(path.split('/').at(-1))));
       if (req.method === "POST" && path === "/api/jobs") {
         if (!audioTools) fail("没有找到 FFmpeg，请先配置音频处理程序");
         const result = await worker.submit(await body(req));
@@ -255,6 +319,8 @@ export async function startServer({
           ".css": "text/css",
           ".woff2": "font/woff2",
           ".svg": "image/svg+xml",
+          ".mp3": "audio/mpeg",
+          ".wav": "audio/wav",
         }[extname(target)] || "application/octet-stream",
       );
     } catch (e) {
@@ -267,9 +333,10 @@ export async function startServer({
               : "本地服务处理失败，请保留当前编辑并重试",
         });
       else res.destroy();
-    }
+    } finally { if (counted) activeRequests--; }
   });
   const interval = setInterval(() => {
+    if (moving || closing) return;
     void worker.tick();
     drainReferenceDeletes(store, referenceReads);
   }, 1000);
@@ -288,10 +355,12 @@ export async function startServer({
   }
   return {
     server,
-    store,
-    domain,
-    worker,
+    get store() { return store; },
+    get domain() { return domain; },
+    get worker() { return worker; },
     async close() {
+      closing = true;
+      if (movePromise) await movePromise.catch(() => {});
       worker.close();
       analysis.stop();
       clearInterval(interval);

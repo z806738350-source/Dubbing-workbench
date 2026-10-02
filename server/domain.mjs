@@ -1,10 +1,12 @@
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fail, same, text, uid } from "./store.mjs";
 import { storedAudioUnavailable } from "./audio.mjs";
 import { compile, templateOf, templateCatalog, listTemplates, listUnitTemplates } from "./templates.mjs";
+import { createProjectFolder, renameProjectFolder } from './workspace.mjs';
 export { compile } from "./templates.mjs";
 import { createEnhancement, defaultFeatures } from "./enhancement.mjs";
+import { configurationDecided, humanChanges, policyOf } from './experience.mjs';
 
 export const defaultConfig = templateOf("dry-v1").defaults;
 export const active = (j) => ["queued", "running"].includes(j.status);
@@ -222,7 +224,7 @@ export function createDomain(store) {
       type: "narration",
       roleConfirmed: source.kind === "manual",
       identityConfirmed: true,
-      voiceId: role.voiceId || null,
+      voiceId: roleVoice(c,role),
       voiceSource: "default",
       performance: "",
       config: { ...templateOf(templateCatalog.current).defaults },
@@ -237,6 +239,9 @@ export function createDomain(store) {
       latest: "none",
     };
   }
+  function roleVoice(c,role) {
+    return Object.hasOwn(c.roleVoices || {},role.id) ? c.roleVoices[role.id] : role.voiceId || null;
+  }
   function rebind(s, roleId) {
     const r = store.get("roles", roleId);
     if (r.archived) fail("请先恢复已归档角色");
@@ -244,7 +249,7 @@ export function createDomain(store) {
     s.roleId = r.id;
     s.roleConfirmed = true;
     if (s.voiceSource === "default") {
-      s.voiceId = r.voiceId;
+      s.voiceId = roleVoice(store.get('chapters',s.chapterId),r);
       s.identityConfirmed = true;
     } else s.identityConfirmed = false;
   }
@@ -332,7 +337,7 @@ export function createDomain(store) {
           const productionStatus = task ? (task.status === "queued" ? "排队中" : "制作中")
             : !rows.length ? "待整理" : !included.length ? "全已排除"
             : !coverage(c, rows).valid ? "待校对"
-            : included.some(s => !s.roleConfirmed || !s.identityConfirmed || !s.voiceId) ? "待确认"
+            : included.some(s => !configurationDecided(s) || !s.voiceId) ? "待确认"
             : included.some(s => s.latest === "unknown") ? "结果待核对"
             : statuses.some(s => s.validity === "missing") ? "待生成"
             : statuses.some(s => s.validity !== "matched") ? "待更新"
@@ -366,7 +371,7 @@ export function createDomain(store) {
       const reviewItems = included.map(s => ({id:s.id, audioId:s.current, basis:basisOf(s)}));
       const exportReady = included.length > 0 && coverage(c, segments).valid && included.every(s => {
         const status = segmentStatus(store, s);
-        return status.validity === "matched" && status.review === "passed" && s.roleConfirmed && s.identityConfirmed;
+        return status.validity === "matched" && status.review === "passed" && configurationDecided(s);
       });
       return {
         ...c,
@@ -387,7 +392,8 @@ export function createDomain(store) {
       };
     },
     mutate(action, p) {
-      return store.transaction(() => {
+      let undoFolder;
+      try { return store.transaction(() => {
         if (action !== "segment.update") enhancement.assertStructural(action, p);
         const apply = () => {
         if (action === "settings.update") {
@@ -424,6 +430,10 @@ export function createDomain(store) {
             contextRevision: 1,
             createdAt: new Date().toISOString(),
           };
+          if (store.maybe('settings', 'project-folders')?.enabled) {
+            createProjectFolder(store, project);
+            undoFolder = () => rmSync(join(store.directory, project.folder), { recursive: true, force: true });
+          }
           store.put("projects", project);
           store.put(
             "roles",
@@ -443,7 +453,9 @@ export function createDomain(store) {
         if (action === "project.rename") {
           const v = store.get("projects", p.id);
           checkEntityRevision(v, p.entityRevision);
-          v.name = text(p.name, "项目名称", 100).trim();
+          const name = text(p.name, "项目名称", 100).trim();
+          undoFolder = renameProjectFolder(store, v, name);
+          v.name = name;
           v.revision = (v.revision ?? 1) + 1;
           return store.put("projects", v);
         }
@@ -616,15 +628,23 @@ export function createDomain(store) {
             const c = p.chapterId ? editable(p.chapterId, p.revision) : null;
             if (c && c.projectId !== r.projectId)
               fail("角色和章节不属于同一项目");
-            r.voiceId = p.voiceId || null;
-            if (c && ((first && r.voiceId) || p.apply)) {
+            const chapterOnly = p.chapterOnly === true && !first;
+            if (chapterOnly && !c) fail('本章声音选择需要明确章节');
+            if (chapterOnly) c.roleVoices = {...c.roleVoices,[r.id]:p.voiceId || null};
+            else {
+              r.voiceId = p.voiceId || null;
+              if (c && p.apply && c.roleVoices) { c.roleVoices = {...c.roleVoices}; delete c.roleVoices[r.id]; }
+            }
+            const voiceId = chapterOnly ? p.voiceId || null : r.voiceId;
+            if (c && ((first && voiceId) || p.apply)) {
               for (const s of list(c.id))
                 if (
                   s.roleId === r.id &&
                   s.voiceSource !== "override" &&
                   (p.apply || !s.voiceId)
                 ) {
-                  s.voiceId = r.voiceId;
+                  s.voiceId = voiceId;
+                  if (p.identityChosen === true || policyOf(store,r.projectId).revision) s.identityConfirmed = true;
                   store.put("segments", s, c.id);
                 }
               touch(c, true, false);
@@ -772,7 +792,8 @@ export function createDomain(store) {
           if (rows.some((s) => s.chapterId !== c.id || s.retired))
             fail("所选片段已经变化", 409);
           for (const s of rows) {
-            s.roleConfirmed = s.identityConfirmed = true;
+            s.roleConfirmed = true;
+            if (p.roleOnly !== true) s.identityConfirmed = true;
             store.put("segments", s, c.id);
           }
           touch(c, true, false);
@@ -791,6 +812,7 @@ export function createDomain(store) {
           return s;
         }
         if (action === "segment.update") {
+          if (p.autosave && typeof p.text === 'string' && !p.text.trim() && p.excluded !== true) fail('正文为空，暂存内容尚未应用；请继续输入或明确选择不朗读');
           if (p.template !== undefined && p.template !== s.template) fail("请使用明确的模板切换操作");
           const wasExcluded = s.excluded;
           const allowed = [
@@ -812,7 +834,7 @@ export function createDomain(store) {
             s.identityConfirmed = true;
           }
           if (p.resetVoice) {
-            s.voiceId = store.get("roles", s.roleId).voiceId;
+            s.voiceId = roleVoice(c,store.get("roles", s.roleId));
             s.voiceSource = "default";
             s.identityConfirmed = true;
           }
@@ -1005,14 +1027,26 @@ export function createDomain(store) {
         const result = apply();
         enhancement.syncLegacy();
         return result;
-      });
+      }); } catch (error) { undoFolder?.(); throw error; }
     },
   };
-  enhancement = createEnhancement(store, { ...api, inputOf, basisOf, coverage, performanceIssues });
+  enhancement = createEnhancement(store, { ...api, inputOf, basisOf, reviewBasis, coverage, performanceIssues });
   api.enhancement = enhancement;
+  api.textModel = () => textModel(store);
+  api.roleVoice = roleVoice;
+  api.configurationDecided = configurationDecided;
   const originalMutate = api.mutate, originalSnapshot = api.snapshot, originalChapter = api.chapter;
-  api.mutate = (action, p) => /^(voice-session|voice-candidate|unit|event)\./.test(action)
-    ? store.transaction(() => enhancement.mutate(action, p)) : originalMutate(action, p);
+  api.mutate = (action, p) => store.transaction(() => {
+    const before = p.chapterId && (/^segment\./.test(action) || action === 'role.update') ? api.list(p.chapterId) : [];
+    const result = /^(voice-session|voice-candidate|unit|event)\./.test(action) ? enhancement.mutate(action,p) : originalMutate(action,p);
+    for (const previous of before) {
+      const current = store.get('segments',previous.id);
+      if (p.identityChosen !== true && !previous.decisions && !policyOf(store,store.get('chapters',current.chapterId).projectId).revision) continue;
+      if (humanChanges(previous,current,action,p)) store.put('segments',current,current.chapterId);
+    }
+    if (result.id && /^segment\./.test(action) && store.maybe('segments',result.id)) return {...store.get('segments',result.id),...(result.chapterRevision ? {chapterRevision:result.chapterRevision} : {})};
+    return result;
+  });
   api.snapshot = () => {
     enhancement.syncLegacy();
     const result = originalSnapshot();
@@ -1027,7 +1061,7 @@ export function createDomain(store) {
   api.chapter = id => {
     enhancement.syncLegacy();
     const result = originalChapter(id), { rows, issues: arrangementIssues } = enhancement.inspectArrangement(id), reviewItems = rows.map(r => ({ id: r.s.id, audioId: r.a?.id || null, basis: r.basis }));
-    const exportReady = !arrangementIssues.length && rows.length > 0 && result.coverage.valid && result.segments.filter(s => !s.excluded).every(s => s.roleConfirmed && s.identityConfirmed) && rows.every(r => r.validity === 'matched' && r.review === 'passed');
+    const exportReady = !arrangementIssues.length && rows.length > 0 && result.coverage.valid && result.segments.filter(s => !s.excluded).every(configurationDecided) && rows.every(r => r.validity === 'matched' && r.review === 'passed');
     const units = store.all('units', id).filter(u => u.state !== 'retired').map(enhancement.view);
     return { ...result, arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems: rows.map(r => ({ id: r.s.id, unitId: r.s.id, members: r.s.members, mode: r.s.mode, audioId: r.a?.id || null, basis: r.basis, validity: r.validity, review: r.review })), segments: result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, ...(group ? {groupId:group.id} : {}) }; }), exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && same(e.confirmation?.reviewItems, reviewItems) })) };
   };

@@ -297,3 +297,67 @@ test('SC02 非连续逐字依据片段保持分类，任一伪造片段及展示
   assert.throws(()=>edit('event.create',{...data,entityRevision:store.get('units',u.id).revision,evidence:{...evidence,quote:'展示另一句。'}}),/展示与逐字/);
   assert.equal(e.events(store.get('units',u.id)).length,1);
 });
+
+test('VS02 长章单条状态读取不为每个变体重复扫描全章，成员保护仍有效',t=>{
+  const {store,d,c,e}=setup(t,Array.from({length:305},(_,i)=>`第${i+1}句。`).join('\n'));
+  const rows=d.list(c.id),ids=rows.map(s=>s.id),all=store.all.bind(store);let scans=0;
+  t.mock.method(store,'all',(table,parent)=>{if(table==='segments')scans++;return all(table,parent);});
+  const chapter=d.chapter(c.id);
+  assert.ok(scans<=4,`一次章读取进行了${scans}次全章扫描`);
+  assert.deepEqual(chapter.playbackItems.flatMap(item=>item.members),ids);
+  assert.deepEqual(chapter.segments.map(s=>s.id),ids);assert.equal(chapter.coverage.valid,true);
+  assert.deepEqual(chapter.arrangementIssues,[]);assert.equal(chapter.units.length,305);
+  assert.ok(chapter.playbackItems.every(item=>item.validity==='missing'));
+  scans=0;assert.equal(d.snapshot().chapters.find(item=>item.id===c.id).productionStatus,'待生成');
+  assert.ok(scans<=4,`一次快照进行了${scans}次全章扫描`);
+  const segment=store.get('segments',ids[0]);
+  for(const patch of [{excluded:true},{retired:true},{chapterId:'another-chapter'},{text:'　'}]){
+    store.put('segments',{...segment,...patch},c.id);
+    assert.throws(()=>e.members(store.get('units',segment.id)),{status:409});
+  }
+});
+
+test('MR01/RG05 旧single干声审核缺model时统一读取，真实身份或设置变化仍待检查',t=>{
+  const {store,d,c,e,singleAudio}=setup(t,'旧版这一句。'),s=d.list(c.id)[0],audio=singleAudio(s,true);
+  delete s.model;delete s.review.basis.model;delete audio.input.model;
+  store.put('segments',s,c.id);store.put('audios',audio,c.id);e.syncLegacySegment(s);
+  for(const state of ['passed','rework','pending']){
+    s.review.state=state;store.put('segments',s,c.id);e.syncLegacySegment(s);
+    const before={segments:store.all('segments',c.id),units:store.all('units',c.id),audios:store.all('audios',c.id),chapter:store.get('chapters',c.id)};
+    const chapter=d.chapter(c.id),unit=chapter.units.find(u=>u.id===s.id);
+    assert.equal(chapter.segments[0].review,state);assert.equal(chapter.playbackItems[0].review,state);assert.equal(unit.variants.dry.status.review,state);
+    assert.equal(d.snapshot().chapters.find(row=>row.id===c.id).productionStatus,state==='passed'?'已检查':state==='rework'?'需返工':'待检查');
+    assert.deepEqual({segments:store.all('segments',c.id),units:store.all('units',c.id),audios:store.all('audios',c.id),chapter:store.get('chapters',c.id)},before);
+  }
+  s.review.state='passed';
+  for(const patch of [{text:'已改文字。'},{roleConfirmed:false},{identityConfirmed:false},{model:'different-model'}]){
+    store.put('segments',{...s,...patch},c.id);e.syncLegacySegment({...s,...patch});
+    const chapter=d.chapter(c.id);assert.equal(chapter.segments[0].review,'pending');assert.equal(chapter.playbackItems[0].review,'pending');
+  }
+  store.put('segments',s,c.id);e.syncLegacySegment(s);
+  const unit=store.get('units',s.id);unit.variants.dry.review.basis.model='different-model';store.put('units',unit,c.id);
+  assert.equal(e.status(unit,'dry').validity,'matched');assert.equal(e.status(unit,'dry').review,'pending');
+});
+
+test('MR01/RG03 显式恢复旧single干声沿原审核兼容，不覆盖当前返工决定',t=>{
+  const {store,d,c,e,singleAudio,mutateUnit}=setup(t,'旧版这一句。'),s=d.list(c.id)[0],old=singleAudio(s,true);
+  delete s.model;delete old.input.model;delete old.review.basis.model;store.put('audios',old,c.id);
+  const current=singleAudio(s);s.previous=old.id;s.approved=old.id;s.review=null;store.put('segments',s,c.id);e.syncLegacySegment(s);
+  const restored=mutateUnit('unit.restore',store.get('units',s.id),{mode:'dry',audioId:old.id});
+  assert.equal(restored.variants.dry.status.review,'passed');assert.equal(d.chapter(c.id).segments[0].review,'passed');
+  assert.equal(store.get('audios',old.id).review.state,'passed');assert.equal(Object.hasOwn(store.get('audios',old.id).review.basis,'model'),false);
+  s.current=current.id;s.previous=old.id;s.review={audioId:current.id,basis:basisOf(s),state:'rework'};store.put('segments',s,c.id);e.syncLegacySegment(s);
+  const rework=mutateUnit('unit.restore',store.get('units',s.id),{mode:'dry',audioId:old.id});
+  assert.equal(rework.variants.dry.status.review,'rework');assert.equal(d.chapter(c.id).segments[0].review,'rework');
+});
+
+test('RG05 group与scene审核仍严格匹配完整成员model，不套旧single兼容',t=>{
+  for(const mode of ['dry','scene']){
+    const {store,d,c,e,edit,complete,mutateUnit}=setup(t),rows=d.list(c.id);
+    const u=mode==='dry'?edit('unit.create',{ids:rows.slice(0,2).map(s=>s.id)}):store.get('units',rows[0].id),done=complete(u.id,mode);
+    mutateUnit('unit.review',store.get('units',u.id),{mode,audioId:done.audio.id,basis:e.basis(store.get('units',u.id),mode),state:'passed'});
+    const current=store.get('units',u.id);assert.equal(e.status(current,mode).review,'passed');
+    delete current.variants[mode].review.basis.members[0].model;store.put('units',current,c.id);
+    assert.equal(e.status(current,mode).validity,'matched');assert.equal(e.status(current,mode).review,'pending');
+  }
+});

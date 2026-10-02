@@ -25,10 +25,10 @@
   --font-body: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-display: var(--font-body);
   --font-mono: ui-monospace, SFMono-Regular, monospace;
-  --text-xs: 0.6875rem;
-  --text-sm: 0.8125rem;
+  --text-xs: 0.8125rem;
+  --text-sm: 0.875rem;
   --text-ui: 0.875rem;
-  --text-base: 1rem;
+  --text-base: 1.0625rem;
   --text-heading: 1.5rem;
   --space-2xs: 0.25rem;
   --space-xs: 0.5rem;

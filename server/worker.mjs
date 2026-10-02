@@ -2,7 +2,8 @@ import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import { existsSync, createWriteStream, statSync } from "node:fs";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { projectFile } from './workspace.mjs';
 import {
   active,
   basisOf,
@@ -17,6 +18,7 @@ import {
 import { buildMaster, exportMaster, inspect, validateStoredAudio } from "./audio.mjs";
 import { fail, same, uid } from "./store.mjs";
 import { templateCatalog, templateOf } from "./templates.mjs";
+import { configurationDecided, reserveGrant, settleGrant } from './experience.mjs';
 
 export function createWorker(store, domain, config) {
   if (config.callLimit !== undefined && (!Number.isSafeInteger(config.callLimit) || config.callLimit < 1)) fail("本地调用额度应为正整数");
@@ -52,7 +54,8 @@ export function createWorker(store, domain, config) {
     const meta = await inspect(file);
     if (meta.duration > 30 || !/^(wav|mp3)$/.test(meta.format)) fail("参考声音须为 WAV/MP3 且不超过 30 秒，本次未发送");
   }
-  function reserve(attempts) {
+  function reserve(attempts, p) {
+    reserveGrant(store,config,p,attempts);
     if (config.callLimit === undefined || !attempts.length) return;
     const id = `audio-usage:${quotaScope}`;
     const usage = store.maybe("settings", id) || { id, scope: quotaScope, limit: config.callLimit, reserved: 0, used: 0 };
@@ -63,6 +66,7 @@ export function createWorker(store, domain, config) {
     for (const a of attempts) a.quota = { scope: quotaScope, state: "reserved" };
   }
   function moveQuota(a, state) {
+    settleGrant(store,config,a,state);
     if (a.quota?.state !== "reserved") return;
     const usage = store.get("settings", `audio-usage:${a.quota.scope}`);
     usage.reserved--;
@@ -88,7 +92,7 @@ export function createWorker(store, domain, config) {
     for (const s of selected) {
       const conflicts = performanceIssues(s);
       if (conflicts.length) fail(conflicts.join("；"));
-      if (!s.roleConfirmed || !s.identityConfirmed)
+      if (!configurationDecided(s))
         fail("请先确认所有所选片段的角色与声音身份");
       if (!s.voiceId) fail("部分片段尚未选择音色");
       const v = store.get("voices", s.voiceId);
@@ -119,10 +123,11 @@ export function createWorker(store, domain, config) {
         const job = { ...prepared.job, id: uid(), commandId: p.commandId, request: requestOf(p), kind: p.kind, chapterId: prepared.job.chapterId || "", status: "queued", done: 0, total: prepared.attempts.length, stop: false, createdAt: new Date().toISOString() };
         const attempts = prepared.attempts.map(a => ({ ...a, id: uid(), jobId: job.id, status: "queued", prompt: compile(a.input), model: a.input.model }));
         for (const a of attempts) {
+          a.path = projectFile(store, job.chapterId, 'audio', `${a.id}.wav`);
           if (Array.from(a.prompt).length > 3000) fail("提示超过 3000 字符，请拆组或缩减说明");
           if (referenceIds(a).length > 3 || new Set(referenceIds(a)).size !== referenceIds(a).length) fail("参考声音最多三份且应去重");
         }
-        reserve(attempts);
+        reserve(attempts,p);
         setJob(job);
         for (const a of attempts) {
           store.put("attempts", a, job.id);
@@ -187,7 +192,7 @@ export function createWorker(store, domain, config) {
           model: config.model,
           targetKind: "voice-test", targetId: v.id,
         };
-        reserve([attempt]);
+        reserve([attempt],p);
         store.put("attempts", attempt, job.id);
         return job;
       }
@@ -219,7 +224,7 @@ export function createWorker(store, domain, config) {
           if (!["wav", "mp3"].includes(p.format)) fail("导出格式无效");
           if (!coverage(c, domain.list(c.id)).valid)
             fail("原文覆盖不完整，不能正式导出");
-          if (all.some((s) => !s.roleConfirmed || !s.identityConfirmed))
+          if (all.some((s) => !configurationDecided(s)))
             fail("请完成角色和声音身份核对");
           if (all.some((s) => segmentStatus(store, s).review === "rework"))
             fail("仍有需返工的片段");
@@ -296,9 +301,10 @@ export function createWorker(store, domain, config) {
             model: inputOf(s).model,
             targetKind: "single", targetId: s.id,
           };
+          attempt.path = projectFile(store, c.id, 'audio', `${attempt.id}.wav`);
           attempts.push(attempt);
         }
-        reserve(attempts);
+        reserve(attempts,p);
         for (const a of attempts) store.put("attempts", a, job.id);
       }
       return job;
@@ -314,7 +320,7 @@ export function createWorker(store, domain, config) {
       const c = (s?.chapterId || j.chapterId) ? store.get("chapters", s?.chapterId || j.chapterId) : null;
       const audio = {
         id: attempt.id,
-        path: `audio/${attempt.id}.wav`,
+        path: attempt.path || `audio/${attempt.id}.wav`,
         input: attempt.input,
         basis: attempt.basis,
         prompt: attempt.prompt,
@@ -486,8 +492,8 @@ export function createWorker(store, domain, config) {
           )
         )
           throw new Error("音频服务返回类型不正确，结果待核对");
-        await mkdir(join(store.directory, "audio"), { recursive: true });
-        const file = join(store.directory, `audio/${a.id}.wav`);
+        const file = join(store.directory, a.path || `audio/${a.id}.wav`);
+        await mkdir(dirname(file), { recursive: true });
         let size = 0;
         await pipeline(
           Readable.fromWeb(response.body),
@@ -636,7 +642,7 @@ export function createWorker(store, domain, config) {
     for (const j of store.all("jobs")) {
       const interrupted = active(j);
       for (const a of store.all("attempts", j.id)) {
-        const file = join(store.directory, `audio/${a.id}.wav`);
+        const file = join(store.directory, a.path || `audio/${a.id}.wav`);
         // Only the completed, decoded response is renamed to this final path; .part never qualifies.
         if (
           ["sending", "unknown"].includes(a.status) &&
@@ -648,7 +654,7 @@ export function createWorker(store, domain, config) {
           } catch {}
         }
         if (!interrupted) {
-          if (a.quota?.state === "reserved" && ["queued", "failed", "stopped"].includes(a.status))
+          if ((a.quota?.state === "reserved" || a.grantReservation?.state === 'reserved') && ["queued", "failed", "stopped"].includes(a.status))
             store.transaction(() => { moveQuota(a, "released"); store.put("attempts", a, j.id); });
           continue;
         }

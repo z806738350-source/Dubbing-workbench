@@ -141,3 +141,53 @@ test('自己保存成功后后续输入承接确切修订，已删除或不同�
   assert.throws(()=>a.finishDraftSave('one',JSON.stringify(a.readDraft('one')),6),/与本次提交不一致/);
   assert.equal(a.readDraft('one').draft.text,'缺少版本时保留');assert.equal(a.readDraft('one').revision,4);
 });
+
+test('集中恢复读取全部对象与旧键，准确保留页面归属；坏记录不遮住其他编辑',async()=>{
+  const storage=new Storage(),locks=new Locks(),session=new Storage();const a=await page(storage,session,locks),b=await page(storage,new Storage(),locks);
+  a.writeDraft('unit-v1/u/scene',{type:'unit',version:1,value:{guidance:'场景'}},2);
+  b.writeDraft('segment-one',{text:'本页'},3);
+  storage.setItem('draft-legacy:custom',JSON.stringify({draft:{text:'旧记录'},revision:4}));
+  storage.setItem('draft-broken','{broken');
+  const records=await b.listAllDrafts();
+  assert.deepEqual(records.map(r=>[r.id,r.entry.status]),[['unit-v1/u/scene','active'],['segment-one','current'],['legacy:custom','orphan'],['broken','orphan']]);
+  assert.match(records.find(r=>r.id === 'broken').entry.error,/无法解析/);
+  assert.equal(storage.getItem('draft-broken'),'{broken');
+  assert.equal((await b.listDrafts('unit-v1/u/scene'))[0].data.draft.value.guidance,'场景');
+});
+
+test('关闭页恢复与复制页携带未确认操作ID，显式弃稿清对应记录不重复创建',async()=>{
+  const storage=new Storage(),locks=new Locks(),aSession=new Storage(),bSession=new Storage();
+  const a=await page(storage,aSession,locks),b=await page(storage,bSession,locks),id='voice-session-v1/new';
+  const source='pending-save:'+aSession.getItem('draft-owner')+':'+id,target='pending-save:'+bSession.getItem('draft-owner')+':'+id;
+  const command=JSON.stringify({id:'same-create-id',signature:JSON.stringify({value:{description:'原创建'},revision:0})});
+  a.writeDraft(id,{description:'续写'},0);storage.setItem(source,command);
+  const copied=new Storage();copied.data=new Map(aSession.data);const copy=await page(storage,copied,locks);
+  assert.equal(storage.getItem('pending-save:'+copied.getItem('draft-owner')+':'+id),command);
+  copy.clearDraft(id,undefined,true);assert.equal(storage.getItem(source),command);
+  locks.close(aSession);const [entry]=await b.listDrafts(id);await b.recoverDraft(id,entry);
+  assert.equal(storage.getItem(target),command);assert.equal(storage.getItem(source),null);
+  b.clearDraft(id,undefined,true);assert.equal(storage.getItem(target),null);
+});
+
+test('恢复操作ID暂存失败时来源草稿和原操作ID都保留',async()=>{
+  const storage=new Storage(),locks=new Locks(),aSession=new Storage(),bSession=new Storage();
+  const a=await page(storage,aSession,locks),b=await page(storage,bSession,locks),id='new-event';
+  const source='pending-save:'+aSession.getItem('draft-owner')+':'+id,target='pending-save:'+bSession.getItem('draft-owner')+':'+id;
+  a.writeDraft(id,{description:'不丢'},0);storage.setItem(source,'original-operation');locks.close(aSession);
+  const [entry]=await b.listDrafts(id),set=storage.setItem.bind(storage);
+  storage.setItem=(key,value)=>{if(key === target)throw new Error('quota');set(key,value);};
+  await assert.rejects(b.recoverDraft(id,entry),/quota/);
+  assert.equal(storage.getItem(entry.key),entry.raw);assert.equal(storage.getItem(source),'original-operation');assert.equal(b.readDraft(id),null);
+});
+
+test('集中恢复和明确弃稿通知已挂载编辑器，取消旧暂存而不复活',async()=>{
+  const storage=new Storage(),locks=new Locks(),aSession=new Storage(),bSession=new Storage(),events=[];
+  const a=await page(storage,aSession,locks),b=await page(storage,bSession,locks),originalWindow=globalThis.window,originalEvent=globalThis.CustomEvent;
+  globalThis.window={dispatchEvent:event=>events.push(event)};globalThis.CustomEvent=class{constructor(type,{detail}){this.type=type;this.detail=detail;}};
+  try{
+    a.writeDraft('one',{text:'恢复'},3);locks.close(aSession);const [entry]=await b.listDrafts('one');await b.recoverDraft('one',entry);
+    assert.deepEqual(events.map(e=>[e.type,e.detail]),[['workbench-draft-restored',{id:'one',data:{draft:{text:'恢复'},revision:3}}]]);
+    b.clearDraft('one',JSON.stringify(b.readDraft('one')),true);assert.equal(events.at(-1).type,'workbench-draft-discarded');assert.equal(events.at(-1).detail.id,'one');
+    const count=events.length;b.writeDraft('one',{text:'正常保存'},3);b.finishDraftSave('one',JSON.stringify(b.readDraft('one')),4);assert.equal(events.length,count);
+  }finally{if(originalWindow === undefined)delete globalThis.window;else globalThis.window=originalWindow;if(originalEvent === undefined)delete globalThis.CustomEvent;else globalThis.CustomEvent=originalEvent;}
+});

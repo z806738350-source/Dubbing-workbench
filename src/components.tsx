@@ -1,7 +1,16 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { AlertCircle, Check, ChevronDown, X } from "lucide-react";
 
 export const ErrorContext = createContext({ message: "", dismiss: () => {} });
+const DialogDepth = createContext(0);
+const dialogStack: { dialog: HTMLDialogElement; depth: number }[] = [];
+function activateDialog() {
+  const top = [...dialogStack].sort((a,b)=>a.depth-b.depth).at(-1)?.dialog;
+  for(const entry of dialogStack)if(entry.dialog !== top && entry.dialog.open)entry.dialog.close();
+  if(top && !top.open)top.showModal();
+  return top;
+}
 export function ErrorBanner() {
   const { message, dismiss } = useContext(ErrorContext);
   return message ? <div className="error-banner" role="alert">
@@ -15,40 +24,62 @@ export function Dialog({
   children,
   onClose,
   wide = false,
+  presentation = "modal",
+  variant,
+  footer,
+  onBack,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  presentation?: "modal" | "sidepanel" | "inline";
+  variant?: "drawer" | "modal";
+  footer?: ReactNode;
+  onBack?: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const depth=useContext(DialogDepth)+1;
+  const mode=variant === "drawer" ? "sidepanel" : presentation;
   useEffect(() => {
+    if(mode === "inline")return;
     const el = ref.current!;
-    el.showModal();
-    el.querySelector<HTMLElement>(
-      "input:not([type=hidden]), textarea, [role=combobox]",
-    )?.focus();
-    return () => el.close();
-  }, []);
-  return (
+    const origin=document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const entry={dialog:el,depth};dialogStack.push(entry);
+    activateDialog();
+    if(el.open)(el.querySelector<HTMLElement>("[autofocus], input:not([type=hidden]), textarea, [role=combobox], button") || el).focus({preventScroll:true});
+    return () => {
+      const index=dialogStack.indexOf(entry);if(index >= 0)dialogStack.splice(index,1);
+      if(el.open)el.close();
+      const active=activateDialog();
+      if(origin?.isConnected && (!active || active.contains(origin)))origin.focus({preventScroll:true});
+    };
+  }, [mode,depth]);
+  const content=<DialogDepth.Provider value={depth}>
+    <div className="dialog-head">
+      {onBack && <button className="text-button" onClick={onBack}>返回</button>}
+      <h2>{title}</h2>
+      <button className="icon" aria-label="关闭" onClick={onClose}><X size={18}/></button>
+    </div>
+    <ErrorBanner/>
+    <div className="dialog-body">{children}</div>
+    {footer && <div className="dialog-footer">{footer}</div>}
+  </DialogDepth.Provider>;
+  if(mode === "inline")return <section className="inline-panel" aria-label={title}>{content}</section>;
+  return createPortal(
     <dialog
       ref={ref}
-      className={wide ? "dialog wide" : "dialog"}
+      className={"dialog" + (wide ? " wide" : "") + (mode === "sidepanel" ? " sidepanel" : "")}
+      data-presentation={mode}
+      tabIndex={-1}
       onCancel={onClose}
       onClick={(e) => {
         if (e.target === ref.current) onClose();
       }}
       aria-label={title}
     >
-      <div className="dialog-head">
-        <h2>{title}</h2>
-        <button className="icon" aria-label="关闭" onClick={onClose}>
-          <X size={18} />
-        </button>
-      </div>
-      <ErrorBanner />
-      <div className="dialog-body">{children}</div>
-    </dialog>
+      {content}
+    </dialog>, document.body,
   );
 }
 export function Select({
@@ -275,6 +306,7 @@ export function Form({
   busy = false,
   successMessage,
   revision,
+  primary = true,
 }: {
   children: ReactNode;
   onSubmit: (form: FormData, expectedRevision?: number) => Promise<void | number>;
@@ -282,6 +314,7 @@ export function Form({
   busy?: boolean;
   successMessage?: string;
   revision?: number;
+  primary?: boolean;
 }) {
   const [baseRevision, setBaseRevision] = useState(revision);
   const [error, setError] = useState(""),
@@ -320,7 +353,7 @@ export function Form({
         </p>
       )}
       <div className="form-actions">
-        <button className="button primary" disabled={pending || busy}>
+        <button className={"button" + (primary ? " primary" : "")} disabled={pending || busy}>
           {pending ? "正在保存…" : label}
         </button>
       </div>

@@ -1429,3 +1429,26 @@ test('HTTP边界保护本地密钥和上传路径，供应商回显只保留脱�
   const audioErrors=JSON.stringify([app.store.get('jobs',job.id),app.store.all('attempts',job.id)]);assert.ok(!audioErrors.includes(key));assert.ok(!audioErrors.includes('sk-fixture-secondary-secret'));
   for(const path of ['/api/state','/api/chapters/'+c.id])assert.ok(!(await(await fetch(base+path)).text()).includes(key));
 });
+
+test('按项目目录保存新生成音频、母版和导出', async t => {
+  const { store, d, c, project, worker, enqueue, dir } = setup(t);
+  const { createProjectFolder } = await import('../server/workspace.mjs');
+  const { exportMaster } = await import('../server/audio.mjs');
+  createProjectFolder(store, project); store.put('projects', project);
+  const old = global.fetch;
+  global.fetch = async () => new Response(wav(), { headers: { 'Content-Type': 'audio/wav' } });
+  t.after(() => { global.fetch = old; });
+  enqueue(); await worker.tick();
+  const audios = store.all('audios', c.id);
+  assert.equal(audios.length, 2);
+  for (const a of audios) {
+    assert.ok(a.path.startsWith(project.name + '/audio/'));
+    assert.ok(existsSync(join(dir, a.path)));
+  }
+  const segments = d.list(c.id).map(s => ({ s, a: store.get('audios', s.current) }));
+  const master = await buildMaster(store, segments, 0.5, uid());
+  assert.ok(master.path.startsWith(project.name + '/masters/'));
+  const exported = await exportMaster(store, { ...master, chapterId: c.id }, uid(), 'wav');
+  assert.ok(exported.startsWith(project.name + '/exports/'));
+  assert.deepEqual(readFileSync(join(dir, exported)), readFileSync(join(dir, master.path)));
+});

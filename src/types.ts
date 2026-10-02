@@ -73,6 +73,7 @@ export interface Project {
   contextRevision: number;
 }
 export interface Chapter {
+  roleVoices?: Record<string,string | null>;
   productionStatus?: string;
   id: string;
   projectId: string;
@@ -85,6 +86,9 @@ export interface Chapter {
   sourceVersion?: number;
 }
 export interface Segment {
+  analysisOrigin?: {draftId:string;itemId:string};
+  protectedFields?: string[];
+  decisions?: Record<string, {source:"human"|"inherited"|"policy_ai"|"system";state?:"accepted"|"needsDecision";values:unknown;at:string;policyVersion?:number;draftId?:string}>;
   model?: string;
   id: string;
   chapterId: string;
@@ -116,6 +120,51 @@ export interface Segment {
   prompt: string;
   promptIssues?: string[];
   audio: AudioRecord | null;
+}
+
+export interface ExperienceGrant {
+  id: string;
+  grantId: string;
+  projectId: string;
+  chapterId: string | null;
+  steps: string[];
+  materials: string[];
+  voiceIds: string[];
+  models: {text:string;audio:string};
+  routes: {text:string;audio:string};
+  textLimit: number;
+  audioLimit: number;
+  textUsed: number;
+  audioUsed: number;
+  textReserved: number;
+  audioReserved: number;
+  expiresAt: string | null;
+  revoked: boolean;
+  revision: number;
+}
+export interface ExperiencePolicy {projectId:string;mode:"smart"|"review";revision:number}
+export interface ExperienceState {policy:ExperiencePolicy;grants:ExperienceGrant[];changes:{changeId:string;chapterId:string;undoneAt?:string}[]}
+export interface OperationResult<T = unknown> {
+  operationId: string;
+  kind: string;
+  outcome: "completed"|"prepared"|"needsInput"|"processing"|"unknown";
+  steps: Record<string,unknown>;
+  jobIds: string[];
+  createdObjectIds: string[];
+  result?: T;
+  error?: string;
+  errorStatus?: number;
+  dependencies?: {chapterId?:string;segmentIds:string[];unitIds:string[];roleIds:string[]};
+}
+export interface GenerationPlan {
+  chapterId:string;
+  revision:number;
+  arrangement:number;
+  unitIds:string[];
+  memberIds:string[];
+  units:{unitId:string;members:string[];mode:"dry"|"scene";reuse:boolean;audioId:string|null}[];
+  textRequests:number;
+  audioRequests:number;
 }
 export interface AudioRecord {
   id: string;
@@ -239,6 +288,8 @@ export interface State {
   voiceSessions?: VoiceSession[];
   jobs: Job[];
   settings: {
+    workspaceDirectory: string;
+    projectFolders: boolean;
     revision: number;
     configured: boolean;
     model: string;

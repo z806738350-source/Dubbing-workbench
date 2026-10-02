@@ -18,6 +18,7 @@ export function text(value, label, max = 1000000) {
 export function openStore(directory) {
   mkdirSync(directory, { recursive: true });
   const db = new DatabaseSync(join(directory, "workbench.sqlite"));
+  let transactionDepth = 0;
   const settingsTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'").get();
   const schema = settingsTable && db.prepare("SELECT data FROM settings WHERE id='data-schema'").get();
   if (schema && (![1,2].includes(JSON.parse(schema.data).version))) {
@@ -96,15 +97,17 @@ export function openStore(directory) {
       db.prepare(`DELETE FROM ${t} WHERE id=?`).run(id);
     },
     transaction(fn) {
-      db.exec("BEGIN IMMEDIATE");
+      const level = transactionDepth, savepoint = `workbench_${level}`;
+      db.exec(level ? `SAVEPOINT ${savepoint}` : "BEGIN IMMEDIATE");
+      transactionDepth++;
       try {
         const result = fn();
-        db.exec("COMMIT");
+        db.exec(level ? `RELEASE ${savepoint}` : "COMMIT");
         return result;
       } catch (e) {
-        db.exec("ROLLBACK");
+        db.exec(level ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : "ROLLBACK");
         throw e;
-      }
+      } finally { transactionDepth--; }
     },
     protectSchema() {
       for (const table of tables) for (const action of ["INSERT", "UPDATE", "DELETE"])

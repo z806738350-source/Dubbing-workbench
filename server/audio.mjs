@@ -10,8 +10,9 @@ import {
   appendFile,
   copyFile,
 } from "node:fs/promises";
-import { constants, existsSync, rmSync, statSync, renameSync } from "node:fs";
-import { join } from "node:path";
+import { constants, existsSync, rmSync, statSync, renameSync, readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { projectFile } from './workspace.mjs';
 import { fail, uid, text } from "./store.mjs";
 const exec = promisify(execFile);
 export const ffmpeg =
@@ -104,23 +105,33 @@ export async function uploadVoice(store, p) {
     !/^[A-Za-z0-9+/]*={0,2}$/.test(p.data)
   )
     fail("参考文件格式错误或大于 10 MB");
-  if (!/\.(wav|mp3)$/i.test(p.filename || ""))
+  if (typeof p.filename !== 'string' || p.filename.length > 260 || !/\.(wav|mp3)$/i.test(p.filename))
     fail("请选择 WAV 或 MP3 参考文件");
   const bytes = Buffer.from(p.data, "base64");
   if (!bytes.length || bytes.length > 10 * 1024 * 1024)
     fail("参考文件应为 1 字节～10 MB");
-  const id = uid(),
+  if (p.uploadId !== undefined && (typeof p.uploadId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(p.uploadId))) fail('上传标识无效');
+  const id = p.uploadId || uid(),
     path = `voices/${id}.${p.filename.split(".").pop().toLowerCase()}`;
+  const existingVoice = () => {
+    const existing = store.maybe('voices',id);
+    if (!existing) return null;
+    if (existing.uploadId !== p.uploadId || existing.uploadName !== p.name.trim() || existing.uploadFilename !== p.filename || !existing.path || !existsSync(join(store.directory,existing.path)) || !readFileSync(join(store.directory,existing.path)).equals(bytes)) fail('同一上传标识的素材已改变，请保留现有声音并重新选择',409);
+    return existing;
+  };
+  const previous = p.uploadId && existingVoice();
+  if (previous) return previous;
   const file = join(store.directory, path);
+  const temp = file + `.${uid()}.part`;
   await mkdir(join(store.directory, "voices"), { recursive: true });
-  await writeFile(file + ".part", bytes);
   try {
-    const info = await inspect(file + ".part");
+    await writeFile(temp, bytes);
+    const info = await inspect(temp);
     if (info.duration > 30) fail("参考声音超过 30 秒，请先截取一段");
     if (!/(wav|mp3)/.test(info.format)) fail("文件内容不是 WAV 或 MP3");
-    await rename(file + ".part", file);
     const voice = {
       id,
+      ...(p.uploadId ? {uploadId:p.uploadId,uploadName:p.name.trim(),uploadFilename:p.filename} : {}),
       name: p.name.trim(),
       path,
       state: "active",
@@ -129,12 +140,12 @@ export async function uploadVoice(store, p) {
       bytes: bytes.length,
       createdAt: new Date().toISOString(),
     };
-    store.put("voices", voice);
-    return voice;
-  } catch (e) {
-    await rm(file + ".part", { force: true });
-    throw e;
-  }
+    return store.transaction(()=>{
+      const existing = p.uploadId && existingVoice();
+      if (existing) return existing;
+      renameSync(temp,file);store.put("voices",voice);return voice;
+    });
+  } finally { await rm(temp,{force:true}); }
 }
 // Candidate and reference have separate paths: deleting either resource cannot
 // remove the other. The source audio primary key makes save retries idempotent.
@@ -179,8 +190,9 @@ export async function saveCandidateVoice(store, p) {
   }
 }
 export async function buildMaster(store, segments, gap, id) {
-  await mkdir(join(store.directory, "masters"), { recursive: true });
-  const base = join(store.directory, "masters", id);
+  const path = projectFile(store, segments[0]?.s.chapterId, 'masters', `${id}.wav`);
+  const base = join(store.directory, path.slice(0, -4));
+  await mkdir(dirname(base), { recursive: true });
   const pcm = base + ".pcm.part";
   await writeFile(pcm, Buffer.alloc(0));
   let cursor = 0;
@@ -248,7 +260,7 @@ export async function buildMaster(store, segments, gap, id) {
     if (Math.abs(info.duration * 48000 - cursor) > 1) fail("母版帧数校验失败");
     await rename(base + ".wav.part", base + ".wav");
     return {
-      path: `masters/${id}.wav`,
+      path,
       frames: cursor,
       mapping,
       sampleRate: 48000,
@@ -262,9 +274,9 @@ export async function buildMaster(store, segments, gap, id) {
   }
 }
 export async function exportMaster(store, master, id, format) {
-  await mkdir(join(store.directory, "exports"), { recursive: true });
-  const path = `exports/${id}.${format}`,
+  const path = projectFile(store, master.chapterId, 'exports', `${id}.${format}`),
     file = join(store.directory, path);
+  await mkdir(dirname(file), { recursive: true });
   if (format === "wav")
     await writeFile(
       file + ".part",
