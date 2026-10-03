@@ -115,6 +115,50 @@ function chapterFixture(domain, store, voices) {
   return { chapter, group, payload };
 }
 
+test("存在感生成资格：旧场景模板拒绝选择，明确切换v4后按选择发送", async t => {
+  for (const presence of ['clear', 'natural', 'subtle', 'unspecified']) await t.test(presence, async t => {
+    const { store, domain, voices, worker } = setup(t), { chapter, group, payload } = chapterFixture(domain, store, voices);
+    const update = (action, data) => domain.mutate(action, { chapterId: chapter.id, revision: store.get('chapters', chapter.id).revision, id: group.id, entityRevision: store.get('units', group.id).revision, mode: 'scene', ...data });
+    update('unit.update', { backgroundPresence: presence });
+    let calls = 0;
+    t.mock.method(globalThis, 'fetch', async () => { calls++; return new Response(wav(), { headers: { 'content-type': 'audio/wav' } }); });
+    assert.equal(store.get('units', group.id).variants.scene.template, 'scene-v2');
+    if (presence !== 'unspecified') {
+      await assert.rejects(worker.submit(payload('scene')), /所选背景存在感尚未生效.*本次未发送/);
+      assert.equal(store.all('jobs').length, 0); assert.equal(store.all('attempts').length, 0); assert.equal(calls, 0);
+      update('unit.template', { template: 'scene-v4-presence-1', confirm: true });
+    }
+    const job = await worker.submit(payload('scene')); await worker.tick();
+    assert.equal(store.get('jobs', job.id).status, 'success'); assert.equal(calls, 1);
+    const a = store.all('attempts', job.id)[0];
+    assert.equal(a.input.backgroundPresence, presence);
+    if (presence === 'unspecified') { assert.equal(a.input.template, 'scene-v2'); assert.equal(a.prompt, compile({ ...a.input, backgroundPresence: undefined })); }
+    else assert.match(a.prompt, presence === 'clear' ? /明确存在感/ : presence === 'natural' ? /自然共同呈现/ : /轻柔背景/);
+  });
+});
+
+test("存在感生成资格：表面v4不能掩盖旧历史编译器，最终派发仍零调用", async t => {
+  const { store, domain, voices, worker } = setup(t, { callLimit: 1, usageScope: 'presence-dispatch' }), { chapter, group, payload } = chapterFixture(domain, store, voices);
+  const update = (action, data) => domain.mutate(action, { chapterId: chapter.id, revision: store.get('chapters', chapter.id).revision, id: group.id, entityRevision: store.get('units', group.id).revision, mode: 'scene', ...data });
+  update('unit.update', { backgroundPresence: 'clear' });
+  update('unit.template', { template: 'scene-v4-presence-1', confirm: true });
+  const oldCompiler = store.get('units', group.id); oldCompiler.variants.scene.resolvedCompilerId = 'native3-paragraph-k'; store.put('units', oldCompiler, chapter.id);
+  assert.throws(() => worker.enqueue(payload('scene')), /所选背景存在感尚未生效/);
+  assert.equal(store.all('jobs').length, 0);
+  update('unit.template', { template: 'scene-v4-presence-1', confirm: true });
+  assert.equal(store.get('units', group.id).variants.scene.resolvedCompilerId, undefined);
+  const job = worker.enqueue(payload('scene'));
+  // An isolated legacy-data change retains revisions so the final shared input
+  // validation must catch the effective compiler before sending or charging.
+  const changed = store.get('units', group.id); changed.variants.scene.resolvedCompilerId = 'native3-paragraph-k'; store.put('units', changed, chapter.id);
+  let calls = 0; t.mock.method(globalThis, 'fetch', () => { calls++; assert.fail('旧编译器不得忽略存在感后发送'); });
+  await worker.tick();
+  assert.equal(calls, 0); assert.equal(store.get('jobs', job.id).status, 'failed');
+  assert.match(store.get('jobs', job.id).error, /所选背景存在感尚未生效/);
+  assert.equal(store.all('attempts', job.id)[0].createdAt, undefined);
+  assert.deepEqual([store.get('settings', 'audio-usage:presence-dispatch').reserved, store.get('settings', 'audio-usage:presence-dispatch').used], [0, 0]);
+});
+
 test("调用额度在两工作进程间原子预留；未发送释放，unknown及重启保留占用", async t => {
   const { dir, store, domain, voices, config, worker, closeStore } = setup(t, { callLimit: 1, usageScope: "limited-test" });
   const second = createWorker(store, domain, config), first = worker.enqueue(trial(voices[0]));

@@ -17,8 +17,8 @@ async function setup(api=async()=>[],operation=async()=>({outcome:'processing'})
     useEffect(){},useRef:initial=>{const key=index++;return hooks[key]||=( {current:initial});},
     useState:initial=>{const key=index++;if(!(key in hooks))hooks[key]=typeof initial==='function'?initial():initial;return [hooks[key],value=>{hooks[key]=typeof value==='function'?value(hooks[key]):value;}];},
     api,action:async(...args)=>{actions.push(args);return mutation(...args);},hasDraft:id=>draftIds.has(id),objectDraftId:(kind,id)=>kind+'/'+id,
-    useObjectDraft:(kind,id,draft,revision=0)=>{const key=kind+'/'+id;if(!drafts.has(key)){const controller={draft,base:revision,dirty:false,status:'saved',frozen:false,composing:false,saving:false,flush:async()=>{},edit(value){controller.draft={...controller.draft,...value};},compositionStart(){},compositionEnd(){},save:async persist=>{const saved=await persist(controller.draft);controller.base=saved.revision;controller.draft=saved.value;return {...saved,dirty:false};}};drafts.set(key,controller);}return drafts.get(key);},
-    saveAction:async()=>{},withSavedDrafts:async(_scope,_dependencies,fn)=>fn(),draftScopeRevision:(_scope,revision)=>revision,
+    useObjectDraft:(kind,id,draft,revision=0,options={})=>{const key=kind+'/'+id;if(!drafts.has(key)){const controller={draft,base:revision,options,dirty:false,status:'saved',frozen:false,composing:false,saving:false,flush:async()=>{},edit(value){controller.draft={...controller.draft,...value};},compositionStart(){},compositionEnd(){},save:async persist=>{const saved=await persist(controller.draft);controller.base=saved.revision;controller.draft=saved.value;return {...saved,dirty:false};}};drafts.set(key,controller);}return drafts.get(key);},
+    saveAction:(...args)=>runtime.persistSave(...args),persistSave:async()=>{},withSavedDrafts:async(_scope,_dependencies,fn)=>fn(),draftScopeRevision:(_scope,revision)=>revision,
     submitOperation:async(...args)=>{sent.push(args);return operation(...args);},
     Dialog:'Dialog',Field:'Field',Select:'Select',Status:'Status',ObjectDraftTools:'ObjectDraftTools',TaskAuthorization:'TaskAuthorization',SceneSuggestions:'SceneSuggestions'};
   globalThis.unitPanelTest=runtime;
@@ -29,8 +29,52 @@ async function setup(api=async()=>[],operation=async()=>({outcome:'processing'})
   const unit={id:'group',chapterId:'chapter',kind:'group',state:'active',members:['one','two'],mode:'dry',revision:1,variants:{dry:variant('old-dry','success'),scene:variant(null,'unknown')}};
   const props={unit,chapter:{id:'chapter',projectId:'project',revision:1,segments:[{id:'one',order:0,text:'第一句',roleId:'role',voiceId:'voice'},{id:'two',order:1,text:'第二句',roleId:'role',voiceId:'voice'}],events:[],playbackItems:[]},roles:[{id:'role',name:'角色'}],state:{jobs:[],voices:[],projects:[],settings:{configured:true,audioTools:true,features:{},model:'audio',routeBlocked:false}},locked:false,connected:true,mode:'scene',setMode(){},refresh:async()=>{},close(){},open(){},play:(...args)=>played.push(args),onTask:(...args)=>tasks.push(args)};
   const groups=[];const groupProps={chapter:props.chapter,ids:['one','two'],roles:props.roles,enabled:true,state:props.state,refresh:props.refresh,close:props.close,open:props.open,created:(...args)=>groups.push(args)};
-  return {props,groupProps,groups,sent,played,tasks,actions,render:()=>{index=0;return UnitDetails(props);},renderGroup:()=>{index=0;return CreateGroup(groupProps);}};
+  return {props,groupProps,groups,sent,played,tasks,actions,runtime,render:()=>{index=0;return UnitDetails(props);},renderGroup:()=>{index=0;return CreateGroup(groupProps);}};
 }
+
+test('旧v2及表面v4但历史编译仍旧时，存在感禁生成；免费核对后明确采用才切模板',async()=>{
+  for(const [presence,label,template,resolvedCompilerId] of [['subtle','轻','scene-v2'],['natural','自然','scene-v2'],['clear','清楚','scene-v2'],['clear','清楚','scene-v4-presence-1','native3-paragraph-k']]){
+    const reads=[],f=await setup(async(path,payload)=>{reads.push([path,payload]);return {before:'旧要求',after:'存在感要求',to:'scene-v4-presence-1'};});
+    Object.assign(f.props.unit.variants.scene,{template,resolvedCompilerId,latest:'success',backgroundPresence:presence});
+    nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+    let tree=f.render(),submit=button(tree.props.footer,'再做一版');
+    assert.equal(submit.props.disabled,true);assert.match(text(tree.props.footer),new RegExp('所选“'+label+'”尚未生效'));
+    submit.props.onClick();await tick();assert.equal(f.sent.length,0,'回调保护也不能发送付费请求');
+    const preview=button(f.render().props.footer,'核对并启用背景存在感');assert.equal(preview.props.disabled,false);assert.match(preview.props.className,/button secondary/);
+    preview.props.onClick();await tick();
+    assert.equal(reads.length,1);assert.equal(reads[0][0],'/enhancement-preview');assert.equal(reads[0][1].template,'scene-v4-presence-1');assert.equal(f.actions.length,0);assert.equal(f.sent.length,0);
+    tree=f.render();assert.equal(tree.props.title,'切换提示模板');button(tree,'使用这个模板').props.onClick();await tick();
+    assert.equal(f.actions.length,1);assert.equal(f.actions[0][0],'unit.template');assert.equal(f.actions[0][1].template,'scene-v4-presence-1');assert.equal(f.sent.length,0);assert.equal(f.props.unit.variants.scene.current,null);assert.equal(f.props.unit.variants.scene.template,template,'夹具中其他音频与旧设置不被自动迁移');
+  }
+});
+
+test('选择仍在保存时可核对；预览等flush并使用新章与单元版本，确认沿用该基准',async()=>{
+  const order=[],reads=[];let finishSave;
+  const saved=new Promise(resolve=>{finishSave=resolve;});
+  const f=await setup(async(path,payload)=>{order.push('preview');reads.push([path,payload]);return {before:'旧要求',after:'清楚背景',to:'scene-v4-presence-1'};});
+  Object.assign(f.props.unit.variants.scene,{template:'scene-v2',latest:'success'});
+  let tree=f.render();nodes(tree).find(node=>node.type==='Select'&&node.props.label==='背景存在感').props.onChange('clear');
+  const controller=nodes(f.render()).find(node=>node.type==='ObjectDraftTools').props.controller;
+  controller.dirty=true;controller.saving=true;
+  f.runtime.persistSave=async()=>saved;
+  const pendingSave=controller.options.persist(controller.draft,1,{chapterRevision:1,operationId:'save-presence',replay:false});
+  controller.flush=async()=>{order.push('flush');const receipt=await pendingSave;controller.draft=receipt.value;controller.dirty=false;controller.saving=false;order.push('saved');};
+  const preview=button(f.render(),'核对并启用背景存在感');assert.equal(preview.props.disabled,false);
+  preview.props.onClick();await tick();assert.deepEqual(order,['flush']);assert.equal(reads.length,0);assert.equal(f.sent.length,0);
+  finishSave({revision:3,chapterRevision:5,variants:{scene:{guidance:'保留要求',backgroundPresence:'clear'}}});await tick();await tick();
+  assert.deepEqual(order,['flush','saved','preview']);assert.equal(reads[0][1].revision,5);assert.equal(reads[0][1].entityRevision,3);assert.equal(reads[0][1].id,'group');assert.equal(reads[0][1].mode,'scene');
+  button(f.render(),'使用这个模板').props.onClick();await tick();assert.equal(f.actions[0][1].revision,5);assert.equal(f.actions[0][1].entityRevision,3);assert.equal(f.sent.length,0);
+});
+
+test('v4存在感和旧模板未指定仍走正常明确生成，旧模板免费入口保持可发现',async()=>{
+  for(const [template,presence] of [['scene-v4-presence-1','clear'],['scene-v4-presence-1','natural'],['scene-v2','unspecified']]){
+    const f=await setup();Object.assign(f.props.unit.variants.scene,{template,latest:'success',backgroundPresence:presence});
+    nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+    const tree=f.render(),submit=button(tree.props.footer,'再做一版');assert.equal(submit.props.disabled,false);
+    assert.doesNotMatch(text(tree.props.footer),/尚未生效/);submit.props.onClick();await tick();assert.equal(f.sent.length,1);assert.equal(f.sent[0][1].kind,'sceneAndGenerate');
+    if(template==='scene-v2')assert.ok(button(tree,'核对并启用背景存在感'));
+  }
+});
 
 test('unknown 先试听保留纯人声，范围可见、全文与修改按需展开，重试默认未选择',async()=>{
   const f=await setup(),tree=f.render();

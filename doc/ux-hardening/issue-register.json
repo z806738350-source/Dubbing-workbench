@@ -645,7 +645,9 @@
       "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
       "repairEvidenceIds": [
         "D",
+        "K-assessment",
         "K-frozen",
+        "K-human",
         "K-live",
         "K-mock",
         "K-preflight",
@@ -657,9 +659,9 @@
         "old-native",
         "unknown"
       ],
-      "actualBoundary": "scene整体指导、修订、已采用/移除事件进入AI建议；旧建议在指导变化后不可采用，dry/extract保持原政策。；保留旧v1/v2/v3，新presence独立ID，来源记录及明确冲突聚合；普通编译/诊断0额外文本调用、0真实调用。；原A/B/C/D条件档案存在，D精确分类已只读复核；未本轮重跑全部历史样本，未取得外部审计ZIP完整比对。；旧343字78.4秒K只作为既往基准；新首对真实收到原始WAV和正常母版，背景与首中尾文字身份仍待听评。；显式clear/natural/subtle仅替换presence块，未设置原样；development与volumeChange分开，member+quote+occurrence保护，明确冲突聚合且正文词语不误扫。；首对真实K0/K1冻结仅presence不同，343字正文/参考/模型/参数/路由相同，全部实际请求及原文件有ledger。；无授权路径Mock/预检0真实调用；首对在当前用户明确授权后仅2请求，既往10次不作无限授权。；本次2次返回全部记录且首对后等待提交听评；unknown不自动重发、下一决定绑定实际attempt/目标范围有Mock正反。；新首对humanListening为pending；用户未提交首中尾/转折/正文/背景存在感评分，音量问题保持效果待验。；原始WAV/正常母版有不同声道与时长元数据；未形成相同音量/相同媒体来源的完整听评记录，不用RMS冒称背景响度。；正常worker掌握供应商响应和unknown账本，mock预检/回应原件记录不伪成功；D诊断采集unknown保持，0自动重发。",
+      "actualBoundary": "scene整体指导、修订、已采用/移除事件进入AI建议；旧建议在指导变化后不可采用，dry/extract保持原政策。；保留旧v1/v2/v3，新presence独立ID，来源记录及明确冲突聚合；普通编译/诊断0额外文本调用、0真实调用。；原A/B/C/D条件档案存在，D精确分类已只读复核；未本轮重跑全部历史样本，未取得外部审计ZIP完整比对。；旧343字78.4秒K作为既往基准。用户已提交本次首对原始听评：K1音乐、水滴及回响清楚，旁白期间仍可辨、不妨碍人声，正文音色节奏正常且满足预期；K0水滴/回响清楚、正文正常，但未听到音乐。 本次K1效果问题已满足；逐段首中尾和宁静转折未单列，未用RMS替代听感。；本次联合音频原件和正常母版已收到，K1本例背景效果获用户认可；反馈未明确试听raw或母版，也没有两来源相同播放音量的逐一对照，完整保真听辨仍待验。；显式clear/natural/subtle仅替换presence块，未设置原样；development与volumeChange分开，member+quote+occurrence保护，明确冲突聚合且正文词语不误扫。；首对真实K0/K1冻结仅presence不同，343字正文/参考/模型/参数/路由相同，全部实际请求及原文件有ledger。；无授权路径Mock/预检0真实调用；首对在当前用户明确授权后仅2请求，既往10次不作无限授权。；本次2次返回全部记录，首对后按停点未追加请求，现已另录用户听评；unknown不自动重发，下一决定绑定实际attempt/目标范围有Mock正反。；用户已提交本次首对原始听评：K1音乐、水滴及回响清楚，旁白期间仍可辨、不妨碍人声，正文音色节奏正常且满足预期；K0水滴/回响清楚、正文正常，但未听到音乐。 K1本例背景存在感问题关闭；首中尾覆盖与宁静转折未逐段明确记录，完整条目仍未全部验证。；本次用户自由听评已提交，K1本例满足预期；反馈没有明确原始WAV与正常母版各自的媒体来源、播放设备/音量及对照，保真听辨仍未验证，不用RMS冒称背景响度。；正常worker掌握供应商响应和unknown账本，mock预检/回应原件记录不伪成功；D诊断采集unknown保持，0自动重发。",
       "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
-      "phaseState": "边界仍待验",
+      "phaseState": "K1本例效果关闭；逐段及媒体对照边界仍待验",
       "evidence": [
         {
           "id": "D",
@@ -670,6 +672,14 @@
           "observedBytes": 10726
         },
         {
+          "id": "K-assessment",
+          "path": "data/ux-hardening-20261003/k-presence/live/assessment.json",
+          "level": "本次听评与既有audioId条件绑定和范围判定",
+          "result": "K1本例效果达到预期；K0没听到音乐原样保留；首中尾/转折与raw/master媒介对照未验，不代表其他场景普遍合格",
+          "replayCommand": "只读绑定记录；不是新增供应商请求/生产验收重跑",
+          "observedBytes": 1851
+        },
+        {
           "id": "K-frozen",
           "path": "data/ux-hardening-20261003/k-presence/live/frozen.json",
           "level": "已保存本次授权首对请求条件",
@@ -678,12 +688,20 @@
           "observedBytes": 5117
         },
         {
+          "id": "K-human",
+          "path": "data/ux-hardening-20261003/k-presence/live/human-listening.json",
+          "level": "用户原样提交的实际自由听评",
+          "result": "用户已提交本次首对原始听评：K1音乐、水滴及回响清楚，旁白期间仍可辨、不妨碍人声，正文音色节奏正常且满足预期；K0水滴/回响清楚、正文正常，但未听到音乐。 首中尾覆盖与宁静转折未逐段明确记录；未明确原始WAV/正常母版的试听来源、设备/系统/播放器同音量及DSP设置。",
+          "replayCommand": "只读原始听评，样本1=K1、样本2=K0；不自动重发或代填细项",
+          "observedBytes": 685
+        },
+        {
           "id": "K-live",
           "path": "data/ux-hardening-20261003/k-presence/live/ledger.json",
-          "level": "真实供应商返回，未人工验声",
-          "result": "首对K0/K1各1次，HTTP200 received；89.8s/81.68s，humanListening pending；不追加请求",
+          "level": "真实供应商返回及本次听评submitted记录",
+          "result": "首对K0/K1各1次，HTTP200 received；89.8s/81.68s；当前humanListening submitted，原听评前快照保留pre-listening-ledger.json；未追加请求",
           "replayCommand": null,
-          "observedBytes": 3050
+          "observedBytes": 3171
         },
         {
           "id": "K-mock",
@@ -1202,12 +1220,26 @@
   ],
   "K": {
     "currentPairProviderSuccess": 2,
-    "humanListening": "pending",
+    "humanListening": "submitted",
     "oldJ": "既往用户更正优秀",
     "oldG": "既往背景偏小",
     "oldK": "既往343字/78.4秒背景偏小",
     "D": "原unknown保持，只读精确分类，不当成功恢复",
-    "publicPrivateSeparation": "原文/参考/完整请求/音频保留本机data，报告仅摘要与路径"
+    "publicPrivateSeparation": "原文/参考/完整请求/音频保留本机data，报告仅摘要与路径",
+    "effectIssue": "K1本例达到用户预期；K0未听到音乐，不扩为所有场景保证",
+    "evidence": [
+      "data/ux-hardening-20261003/k-presence/live/human-listening.json",
+      "data/ux-hardening-20261003/k-presence/live/assessment.json"
+    ],
+    "unverified": "首中尾覆盖与宁静转折未逐段明确记录；未明确原始WAV/正常母版的试听来源、设备/系统/播放器同音量及DSP设置。"
   },
-  "implementationRevisionSource": "data/ux-hardening-20261003/release-revision.json"
+  "implementationRevisionSource": "data/ux-hardening-20261003/release-revision.json",
+  "humanListeningUpdate": {
+    "recordedAtUTC": "2026-10-03T10:55:16.648765+00:00",
+    "userSavedAtUTC": "2026-10-03T10:49:25.165Z",
+    "rawEvidence": "data/ux-hardening-20261003/k-presence/live/human-listening.json",
+    "bindingAssessment": "data/ux-hardening-20261003/k-presence/live/assessment.json",
+    "productionVerificationHistoryChanged": false,
+    "scope": "本次听评事实补录；保留原generatedAt/observedHEAD/implementation信息和6e2b449当时验证历史"
+  }
 }

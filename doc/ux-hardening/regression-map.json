@@ -75,10 +75,10 @@
     },
     "acceptanceByStatus": {
       "已实现并验证": 102,
-      "已实现未验证": 21,
+      "已实现未验证": 22,
       "缺失": 1,
       "偏离": 0,
-      "按计划延期": 6
+      "按计划延期": 5
     }
   },
   "evidenceCatalog": [
@@ -309,10 +309,10 @@
     {
       "id": "K-live",
       "path": "data/ux-hardening-20261003/k-presence/live/ledger.json",
-      "level": "真实供应商返回，未人工验声",
-      "result": "首对K0/K1各1次，HTTP200 received；89.8s/81.68s，humanListening pending；不追加请求",
+      "level": "真实供应商返回及本次听评submitted记录",
+      "result": "首对K0/K1各1次，HTTP200 received；89.8s/81.68s；当前humanListening submitted，原听评前快照保留pre-listening-ledger.json；未追加请求",
       "replayCommand": null,
-      "observedBytes": 3050
+      "observedBytes": 3171
     },
     {
       "id": "K-mock",
@@ -396,7 +396,7 @@
     },
     {
       "id": "credential-review",
-      "path": "data/ux-hardening-20261003/credential-review.json",
+      "path": "data/ux-hardening-20261003/checkpoints/6e2b449/credential-review.json",
       "level": "已执行公开候选源与dist范围扫描及16已有commit历史检查",
       "result": "159公开候选文件及dist实际配置key匹配0；gitleaks当前快照和16可达历史无发现；3处同一fake fixture人工核对，不修改抑制规则；实际包另验",
       "replayCommand": null,
@@ -428,7 +428,7 @@
     },
     {
       "id": "package-scan",
-      "path": "data/ux-hardening-20261003/distribution/package-content-scan.json",
+      "path": "data/ux-hardening-20261003/checkpoints/6e2b449/distribution/package-content-scan.json",
       "level": "已扫描修后实际ZIP独立解包文件集",
       "result": "65文件，0symlink/禁入路径/密钥格式，3份用户文档；不读取本机key文件、不含执行计划",
       "replayCommand": null,
@@ -492,7 +492,7 @@
     },
     {
       "id": "distribution",
-      "path": "data/ux-hardening-20261003/distribution/verification.json",
+      "path": "data/ux-hardening-20261003/checkpoints/6e2b449/distribution/verification.json",
       "level": "已执行修后实际本机发行包14项复验",
       "result": "14/14；65文件、61份source/dist/start/docs逐字节一致，7/7本地链接+anchor有效，0供应商；不等于全新Mac安装验收",
       "replayCommand": "node data/ux-hardening-20261003/distribution/verify-release.mjs",
@@ -505,6 +505,22 @@
       "result": "只映射记录明确覆盖的组合",
       "replayCommand": null,
       "observedBytes": 3323
+    },
+    {
+      "id": "K-human",
+      "path": "data/ux-hardening-20261003/k-presence/live/human-listening.json",
+      "level": "用户原样提交的实际自由听评",
+      "result": "用户已提交本次首对原始听评：K1音乐、水滴及回响清楚，旁白期间仍可辨、不妨碍人声，正文音色节奏正常且满足预期；K0水滴/回响清楚、正文正常，但未听到音乐。 首中尾覆盖与宁静转折未逐段明确记录；未明确原始WAV/正常母版的试听来源、设备/系统/播放器同音量及DSP设置。",
+      "replayCommand": "只读原始听评，样本1=K1、样本2=K0；不自动重发或代填细项",
+      "observedBytes": 685
+    },
+    {
+      "id": "K-assessment",
+      "path": "data/ux-hardening-20261003/k-presence/live/assessment.json",
+      "level": "本次听评与既有audioId条件绑定和范围判定",
+      "result": "K1本例效果达到预期；K0没听到音乐原样保留；首中尾/转折与raw/master媒介对照未验，不代表其他场景普遍合格",
+      "replayCommand": "只读绑定记录；不是新增供应商请求/生产验收重跑",
+      "observedBytes": 1851
     }
   ],
   "findings": [
@@ -792,7 +808,9 @@
       "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
       "repairEvidenceIds": [
         "D",
+        "K-assessment",
         "K-frozen",
+        "K-human",
         "K-live",
         "K-mock",
         "K-preflight",
@@ -804,7 +822,7 @@
         "old-native",
         "unknown"
       ],
-      "actualBoundary": "scene整体指导、修订、已采用/移除事件进入AI建议；旧建议在指导变化后不可采用，dry/extract保持原政策。；保留旧v1/v2/v3，新presence独立ID，来源记录及明确冲突聚合；普通编译/诊断0额外文本调用、0真实调用。；原A/B/C/D条件档案存在，D精确分类已只读复核；未本轮重跑全部历史样本，未取得外部审计ZIP完整比对。；旧343字78.4秒K只作为既往基准；新首对真实收到原始WAV和正常母版，背景与首中尾文字身份仍待听评。；显式clear/natural/subtle仅替换presence块，未设置原样；development与volumeChange分开，member+quote+occurrence保护，明确冲突聚合且正文词语不误扫。；首对真实K0/K1冻结仅presence不同，343字正文/参考/模型/参数/路由相同，全部实际请求及原文件有ledger。；无授权路径Mock/预检0真实调用；首对在当前用户明确授权后仅2请求，既往10次不作无限授权。；本次2次返回全部记录且首对后等待提交听评；unknown不自动重发、下一决定绑定实际attempt/目标范围有Mock正反。；新首对humanListening为pending；用户未提交首中尾/转折/正文/背景存在感评分，音量问题保持效果待验。；原始WAV/正常母版有不同声道与时长元数据；未形成相同音量/相同媒体来源的完整听评记录，不用RMS冒称背景响度。；正常worker掌握供应商响应和unknown账本，mock预检/回应原件记录不伪成功；D诊断采集unknown保持，0自动重发。",
+      "actualBoundary": "scene整体指导、修订、已采用/移除事件进入AI建议；旧建议在指导变化后不可采用，dry/extract保持原政策。；保留旧v1/v2/v3，新presence独立ID，来源记录及明确冲突聚合；普通编译/诊断0额外文本调用、0真实调用。；原A/B/C/D条件档案存在，D精确分类已只读复核；未本轮重跑全部历史样本，未取得外部审计ZIP完整比对。；旧343字78.4秒K作为既往基准。用户已提交本次首对原始听评：K1音乐、水滴及回响清楚，旁白期间仍可辨、不妨碍人声，正文音色节奏正常且满足预期；K0水滴/回响清楚、正文正常，但未听到音乐。 本次K1效果问题已满足；逐段首中尾和宁静转折未单列，未用RMS替代听感。；本次联合音频原件和正常母版已收到，K1本例背景效果获用户认可；反馈未明确试听raw或母版，也没有两来源相同播放音量的逐一对照，完整保真听辨仍待验。；显式clear/natural/subtle仅替换presence块，未设置原样；development与volumeChange分开，member+quote+occurrence保护，明确冲突聚合且正文词语不误扫。；首对真实K0/K1冻结仅presence不同，343字正文/参考/模型/参数/路由相同，全部实际请求及原文件有ledger。；无授权路径Mock/预检0真实调用；首对在当前用户明确授权后仅2请求，既往10次不作无限授权。；本次2次返回全部记录，首对后按停点未追加请求，现已另录用户听评；unknown不自动重发，下一决定绑定实际attempt/目标范围有Mock正反。；用户已提交本次首对原始听评：K1音乐、水滴及回响清楚，旁白期间仍可辨、不妨碍人声，正文音色节奏正常且满足预期；K0水滴/回响清楚、正文正常，但未听到音乐。 K1本例背景存在感问题关闭；首中尾覆盖与宁静转折未逐段明确记录，完整条目仍未全部验证。；本次用户自由听评已提交，K1本例满足预期；反馈没有明确原始WAV与正常母版各自的媒体来源、播放设备/音量及对照，保真听辨仍未验证，不用RMS冒称背景响度。；正常worker掌握供应商响应和unknown账本，mock预检/回应原件记录不伪成功；D诊断采集unknown保持，0自动重发。",
       "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。"
     },
     {
@@ -1177,10 +1195,12 @@
         "B23",
         "B24"
       ],
-      "actual": "首对真实K0/K1已收2份产物；本次用户听评尚未提交。",
+      "actual": "首对2份产物已交用户听评，K1本例效果满足预期，K0没听到音乐；首中尾/转折细项及raw/master同音量媒体对照未明确记录，完整验收保持未验证。",
       "evidenceIds": [
         "D",
+        "K-assessment",
         "K-frozen",
+        "K-human",
         "K-live",
         "K-mock",
         "K-preflight",
@@ -1191,12 +1211,11 @@
         "unknown"
       ],
       "pending": [
-        "raw与正常母版统一播放音量听辨记录",
+        "raw与正常母版各自媒体来源、设备/系统/播放器相同音量及DSP记录和逐一听辨",
         "全部外部原档案对应关系",
+        "原始WAV/正常母版/导出来源与相同播放音量的保真听辨",
         "听感结果另列B22，不能由请求冻结推导",
-        "实际raw/母版/导出播放链的保真听辨",
-        "提交用户首/中/尾、转折、正文和背景存在感听评",
-        "用户提交本次K0/K1听评及是否满意"
+        "首/中/尾覆盖及宁静转折的逐段明确记录"
       ]
     },
     {
@@ -1673,7 +1692,9 @@
       "actual": "29任务/130矩阵已逐项映射且红灯/最终分列；外部证据与最终签收仍未关闭。",
       "evidenceIds": [
         "D",
+        "K-assessment",
         "K-frozen",
+        "K-human",
         "K-live",
         "K-mock",
         "K-preflight",
@@ -1728,7 +1749,7 @@
         "5新手各关键任务>=4/5独立完成",
         "960/1280/1440同数据全状态",
         "ENOSPC、权限拒绝、复制中进程终止恢复",
-        "raw与正常母版统一播放音量听辨记录",
+        "raw与正常母版各自媒体来源、设备/系统/播放器相同音量及DSP记录和逐一听辨",
         "不同origin仍隔离；旧path-only namespace只查看/复制不自动迁入，用户说明见A89",
         "仅验证实际最小HTTP诊断；不自动授权外发私有素材或全部工作区快照",
         "使用distribution原进程与HTTP证据，没有重复启动；不扩为所有物理PID回收时序",
@@ -1736,12 +1757,12 @@
         "全部外部原档案对应关系",
         "原F01—F07 38项fixture/13红灯逐项等价重放",
         "原外部两个审计ZIP仍缺失，原红灯重放缺口单列A03",
+        "原始WAV/正常母版/导出来源与相同播放音量的保真听辨",
         "听感结果另列B22，不能由请求冻结推导",
         "多音频真实冷启动与用户等待诊断",
         "完整键盘、媒体Promise与自动母版组合",
         "实体浏览器与系统剪贴板未操作；本行验证实际HTTP和回调投影",
         "实体浏览器路由失败另待验证",
-        "实际raw/母版/导出播放链的保真听辨",
         "实际候选/整章/自动母版的全部长尾浏览器组合另待验，不能由参考单例扩为全套",
         "实际跨origin找回操作未运行；本条验证的是说明与真实隔离政策",
         "实际输入法续写属于A49，不由validator证明",
@@ -1753,13 +1774,11 @@
         "当前发行包Finder双击及占用端口恢复实录",
         "当前观察时尚未本地commit；提交后release-revision关联534/534同一源码与实际包；不push/merge",
         "扫描范围仅报告列出的公开源、dist、16已有commit与当前实际ZIP；最终本地commit由release-revision关联，不冒称未列历史",
-        "提交用户首/中/尾、转折、正文和背景存在感听评",
         "数据/正文/付费/错版单独零容忍判断",
         "未确定自然语义保留原文；非自动NLP判定",
         "浏览器拒播及真实音频文件失败",
         "浏览器输入/轮询/完整载荷、请求数、p95",
         "物理外接盘断开+Finder启动属于真实环境组合，未冒称运行",
-        "用户提交本次K0/K1听评及是否满意",
         "真实IME/200%缩放/媒体拒播/权限低空间及全部多页长尾仍未验，不由10项代替",
         "真实IME、光标位置、保存等待期间继续中文输入",
         "真实库仅dry-run，尚未执行真实对象修复",
@@ -1769,7 +1788,8 @@
         "自然语言不确定语义不自动改写；无毫秒/新文本或音乐请求",
         "键盘/读屏/200%全界面缩放真人验收",
         "长历史实际全音频解码与前端内存",
-        "长期增长数据的空间诊断及清理演练"
+        "长期增长数据的空间诊断及清理演练",
+        "首/中/尾覆盖及宁静转折的逐段明确记录"
       ]
     }
   ],
@@ -4654,11 +4674,13 @@
       "scenario": "原343字场景K",
       "expected": "78.4秒旧K作基准，新结果首中尾听辨；不能用总RMS代替背景比例",
       "status": "已实现未验证",
-      "actual": "旧343字78.4秒K只作为既往基准；新首对真实收到原始WAV和正常母版，背景与首中尾文字身份仍待听评。",
+      "actual": "旧343字78.4秒K作为既往基准。用户已提交本次首对原始听评：K1音乐、水滴及回响清楚，旁白期间仍可辨、不妨碍人声，正文音色节奏正常且满足预期；K0水滴/回响清楚、正文正常，但未听到音乐。 本次K1效果问题已满足；逐段首中尾和宁静转折未单列，未用RMS替代听感。",
       "evidenceIds": [
         "old-K",
         "K-frozen",
-        "K-live"
+        "K-live",
+        "K-human",
+        "K-assessment"
       ],
       "sourceFiles": [
         "server/templates.mjs",
@@ -4667,8 +4689,8 @@
       "testFiles": [],
       "fixture": "复用所列tests的临时SQLite/Mock/localStorage或真实归档；详见证据层级",
       "unverifiedCombinations": [
-        "提交用户首/中/尾、转折、正文和背景存在感听评",
-        "实际raw/母版/导出播放链的保真听辨"
+        "首/中/尾覆盖及宁静转折的逐段明确记录",
+        "原始WAV/正常母版/导出来源与相同播放音量的保真听辨"
       ],
       "taskIds": [
         "T12",
@@ -4688,7 +4710,17 @@
         {
           "id": "K-live",
           "path": "data/ux-hardening-20261003/k-presence/live/ledger.json",
-          "level": "真实供应商返回，未人工验声"
+          "level": "真实供应商返回及本次听评submitted记录"
+        },
+        {
+          "id": "K-human",
+          "path": "data/ux-hardening-20261003/k-presence/live/human-listening.json",
+          "level": "用户原样提交的实际自由听评"
+        },
+        {
+          "id": "K-assessment",
+          "path": "data/ux-hardening-20261003/k-presence/live/assessment.json",
+          "level": "本次听评与既有audioId条件绑定和范围判定"
         }
       ],
       "fixtureFiles": [],
@@ -4705,11 +4737,13 @@
       "scenario": "原文件与应用/导出",
       "expected": "目标背景来自模型，保真无补声",
       "status": "已实现未验证",
-      "actual": "旧343字78.4秒K只作为既往基准；新首对真实收到原始WAV和正常母版，背景与首中尾文字身份仍待听评。",
+      "actual": "本次联合音频原件和正常母版已收到，K1本例背景效果获用户认可；反馈未明确试听raw或母版，也没有两来源相同播放音量的逐一对照，完整保真听辨仍待验。",
       "evidenceIds": [
         "old-K",
         "K-frozen",
-        "K-live"
+        "K-live",
+        "K-human",
+        "K-assessment"
       ],
       "sourceFiles": [
         "server/templates.mjs",
@@ -4718,8 +4752,7 @@
       "testFiles": [],
       "fixture": "复用所列tests的临时SQLite/Mock/localStorage或真实归档；详见证据层级",
       "unverifiedCombinations": [
-        "提交用户首/中/尾、转折、正文和背景存在感听评",
-        "实际raw/母版/导出播放链的保真听辨"
+        "原始WAV/正常母版/导出来源与相同播放音量的保真听辨"
       ],
       "taskIds": [
         "T12",
@@ -4739,7 +4772,17 @@
         {
           "id": "K-live",
           "path": "data/ux-hardening-20261003/k-presence/live/ledger.json",
-          "level": "真实供应商返回，未人工验声"
+          "level": "真实供应商返回及本次听评submitted记录"
+        },
+        {
+          "id": "K-human",
+          "path": "data/ux-hardening-20261003/k-presence/live/human-listening.json",
+          "level": "用户原样提交的实际自由听评"
+        },
+        {
+          "id": "K-assessment",
+          "path": "data/ux-hardening-20261003/k-presence/live/assessment.json",
+          "level": "本次听评与既有audioId条件绑定和范围判定"
         }
       ],
       "fixtureFiles": [],
@@ -6626,12 +6669,12 @@
       "evidence": [
         {
           "id": "credential-review",
-          "path": "data/ux-hardening-20261003/credential-review.json",
+          "path": "data/ux-hardening-20261003/checkpoints/6e2b449/credential-review.json",
           "level": "已执行公开候选源与dist范围扫描及16已有commit历史检查"
         },
         {
           "id": "package-scan",
-          "path": "data/ux-hardening-20261003/distribution/package-content-scan.json",
+          "path": "data/ux-hardening-20261003/checkpoints/6e2b449/distribution/package-content-scan.json",
           "level": "已扫描修后实际ZIP独立解包文件集"
         }
       ],
@@ -6720,7 +6763,7 @@
         },
         {
           "id": "distribution",
-          "path": "data/ux-hardening-20261003/distribution/verification.json",
+          "path": "data/ux-hardening-20261003/checkpoints/6e2b449/distribution/verification.json",
           "level": "已执行修后实际本机发行包14项复验"
         },
         {
@@ -6884,7 +6927,7 @@
         },
         {
           "id": "distribution",
-          "path": "data/ux-hardening-20261003/distribution/verification.json",
+          "path": "data/ux-hardening-20261003/checkpoints/6e2b449/distribution/verification.json",
           "level": "已执行修后实际本机发行包14项复验"
         },
         {
@@ -6899,7 +6942,7 @@
         },
         {
           "id": "package-scan",
-          "path": "data/ux-hardening-20261003/distribution/package-content-scan.json",
+          "path": "data/ux-hardening-20261003/checkpoints/6e2b449/distribution/package-content-scan.json",
           "level": "已扫描修后实际ZIP独立解包文件集"
         }
       ],
@@ -8127,7 +8170,7 @@
         {
           "id": "K-live",
           "path": "data/ux-hardening-20261003/k-presence/live/ledger.json",
-          "level": "真实供应商返回，未人工验声"
+          "level": "真实供应商返回及本次听评submitted记录"
         },
         {
           "id": "K-mock",
@@ -8203,7 +8246,7 @@
       "scenario": "每次新生成与unknown",
       "expected": "记录全部返回/未决，暂停规则生效，重试精确关联",
       "status": "已实现并验证",
-      "actual": "本次2次返回全部记录且首对后等待提交听评；unknown不自动重发、下一决定绑定实际attempt/目标范围有Mock正反。",
+      "actual": "本次2次返回全部记录，首对后按停点未追加请求，现已另录用户听评；unknown不自动重发，下一决定绑定实际attempt/目标范围有Mock正反。",
       "evidenceIds": [
         "K-live",
         "unknown",
@@ -8227,7 +8270,7 @@
         {
           "id": "K-live",
           "path": "data/ux-hardening-20261003/k-presence/live/ledger.json",
-          "level": "真实供应商返回，未人工验声"
+          "level": "真实供应商返回及本次听评submitted记录"
         },
         {
           "id": "unknown",
@@ -8256,17 +8299,19 @@
       "id": "B22",
       "scenario": "K原始听评",
       "expected": "背景存在感、首中尾、转折、文字身份全部记录，用户满意才关音量问题",
-      "status": "按计划延期",
-      "actual": "新首对humanListening为pending；用户未提交首中尾/转折/正文/背景存在感评分，音量问题保持效果待验。",
+      "status": "已实现未验证",
+      "actual": "用户已提交本次首对原始听评：K1音乐、水滴及回响清楚，旁白期间仍可辨、不妨碍人声，正文音色节奏正常且满足预期；K0水滴/回响清楚、正文正常，但未听到音乐。 K1本例背景存在感问题关闭；首中尾覆盖与宁静转折未逐段明确记录，完整条目仍未全部验证。",
       "evidenceIds": [
         "K-live",
-        "old-K"
+        "old-K",
+        "K-human",
+        "K-assessment"
       ],
       "sourceFiles": [],
       "testFiles": [],
       "fixture": "复用所列tests的临时SQLite/Mock/localStorage或真实归档；详见证据层级",
       "unverifiedCombinations": [
-        "用户提交本次K0/K1听评及是否满意"
+        "首/中/尾覆盖及宁静转折的逐段明确记录"
       ],
       "taskIds": [
         "T12",
@@ -8276,12 +8321,22 @@
         {
           "id": "K-live",
           "path": "data/ux-hardening-20261003/k-presence/live/ledger.json",
-          "level": "真实供应商返回，未人工验声"
+          "level": "真实供应商返回及本次听评submitted记录"
         },
         {
           "id": "old-K",
           "path": "data/native-scene-20261003/original-long-followup/human-listening-assessment.json",
           "level": "既往343字K记录"
+        },
+        {
+          "id": "K-human",
+          "path": "data/ux-hardening-20261003/k-presence/live/human-listening.json",
+          "level": "用户原样提交的实际自由听评"
+        },
+        {
+          "id": "K-assessment",
+          "path": "data/ux-hardening-20261003/k-presence/live/assessment.json",
+          "level": "本次听评与既有audioId条件绑定和范围判定"
         }
       ],
       "fixtureFiles": [],
@@ -8298,10 +8353,12 @@
       "scenario": "原始WAV与正常母版试听",
       "expected": "记录相同媒体来源和播放音量；信号结果不冒充背景独立响度",
       "status": "已实现未验证",
-      "actual": "原始WAV/正常母版有不同声道与时长元数据；未形成相同音量/相同媒体来源的完整听评记录，不用RMS冒称背景响度。",
+      "actual": "本次用户自由听评已提交，K1本例满足预期；反馈没有明确原始WAV与正常母版各自的媒体来源、播放设备/音量及对照，保真听辨仍未验证，不用RMS冒称背景响度。",
       "evidenceIds": [
         "K-live",
-        "K-mock"
+        "K-mock",
+        "K-human",
+        "K-assessment"
       ],
       "sourceFiles": [
         "server/audio.mjs",
@@ -8310,7 +8367,7 @@
       "testFiles": [],
       "fixture": "复用所列tests的临时SQLite/Mock/localStorage或真实归档；详见证据层级",
       "unverifiedCombinations": [
-        "raw与正常母版统一播放音量听辨记录"
+        "raw与正常母版各自媒体来源、设备/系统/播放器相同音量及DSP记录和逐一听辨"
       ],
       "taskIds": [
         "T12",
@@ -8320,12 +8377,22 @@
         {
           "id": "K-live",
           "path": "data/ux-hardening-20261003/k-presence/live/ledger.json",
-          "level": "真实供应商返回，未人工验声"
+          "level": "真实供应商返回及本次听评submitted记录"
         },
         {
           "id": "K-mock",
           "path": "data/ux-hardening-20261003/k-presence/mock/ledger.json",
           "level": "已运行正常worker Mock对照"
+        },
+        {
+          "id": "K-human",
+          "path": "data/ux-hardening-20261003/k-presence/live/human-listening.json",
+          "level": "用户原样提交的实际自由听评"
+        },
+        {
+          "id": "K-assessment",
+          "path": "data/ux-hardening-20261003/k-presence/live/assessment.json",
+          "level": "本次听评与既有audioId条件绑定和范围判定"
         }
       ],
       "fixtureFiles": [],
@@ -8374,7 +8441,7 @@
         {
           "id": "K-live",
           "path": "data/ux-hardening-20261003/k-presence/live/ledger.json",
-          "level": "真实供应商返回，未人工验声"
+          "level": "真实供应商返回及本次听评submitted记录"
         },
         {
           "id": "K-preflight",
@@ -8404,5 +8471,13 @@
       "implementationVersion": "记录时为待本地提交工作树；最终SHA提交后登记于implementationRevisionSource，baseSHA只是整改基线",
       "implementationRevisionSource": "data/ux-hardening-20261003/release-revision.json"
     }
-  ]
+  ],
+  "humanListeningUpdate": {
+    "recordedAtUTC": "2026-10-03T10:55:16.648765+00:00",
+    "userSavedAtUTC": "2026-10-03T10:49:25.165Z",
+    "rawEvidence": "data/ux-hardening-20261003/k-presence/live/human-listening.json",
+    "bindingAssessment": "data/ux-hardening-20261003/k-presence/live/assessment.json",
+    "productionVerificationHistoryChanged": false,
+    "scope": "本次听评事实补录；保留原generatedAt/observedHEAD/implementation信息和6e2b449当时验证历史"
+  }
 }

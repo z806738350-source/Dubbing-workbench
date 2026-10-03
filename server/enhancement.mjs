@@ -101,6 +101,7 @@ export function createEnhancement(store, d) {
     const v = u.variants[mode];
     const guidance = v.guidance ?? (mode === 'dry' ? u.guidance || '' : '');
     const template = v.template || (mode === 'scene' ? 'scene-v1' : u.kind === 'single' ? first.template : 'dialogue-dry-v1');
+    if (forGeneration && mode === 'scene' && v.backgroundPresence && v.backgroundPresence !== 'unspecified' && (v.resolvedCompilerId || template) !== 'scene-v4-presence-1') fail('所选背景存在感尚未生效，请先核对并使用存在感模板；本次未发送');
     const input = { targetKind: 'unit', unitId: u.id, mode, model: model || first.model || 'seed-audio-1.0', template, config: first.config, members: rows.map(s => ({ id: s.id, roleId: s.roleId, type: s.type, text: s.text, voiceId: s.voiceId, performance: s.performance })), slots, referenceVoiceIds, guidance, events: selected.map(eventInput), ...(mode==='scene' && v.backgroundPresence ? {backgroundPresence:v.backgroundPresence} : {}), ...(v.resolvedCompilerId ? {compilerId:v.resolvedCompilerId} : {}) };
     if (template==='scene-v4-presence-1') input.constraintSources={guidance:v.guidanceSource || {kind:guidance?'inherited_user':'system_default'},backgroundPresence:v.backgroundPresenceSource || {kind:'system_default'},events:selected.map(e=>({id:e.id,source:e.source || {kind:e.evidence?.suggestionId?'adopted_ai':'inherited_user'}}))};
     if (u.kind === 'single' && mode === 'dry') Object.assign(input, d.inputOf(first), v.template ? {template:v.template} : {});
@@ -388,7 +389,7 @@ export function createEnhancement(store, d) {
       return { ...publicPlan,input:a.input,basis:a.basis,currentInput:input,differences,identityChanged:!same(a.basis,basis(u,mode)) };
     }
     const input = buildInput(u, mode);
-    if (p.kind === 'template') return { before: compile(input), after: compile({ ...input, template: p.template }), from: input.template, to: p.template };
+    if (p.kind === 'template') return { before: compile(input), after: compile({ ...input, template: p.template, compilerId: undefined }), from: input.template, to: p.template };
     fail('预览类型无效');
   }
   function dissolvePlan(u) {

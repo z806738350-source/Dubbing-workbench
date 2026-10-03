@@ -365,6 +365,36 @@ test('场景模板 v2 仅初始化新单元；旧缺省声音保持匹配，明�
   }
 });
 
+test('存在感模板切换预览清除旧编译器，before和历史仍按原版本',t=>{
+  const {store,d,c,e,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id;
+  mutateUnit('unit.template',store.get('units',id),{mode:'scene',template:'scene-v3-native',confirm:true});
+  const old=complete(id,'scene');mutateUnit('unit.restore',store.get('units',id),{mode:'scene',audioId:old.audio.id,restoreSettings:true});
+  mutateUnit('unit.update',store.get('units',id),{mode:'scene',backgroundPresence:'clear'});
+  const u=store.get('units',id),saved=store.get('audios',old.audio.id),units=store.all('units');
+  assert.equal(u.variants.scene.resolvedCompilerId,'native3-paragraph-k');
+  const preview=e.preview({kind:'template',chapterId:c.id,revision:store.get('chapters',c.id).revision,id,entityRevision:u.revision,mode:'scene',template:'scene-v4-presence-1'});
+  assert.equal(preview.before,old.audio.prompt);assert.match(preview.after,/明确存在感/);assert.notEqual(preview.after,preview.before);assert.deepEqual(store.all('units'),units);
+  const current=mutateUnit('unit.template',u,{mode:'scene',template:'scene-v4-presence-1',confirm:true});
+  assert.equal(current.variants.scene.resolvedCompilerId,undefined);assert.equal(compile(e.input(current,'scene')),preview.after);
+  assert.deepEqual(store.get('audios',old.audio.id),saved);assert.equal(e.history(current,'scene').find(a=>a.id===old.audio.id).available,true);
+});
+
+test('存在感生成资格不阻断旧声音历史、模板预览与设置恢复',async t=>{
+  for(const presence of ['clear','natural','subtle']) await t.test(presence,t=>{
+    const {store,d,c,e,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id,old=complete(id,'scene'),saved=store.get('audios',old.audio.id);
+    mutateUnit('unit.update',store.get('units',id),{mode:'scene',backgroundPresence:presence});
+    const u=store.get('units',id),base={chapterId:c.id,revision:store.get('chapters',c.id).revision,id,entityRevision:u.revision,mode:'scene'};
+    assert.equal(e.status(u,'scene').validity,'matched');
+    assert.equal(e.history(u,'scene').find(a=>a.id===old.audio.id).available,true);
+    const preview=e.preview({...base,kind:'template',template:'scene-v4-presence-1'});
+    assert.equal(preview.before,old.audio.prompt);assert.match(preview.after,presence==='clear'?/明确存在感/:presence==='natural'?/自然共同呈现/:/轻柔背景/);
+    const restore=e.preview({...base,kind:'restore',audioId:old.audio.id});assert.equal(restore.resultWouldMatch,true);
+    const restored=mutateUnit('unit.restore',u,{mode:'scene',audioId:old.audio.id,restoreSettings:true,baseRevisions:restore.baseRevisions});
+    assert.equal(restored.variants.scene.status.validity,'matched');assert.equal(restored.variants.scene.template,'scene-v2');
+    assert.deepEqual(store.get('audios',old.audio.id),saved);assert.equal(store.all('jobs').length,1);
+  });
+});
+
 test('EX06/CP07 四层资格不能绕过，参考停用不阻断本地导出，关闭增强不拆活动组',t=>{
   const {store,d,c,e,v,edit,complete,mutateUnit}=setup(t),ids=d.list(c.id).map(s=>s.id),u=edit('unit.create',{ids:ids.slice(0,2)});complete(u.id);complete(ids[2]);
   const cNow=()=>store.get('chapters',c.id), payload=()=>({kind:'export',format:'wav',confirm:true,arrangement:cNow().arrangement,reviewItems:e.resolve(c.id).map(r=>({id:r.s.id,audioId:r.a.id,basis:r.basis}))});
