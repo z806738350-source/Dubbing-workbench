@@ -40,6 +40,7 @@ import { api, action } from "./api";
 import { readDraft, writeDraft, clearDraft, hasDraft, listDrafts, recoverDraft, discardDraft, finishDraftSave } from "./drafts";
 import type { DraftRecord } from "./drafts";
 import AnalysisDialog from "./AnalysisDialog";
+import SegmentSplitDialog from "./SegmentSplitDialog";
 import { ObjectDraftTools, useObjectDraft } from "./ObjectDraft";
 import { saveAction, speechDraftProblem, withSavedDrafts, draftScopeRevision } from "./autosave";
 import { useDraftSaveStatus } from "./ObjectDraft";
@@ -65,6 +66,7 @@ import type {
   GenerationPlan,
 } from "./types";
 
+const inVoiceLibrary = (voice: Voice) => voice.state !== "deleted" && !voice.deletePending;
 const names: Record<string, string> = {
   none: "未生成",
   queued: "排队中",
@@ -214,10 +216,10 @@ export default function App() {
         s.chapters.find(
           (c) => !projectRef.current || c.projectId === projectRef.current,
         )?.id || "";
-    if (id !== chapterRef.current) setChapterId(id);
+    if (id !== chapterRef.current) { chapterRef.current=id; setChapterId(id); }
     if (id) {
       const c = await api<ChapterDetail>("/chapters/" + id);
-      if (chapterRef.current && chapterRef.current !== id) return;
+      if (chapterRef.current !== id) return;
       setChapter(c);
       setProjectId(c.projectId);
       setSelected((prev) =>
@@ -385,6 +387,28 @@ export default function App() {
     setNavOpen(false);
     setInspectorOpen(false);
   };
+  const pickProject = (id: string, source = stateRef.current) => {
+    projectRef.current=id;setProjectId(id);
+    pickChapter(source?.chapters.find(c=>c.projectId===id)?.id || "");
+    setChapter(null);setSelected("");setChecked([]);setFilter("all");setSearch("");
+    setOldPreview(null);setCurrentMembers([]);setCurrentSegment("");
+    setModal(null);setTaskRecord(null);setUnitInitialEvent(undefined);
+    recoveryTarget.current=null;setDraftIds([]);
+  };
+  const deleteProject = async (id: string) => {
+    const result = await action<{cleanupPending?:boolean}>("project.delete", {id});
+    if(result?.cleanupPending)setNotice("项目已删除；部分文件暂存待清理，下次启动会继续清理。");
+    if(projectRef.current===id)audio.current?.pause();
+    // Finish a pre-delete read before selecting the remaining project.
+    await refreshPending.current?.catch(()=>{});
+    const current=stateRef.current;
+    const remaining=current?.projects.filter(p=>p.id!==id) || [];
+    if(projectRef.current===id){
+      for(const c of current?.chapters.filter(c=>c.projectId===id) || [])delete bookmarks.current[c.id];
+      pickProject(remaining[0]?.id || "",current);
+    }
+    setState(previous=>previous ? {...previous,projects:previous.projects.filter(p=>p.id!==id),chapters:previous.chapters.filter(c=>c.projectId!==id)} : previous);
+  };
   useEffect(()=>{
     const target=recoveryTarget.current;if(!target)return;
     if(target.chapterId&&chapter?.id!==target.chapterId)return;
@@ -436,7 +460,7 @@ export default function App() {
       if(generationIntent.current!==intent||chapterRef.current!==request.plan.chapterId){await refresh();return;}
       if(receipt.error)throw Object.assign(new Error(receipt.error),{status:receipt.errorStatus});
       if(chapterRef.current!==request.plan.chapterId)return;
-      setGenerationPlan(null);setNotice("已开始制作，成功结果和历史都会保留。");await refresh();
+      setGenerationPlan(null);await refresh();
     });
   };
   const startPlay = async (
@@ -452,7 +476,9 @@ export default function App() {
     if (kind !== "voices" && !standalone && chapter) {
       try {
         const fresh = await api<ChapterDetail>("/chapters/" + chapter.id);
+        if(chapterRef.current!==chapter.id)return;
         const now = await api<State>("/state");
+        if(chapterRef.current!==chapter.id)return;
         const existing = playerRef.current;
         const expected = existing?.chapterId === chapter.id && existing.kind === kind && existing.id === id ? existing.playbackItems : chapter.playbackItems;
         const target = unitSession && fresh.units?.find(u=>u.id === unitSession.id);
@@ -462,7 +488,7 @@ export default function App() {
           setError("章节版本或任务状态已变化，请核对后重新选择试听。");
           return;
         }
-      } catch { setError("无法核对播放版本，请恢复连接后重试。"); return; }
+      } catch { if(chapterRef.current===chapter.id)setError("无法核对播放版本，请恢复连接后重试。"); return; }
     }
     if (
       !master &&
@@ -566,17 +592,9 @@ export default function App() {
           options={
             state?.projects.map((p) => ({ value: p.id, label: p.name })) || []
           }
-          onChange={(id) => {
-            projectRef.current = id;
-            setProjectId(id);
-            const c = state?.chapters.find((c) => c.projectId === id);
-            if (c) pickChapter(c.id);
-            else {
-              chapterRef.current = "";
-              closeGeneration();setChapterId("");
-              setChapter(null);
-            }
-          }}
+          onChange={pickProject}
+          onDelete={id => { void run(()=>deleteProject(id)); }}
+          disabled={busy || !connectionReady}
         />
         <button
           className="icon"
@@ -594,7 +612,7 @@ export default function App() {
       </button>
       <button className="nav-item" onClick={() => setModal("voices")}>
         <Library size={17} />
-        音色库<span>{voices.length}</span>
+        音色库<span>{voices.filter(inVoiceLibrary).length}</span>
       </button>
       <button
         className="nav-item"
@@ -678,6 +696,10 @@ export default function App() {
                       onVoice={openVoice}
                       unit={selectedUnit}
                       onUnit={()=>selectedUnit && openUnit(selectedUnit.id)}
+                      defaultModel={state?.settings.textModel || "gemini-3.8-flash"}
+                      contextRevision={project?.contextRevision || 0}
+                      stateJobs={state?.jobs || []}
+                      onSplitApplied={async(id,isCurrent)=>{await refresh();if(isCurrent()&&chapterRef.current===chapter.id)locate(id);}}
                     />
       ) : <div className="inspector-scroll">
         <div className="inspector-section">
@@ -751,10 +773,12 @@ export default function App() {
             </div>
           ) : !chapter ? (
             <Empty
+              className="welcome-empty"
               icon={<BookOpen size={32} />}
               heading={project ? "让文字开始有声" : "从一个故事开始"}
               action={
                 <>
+                  <button className="button" onClick={playDemo}><Play size={16}/>免费试听演示</button>
                   <button
                     className="button primary"
                     onClick={() => setModal(project ? "chapter" : "project")}
@@ -769,21 +793,20 @@ export default function App() {
               }
             >
               按章整理文本，为角色选择声音，逐条试听与打磨。
-              <button className="button demo-entry" onClick={playDemo}><Play size={16}/>免费试听演示</button>
             </Empty>
           ) : (
             <>
               <section className="chapter-heading">
-                <div><button className="title-button" onClick={()=>setModal("rename")} disabled={locked}><h1>{chapter.title}</h1><MoreHorizontal size={18}/></button><p>{total} 条台词 · {ready} 条声音就绪 · {passed} 条听评通过 <progress max={total||1} value={ready} aria-label="声音准备进度"/></p></div>
+                <div><button className="title-button" title={chapter.title} onClick={()=>setModal("rename")} disabled={locked}><h1>{chapter.title}</h1><MoreHorizontal size={18}/></button><p>{total} 条台词 · {ready} 条声音就绪 · {passed} 条听评通过 <progress max={total||1} value={ready} aria-label="声音准备进度"/></p></div>
                 <div className="chapter-actions">
-                  {!criticalIssues.length&&<button className="button" onClick={()=>setModal("issues")}>{issues.length?`需要你处理 · ${issues.length}`:"查看问题"}</button>}
-                  <button className="button primary" disabled={busy||locked||!connectionReady} onClick={()=>{
+                  <button className="button" onClick={()=>setModal("issues")}>{issues.length?`查看问题 · ${issues.length}`:"查看问题"}</button>
+                  {!locked&&<button className="button primary" disabled={busy||!connectionReady} onClick={()=>{
                     if(saveStatus==='conflict'||saveStatus==='unreliable'){setModal('recovery');return;}
                     if(!segments.length||criticalIssues.length){if(!segments.length){setPanelMode('analysis');if(window.innerWidth<1216)setInspectorOpen(true);}else setModal('issues');return;}
                     if(ready<total){void run(()=>generate(segments.filter(s=>!s.excluded&&effectiveStatus(s).validity!=='matched').map(s=>s.id),true));return;}
                     if(passed<total){void playChapter();return;}
                     setModal('export');
-                  }}>{locked?'正在制作…':saveStatus==='conflict'?'处理保存冲突':!segments.length?'AI准备剧本':criticalIssues.length?`需要你处理 · ${issues.length}`:ready<total?'生成待办':passed<total?'整章试听':'导出成品'}</button>
+                  }}>{saveStatus==='conflict'?'处理保存冲突':!segments.length?'AI准备剧本':criticalIssues.length?`需要你处理 · ${issues.length}`:ready<total?'生成待办':passed<total?'整章试听':'导出成品'}</button>}
                 </div>
               <nav className="production-steps" aria-label="章节制作步骤">
                 <button onClick={()=>setModal('chapter')}><span>1</span>导入文字</button>
@@ -791,7 +814,6 @@ export default function App() {
                 <button className={panelMode==='settings'?'active':''} onClick={()=>{setPanelMode('settings');setInspectorOpen(false);}}><span>3</span>试听与修改</button>
                 <button onClick={()=>setModal('export')}><span>4</span>导出成品</button>
               </nav>
-              </section>
               {locked && (
                 <div className="task-banner" role="status">
                   <AudioLines size={17} />
@@ -821,6 +843,7 @@ export default function App() {
                   </button>
                 </div>
               )}
+              </section>
               <div className="editor-layout">
                 <section className="script-panel">
                   <div className="script-tools">
@@ -1314,7 +1337,7 @@ export default function App() {
         play={(id,title,historical)=>{const unit=chapter.units!.find(u=>u.id === unitPanelId)!;const mode=unit.variants.scene.current === id ? "scene" : "dry";setCurrentMembers(unit.kind === "group" && !historical ? unit.members : []);
           void startPlay("audios",id,title,undefined,!!historical,historical ? undefined : {id:unit.id,mode,audioId:id,basis:unit.variants[mode].status.basis,state:unit.state});}}/>}
       {generationPlan && chapter && <GeneratePlan plan={generationPlan.plan} chapter={chapter} model={state?.settings.model} grantId={grantId} unknown={generationUnknown} routeBlocked={!!state?.settings.routeBlocked} retryUnknown={generationPlan.retryUnknown} resumeRoute={generationPlan.resumeRoute} busy={busy}
-        onGrant={id=>{if(generationIntent.current===planIntent)setGrantId(id);}} onRetryUnknown={value=>{if(generationIntent.current===planIntent)setGenerationPlan(current=>current?{...current,retryUnknown:value}:null);}} onResumeRoute={value=>{if(generationIntent.current===planIntent)setGenerationPlan(current=>current?{...current,resumeRoute:value}:null);}} onGenerate={submitGeneration} onClose={closeGeneration} onRecheck={async()=>{
+        onGrant={id=>{if(generationIntent.current===planIntent)setGrantId(id);}} onRetryUnknown={value=>{if(generationIntent.current===planIntent)setGenerationPlan(current=>current?{...current,retryUnknown:value}:null);}} onResumeRoute={value=>{if(generationIntent.current===planIntent)setGenerationPlan(current=>current?{...current,resumeRoute:value}:null);}} onGenerate={submitGeneration} onClose={closeGeneration} onEdit={id=>{closeGeneration();locate(id);}} onRecheck={async()=>{
           const request=generationPlan;
           const intent=++generationIntent.current;
           const current=()=>generationIntent.current===intent&&chapterRef.current===request.plan.chapterId;
@@ -1575,7 +1598,7 @@ export default function App() {
           </p>
           {state.settings.routeBlocked && (
             <p className="error-inline">
-              接口因共享错误暂停。请检查额度和配置后，在任务记录中重新发起。
+              声音接口因权限或额度错误暂停。请核对连接与额度，返回声音生成、创建候选或一起演绎面板，勾选“恢复本次声音请求”后再点击生成；已有授权无需重复添加。
             </p>
           )}
           <WorkspaceLocation directory={state.settings.workspaceDirectory} projectCount={state.projects.length} projectName={state.projects.find(p => p.id === projectId)?.name} projectFolders={state.settings.projectFolders} onMoved={async () => {
@@ -1926,6 +1949,7 @@ function VoiceLibrary({
   const [upload, setUpload] = useState(false),
     [file, setFile] = useState<File | null>(null),
     [query, setQuery] = useState("");
+  const libraryVoices = voices.filter(inVoiceLibrary), pendingDeletes = voices.filter(v => v.deletePending);
   return (
     <Dialog title="参考音色库" onClose={onClose} wide>
       {inspecting && <VoiceInspection voice={inspecting} current={voices.find(v => v.id === inspecting.id)} play={play} playSample={playSample} onClose={() => setInspecting(null)} onSaved={onRefresh} />}
@@ -2060,8 +2084,11 @@ function VoiceLibrary({
           <p className="hint">
             保存参考声音，跨项目复用。绑定角色前可以先试听素材。
           </p>
+          {pendingDeletes.length > 0 && <p className={pendingDeletes.some(v => v.deleteError) ? "error-inline" : "hint"} role="status">
+            正在删除 {pendingDeletes.length} 份参考素材；{pendingDeletes.some(v => v.deleteError) ? "暂时无法清理的文件会在空闲时重试。" : "等待进行中的任务或试听结束。"}
+          </p>}
           <div className="voice-grid">
-            {voices
+            {libraryVoices
               .filter((v) => v.name.includes(query))
               .map((v) => {
                 const task = jobs.find((j) => j.voiceId === v.id);
@@ -2182,7 +2209,7 @@ function VoiceLibrary({
                 );
               })}
           </div>
-          {!voices.length && (
+          {!libraryVoices.length && (
             <Empty
               icon={<AudioLines size={28} />}
               heading="让每个角色有自己的声音"
@@ -2498,6 +2525,10 @@ function Editor({
   onVoice,
   unit,
   onUnit,
+  defaultModel,
+  contextRevision,
+  stateJobs,
+  onSplitApplied,
 }: {
   segment: Segment;
   templates: State["templates"];
@@ -2514,6 +2545,10 @@ function Editor({
   onVoice?: (roleId?:string,segmentId?:string)=>void;
   unit?: GenerationUnit;
   onUnit: () => void;
+  defaultModel: string;
+  contextRevision: number;
+  stateJobs: Job[];
+  onSplitApplied: (childId:string,isCurrent:()=>boolean)=>Promise<void>;
 }) {
   const enhancedUnit = unit && (unit.kind === "group" || unit.mode === "scene") ? unit : null;
   const activeVariant = enhancedUnit?.variants[enhancedUnit.mode];
@@ -2534,18 +2569,22 @@ function Editor({
     },
   });
   const {draft,base:revision,dirty,saving}=controller;
-  const [tab,setTab]=useState("settings"), [split,setSplit]=useState(false), [offset,setOffset]=useState(1),
+  const [tab,setTab]=useState("settings"), [split,setSplit]=useState(false),
     [merge,setMerge]=useState(false), [restore,setRestore]=useState<string|null>(null), [templateOpen,setTemplateOpen]=useState(false);
   const textarea=useRef<HTMLTextAreaElement>(null);
   useEffect(()=>onDraftChange(s.id,dirty),[s.id,dirty,onDraftChange]);
   const edit=controller.edit;
   const next=chapter.segments.find(x=>x.order === s.order+1);
   const saveDraft=()=>controller.flush();
+  const openSplit=()=>setSplit(true);
   return (
     <>
       <div className="inspector-head">
         <strong>第 {s.order + 1} 句 · {roles.find(role=>role.id===draft.roleId)?.name||"未分配角色"}</strong>
-        {onVoice && <button className="button small" disabled={locked || controller.frozen} onClick={()=>onVoice(draft.roleId,s.id)}>选声音</button>}
+        <div className="row-actions">
+          {unit?.kind !== 'group' && <button className="button small" disabled={locked || dirty || controller.frozen || Array.from(s.text).length < 2} onClick={openSplit}><Scissors size={13}/>拆分这条</button>}
+          {onVoice && <button className="button small" disabled={locked || controller.frozen} onClick={()=>onVoice(draft.roleId,s.id)}>选声音</button>}
+        </div>
       </div>
       {unit && (unit.kind === "group" || unit.mode === "scene") && <div className="inspector-unit"><button className="text-button" onClick={onUnit}>{unit.kind === "group" ? `调整整段 ${unit.members.length} 句` : "调整声音背景"}<ChevronRight size={14}/></button>{unit.kind === "group" && <span>修改后会重做整段</span>}</div>}
       <div className="inspector-tabs tabs">
@@ -2692,6 +2731,7 @@ function Editor({
                 <span>{Array.from(draft.text).length} 字符</span>
                 <span>原文保持不变</span>
               </div>
+              {Array.from(draft.text).length>350*(1+(Number(draft.config.speech_rate)||0)/100)&&<div className="warning"><p>本条较长，可能超过单次 120 秒；建议按语义拆短正文，字数不是精确时长预测。</p>{unit?.kind==='group'&&<button className="text-button" onClick={onUnit}>调整整段范围</button>}</div>}
             </div>
             <div className="inspector-section">
               <h3>表演指导</h3>
@@ -2717,7 +2757,6 @@ function Editor({
                 ))}
               </div>
               <p className="hint">只描述怎么说，不改写台词。当前制作纯人声，不加入音乐或环境音效。生成时会将正文、表演要求和参考录音发送至配音服务。
-              {Array.from(draft.text).length > 350 && <span className="warning"> 本条较长，可能接近或超过单次时长，请按语义拆分。字数不是精确时长预测。</span>}
               {draft.voiceId && !voices.find(v => v.id === draft.voiceId)?.tested && <span className="hint"> 当前参考尚未验证，可先试听或生成测试样音。</span>}</p>
               {!!s.promptIssues?.length && <p className="error-inline">{s.promptIssues.join("；")}</p>}
             </div>
@@ -2756,30 +2795,6 @@ function Editor({
                 从朗读中排除，保留原文记录
               </label>
               <div className="button-row">
-                <button
-                  className="button small"
-                  disabled={locked || dirty || Array.from(s.text).length < 2}
-                  onClick={() => {
-                    setOffset(
-                      Math.max(
-                        1,
-                        Math.min(
-                          Array.from(s.text).length - 1,
-                          Array.from(
-                            s.text.slice(
-                              0,
-                              textarea.current?.selectionStart || 0,
-                            ),
-                          ).length,
-                        ),
-                      ),
-                    );
-                    setSplit(true);
-                  }}
-                >
-                  <Scissors size={13} />
-                  拆分
-                </button>
                 <button
                   className="button small"
                   disabled={locked || dirty || !next}
@@ -2897,47 +2912,7 @@ function Editor({
         </button>
       </div>
       {templateOpen && <TemplateDialog segment={s} chapter={chapter} templates={templates} save={save} onClose={()=>setTemplateOpen(false)}/>}
-      {split && (
-        <Dialog title="拆分片段" onClose={() => setSplit(false)}>
-          <Form
-            label="确认拆分"
-            revision={chapter.revision}
-            onSubmit={async (f, revision) => {
-              await save("segment.split", {
-                revision,
-                id: s.id,
-                offset,
-                performance: [f.get("first"), f.get("second")],
-              });
-              setSplit(false);
-            }}
-          >
-            <Field label="在第几个字符后拆分">
-              <input
-                type="number"
-                min={1}
-                max={Array.from(s.text).length - 1}
-                value={offset}
-                onChange={(e) => setOffset(Number(e.target.value))}
-              />
-            </Field>
-            <p className="original-excerpt">
-              {Array.from(s.text).slice(0, offset).join("")}
-              <span className="split-marker"> / </span>
-              {Array.from(s.text).slice(offset).join("")}
-            </p>
-            <Field label="前一条表演指导">
-              <input name="first" defaultValue={s.performance} />
-            </Field>
-            <Field label="后一条表演指导">
-              <input name="second" defaultValue={s.performance} />
-            </Field>
-            <p className="hint">
-              两条继承当前实际音色和数值设置。请重新分配“后半句”等位置相关指导；拆分后需重新生成。
-            </p>
-          </Form>
-        </Dialog>
-      )}
+      {split && <SegmentSplitDialog chapter={chapter} segment={s} defaultModel={defaultModel} contextRevision={contextRevision} stateJobs={stateJobs} locked={locked} onClose={()=>setSplit(false)} onApplied={onSplitApplied}/>}
       {merge && next && (
         <Dialog title="合并相邻片段" onClose={() => setMerge(false)}>
           <Form

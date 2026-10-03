@@ -1,12 +1,13 @@
-import { existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, rmSync, readdirSync } from "node:fs";
+import { join, dirname, basename } from "node:path";
 import { fail, same, text, uid } from "./store.mjs";
 import { storedAudioUnavailable } from "./audio.mjs";
 import { compile, templateOf, templateCatalog, listTemplates, listUnitTemplates } from "./templates.mjs";
-import { createProjectFolder, renameProjectFolder } from './workspace.mjs';
+import { createProjectFolder, renameProjectFolder, stageProjectDeletion, recoverProjectDeletions } from './workspace.mjs';
 export { compile } from "./templates.mjs";
 import { createEnhancement, defaultFeatures } from "./enhancement.mjs";
 import { configurationDecided, humanChanges, policyOf } from './experience.mjs';
+import { shortRanges } from './semantic.mjs';
 
 export const defaultConfig = templateOf("dry-v1").defaults;
 export const active = (j) => ["queued", "running"].includes(j.status);
@@ -115,23 +116,14 @@ export function segmentStatus(store, s) {
 }
 export function pieces(source) {
   // Offsets are Unicode code points, matching source coverage even with emoji.
-  const chars = Array.from(source);
+  const chars = Array.from(source), spans = [];
   let start = 0;
-  const spans = [];
-  for (let i = 0; i < chars.length; i++)
-    if (chars[i] === "\n" || /[。！？!?]/u.test(chars[i]) || i - start >= 299) {
-      while (i + 1 < chars.length && /[”’」』"']/u.test(chars[i + 1])) i++;
-      spans.push([start, i + 1]);
-      start = i + 1;
-    }
-  if (start < chars.length) spans.push([start, chars.length]);
-  return spans
-    .filter(([a, b]) => chars.slice(a, b).join("").trim())
-    .map(([start, end]) => ({
-      start,
-      end,
-      text: chars.slice(start, end).join(""),
-    }));
+  for (const {end} of shortRanges(source,true)) {
+    const value = chars.slice(start,end).join('');
+    if (value.trim()) { spans.push({start,end,text:value});start=end; }
+    else if (spans.length) { const last=spans.at(-1);last.end=end;last.text+=value;start=end; }
+  }
+  return spans;
 }
 export function coverage(chapter, segments) {
   if (!chapter.source)
@@ -213,6 +205,56 @@ export function createDomain(store) {
     const p = store.get("projects", projectId);
     p.contextRevision++;
     store.put("projects", p);
+  }
+  function deleteProject(p) {
+    text(p.id, '项目标识', 100);
+    let files;
+    let result;
+    try { result = store.transaction(() => {
+      const project = store.maybe('projects', p.id);
+      if (!project) return {id:p.id,deleted:true,alreadyDeleted:true};
+      if (p.entityRevision !== undefined) checkEntityRevision(project, p.entityRevision);
+      const chapters = store.all('chapters', project.id), chapterIds = new Set(chapters.map(c => c.id));
+      const related = table => chapters.flatMap(c => store.all(table, c.id));
+      const roles = store.all('roles', project.id), roleIds = new Set(roles.map(r => r.id));
+      const jobs = related('jobs'), jobIds = new Set(jobs.map(j => j.id));
+      const attempts = jobs.flatMap(j => store.all('attempts', j.id));
+      const units = related('units'), unitIds = new Set(units.map(u => u.id));
+      const events = store.all('events').filter(e => chapterIds.has(e.chapterId) || unitIds.has(e.unitId));
+      const suggestions = related('suggestions');
+      const owns = request => !!request && (request.projectId === project.id || chapterIds.has(request.chapterId));
+      const grantIds = new Set(store.all('settings').filter(s => s.id.startsWith('ux-grant:') && s.projectId === project.id).map(s => s.grantId || s.id.slice('ux-grant:'.length)));
+      if (store.all('jobs').some(j => active(j) && (chapterIds.has(j.chapterId) || owns(j.request))) || suggestions.some(s => s.status === 'running') ||
+          store.all('attempts').some(a => a.status === 'sending' && jobIds.has(a.jobId) || a.grantReservation?.state === 'reserved' && grantIds.has(a.grantReservation.grantId)) ||
+          attempts.some(a => a.quota?.state === 'reserved'))
+        fail('本项目仍有任务或请求额度正在处理，请等待完成或停止后续任务再删除', 409);
+      const records = {
+        projects:[project],chapters,roles,segments:related('segments'),units,events,suggestions,jobs,attempts,
+        audios:related('audios'),masters:related('masters'),exports:related('exports'),
+        settings:store.all('settings').filter(s => s.id.startsWith('ux-') && (owns(s) || owns(s.request) || owns(s.request?.data) || chapterIds.has(s.dependencies?.chapterId) ||
+          s.dependencies?.roleIds?.some(id => roleIds.has(id)) || typeof s.request?.action === 'string' && (s.request.action.startsWith('role.') && roleIds.has(s.request.data?.id) ||
+          s.request.action.startsWith('project.') && s.request.data?.id === project.id))),
+      };
+      const deletedIds = table => new Set(records[table].map(row => row.id));
+      const audioIds = deletedIds('audios');
+      if (store.all('voices').some(v => audioIds.has(v.sampleAudioId) || audioIds.has(v.sourceAudioId)))
+        fail('共用音色仍引用本项目音频，未删除任何资料', 409);
+      const sharedPaths = [...store.all('voices'), ...['audios','masters','exports'].flatMap(table => {
+        const ids = deletedIds(table); return store.all(table).filter(row => !ids.has(row.id));
+      }), ...store.all('attempts').filter(a => !jobIds.has(a.jobId))].map(row => row.path).filter(Boolean);
+      const paths = [...records.audios,...records.masters,...records.exports].map(row => row.path).filter(Boolean)
+        .concat(attempts.map(a => a.path || `audio/${a.id}.wav`));
+      paths.push(...paths.map(path => path + '.part'));
+      for (const master of records.masters.filter(m => m.path?.startsWith('masters/'))) {
+        const stem = basename(master.path).replace(/\.wav$/, '');
+        if (existsSync(join(store.directory, 'masters'))) for (const name of readdirSync(join(store.directory, 'masters')))
+          if (name === stem + '.pcm.part' || name.startsWith(stem + '-') && /^\d+\.pcm\.part$/.test(name.slice(stem.length + 1))) paths.push(join(dirname(master.path), name));
+      }
+      files = stageProjectDeletion(store, project, paths, sharedPaths);
+      for (const [table, rows] of Object.entries(records)) for (const row of rows) store.remove(table, row.id);
+      return {id:project.id,deleted:true};
+    }); } catch (error) { files?.undo(); throw error; }
+    return {...result,cleanupPending:result.alreadyDeleted ? recoverProjectDeletions(store, p.id) : files?.finish() || false};
   }
   function makeSegment(c, t, role, source, order) {
     return {
@@ -859,23 +901,25 @@ export function createDomain(store) {
           return { ...s, chapterRevision: c.revision };
         }
         if (action === "segment.split") {
-          if (s.performance && (!Array.isArray(p.performance) || p.performance.length !== 2 || p.performance.some(x => typeof x !== "string"))) fail("请明确分配拆分后两条的表演指导");
           const chars = Array.from(s.text);
-          if (
+          if (!p.parts && (
             !Number.isInteger(p.offset) ||
             p.offset <= 0 ||
             p.offset >= chars.length
-          )
+          ))
             fail("请选择正文中间的拆分位置");
+          const parts = p.parts || [chars.slice(0,p.offset).join(''),chars.slice(p.offset).join('')];
+          if (!Array.isArray(parts) || parts.length < 2 || parts.some(part => typeof part !== 'string' || !part.trim()) || parts.join('') !== s.text) fail('拆分结果必须按顺序逐字覆盖原正文');
+          if (s.performance && (!Array.isArray(p.performance) || p.performance.length !== parts.length || p.performance.some(x => typeof x !== "string"))) fail("请明确分配拆分后两条的表演指导");
           const group = s.source.group || uid();
-          const children = [
-            chars.slice(0, p.offset).join(""),
-            chars.slice(p.offset).join(""),
-          ].map((t, i) => ({
+          let offset = 0;
+          const children = parts.map((t, i) => {
+            const splitOffset = offset; offset += Array.from(t).length;
+            return ({
             ...s,
             id: uid(),
             text: t,
-            order: s.order + i * 0.5,
+            order: s.order + i / parts.length,
             performance: p.performance?.[i] ?? "",
             source: {
               ...s.source,
@@ -887,14 +931,14 @@ export function createDomain(store) {
               group,
               parentIds: [s.id],
               parentRevision: c.revision,
-              splitOffset: p.offset,
+              splitOffset: p.parts ? splitOffset : p.offset,
             },
             current: null,
             previous: null,
             approved: null,
             review: null,
             latest: "none",
-          }));
+          }); });
           children.forEach((v) => {
             validate(v, c);
             store.put("segments", v, c.id);
@@ -1036,7 +1080,7 @@ export function createDomain(store) {
   api.roleVoice = roleVoice;
   api.configurationDecided = configurationDecided;
   const originalMutate = api.mutate, originalSnapshot = api.snapshot, originalChapter = api.chapter;
-  api.mutate = (action, p) => store.transaction(() => {
+  api.mutate = (action, p) => action === 'project.delete' ? deleteProject(p) : store.transaction(() => {
     const before = p.chapterId && (/^segment\./.test(action) || action === 'role.update') ? api.list(p.chapterId) : [];
     const result = /^(voice-session|voice-candidate|unit|event)\./.test(action) ? enhancement.mutate(action,p) : originalMutate(action,p);
     for (const previous of before) {

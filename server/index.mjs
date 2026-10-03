@@ -122,10 +122,10 @@ export async function startServer({
         "Content-Range": `bytes ${start}-${end}/${info.size}`,
         "Content-Length": end - start + 1,
       });
-      createReadStream(file, { start, end }).pipe(res);
+      createReadStream(file, { start, end }).on('error', () => res.destroy()).pipe(res);
     } else {
       res.writeHead(200, { ...headers, "Content-Length": info.size });
-      createReadStream(file).pipe(res);
+      createReadStream(file).on('error', () => res.destroy()).pipe(res);
     }
   }
   const server = http.createServer(async (req, res) => {
@@ -242,6 +242,8 @@ export async function startServer({
         return send(res, 200, analysis.resume(await body(req)));
       if (req.method === "POST" && path === "/api/action") {
         const p = await body(req);
+        if (p.action === 'project.delete' && experience.projectBusy(p.id))
+          fail('这个项目仍有操作正在处理，请等操作结束后再删除', 409);
         if (p.action === 'project.rename' && store.maybe('projects', p.id)?.folder && (activeRequests !== 1 || referenceReads.size))
           fail('资料正在读取或保存，请稍后再改项目名称', 409);
         if (["segment.review", "unit.review", "unit.restore", "unit.select-result"].includes(p.action)) {

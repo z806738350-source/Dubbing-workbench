@@ -60,7 +60,17 @@ export function settleGrant(store, config, a, state) {
 }
 export function createExperience(store, domain, worker, analysis, config) {
   const inflight = new Map();
-  const save = op => store.put('settings',op);
+  const chapterOf = p => p.chapterId || p.data?.chapterId;
+  const projectOf = p => p.projectId || p.data?.projectId || (chapterOf(p) && store.maybe('chapters',chapterOf(p))?.projectId);
+  const save = op => {
+    const c = chapterOf(op.request), p = projectOf(op.request);
+    if (c && !store.maybe('chapters',c) || p && !store.maybe('projects',p)) return op;
+    return store.put('settings',op);
+  };
+  const projectBusy = projectId => [...inflight.keys()].some(id => {
+    const op = store.maybe('settings',recordId('operation',id));
+    return op && projectOf(op.request) === projectId;
+  });
   function policy(p) {
     store.get('projects',p.projectId);
     const previous = policyOf(store,p.projectId);
@@ -146,6 +156,10 @@ export function createExperience(store, domain, worker, analysis, config) {
     try { return await task; } finally { inflight.delete(p.operationId); }
   }
   async function execute(p) {
+    if (p.kind === 'save' && p.action === 'project.delete') fail('删除项目请使用项目列表中的删除操作');
+    const chapterId = chapterOf(p), projectId = projectOf(p);
+    if (chapterId) store.get('chapters',chapterId);
+    if (projectId) store.get('projects',projectId);
     const id = recordId('operation',p.operationId), old = store.maybe('settings',id);
     if (old && !same(old.request,p)) fail('同一操作标识的内容不同',409);
     if (old?.steps.completed || old?.jobIds.length || old?.result?.analysis) return view(old);
@@ -223,9 +237,26 @@ export function createExperience(store, domain, worker, analysis, config) {
         const s = store.get('segments',item.id);
         if (s.retired || Object.keys(item.after).some(field => !same(s[field],item.after[field]))) fail('AI安排后这部分已被修改，请比较差异后决定',409);
       }
+      const splits = change.splits || [], childIds = splits.flatMap(split => split.children.map(s => s.id));
+      if (childIds.length) {
+        domain.enhancement.assertStructural('segment.split',{chapterId:c.id,ids:childIds});
+        for (const split of splits) {
+          if (!store.get('segments',split.parent.id).retired) fail('原片段已恢复或改变，本次不能再次撤销',409);
+          for (const expected of split.children) {
+            const s = store.get('segments',expected.id), u = store.maybe('units',s.id);
+            if (s.retired || !same(s,expected) || u?.mode === 'scene' || u?.variants?.scene?.guidance || store.all('events',s.id).some(e => e.state !== 'removed')) fail('拆分后子条已被修改或设置场景，请比较差异后决定',409);
+          }
+        }
+        if (store.all('attempts').some(a => childIds.includes(a.segmentId || a.targetId || a.unitId) || a.input?.members?.some(s => childIds.includes(s.id))) || store.all('audios',c.id).some(a => childIds.includes(a.targetId) || a.input?.members?.some(s => childIds.includes(s.id)))) fail('拆分后已生成声音或提交请求，本次不能自动撤销',409);
+      }
       for (const item of change.items) { const s = store.get('segments',item.id); Object.assign(s,item.before); store.put('segments',s,c.id); }
-      domain.touch(c,true,false); domain.enhancement.syncLegacy(); change.undoneAt = now(); return store.put('settings',change);
+      for (const split of splits) {
+        for (const child of split.children) store.put('segments',{...store.get('segments',child.id),retired:true},c.id);
+        store.put('segments',{...split.parent,retired:false},c.id);
+      }
+      if (splits.length) domain.list(c.id).forEach((s,order) => store.put('segments',{...s,order},c.id));
+      domain.touch(c,true,!!splits.length); domain.enhancement.syncLegacy(); change.undoneAt = now(); return store.put('settings',change);
     });
   }
-  return {policy,grant,revoke,project,plan,run,get,undo,unprotect};
+  return {policy,grant,revoke,project,plan,run,get,undo,unprotect,projectBusy};
 }

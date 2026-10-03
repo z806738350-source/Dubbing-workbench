@@ -22,3 +22,23 @@ test('UX HTTP合同：策略/授权/保存回执及上传查询，零供应商�
   const uploadId=uid(),b=Buffer.alloc(9644);b.write('RIFF');b.writeUInt32LE(b.length-8,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(48000,24);b.writeUInt32LE(96000,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(9600,40);
   const voice=await api('/voices',{uploadId,name:'HTTP参考',filename:'fixture.wav',data:b.toString('base64')});assert.equal(voice.id,uploadId);assert.deepEqual(await api('/voices/'+uploadId),voice);assert.equal(providerCalls,0);
 });
+
+test('删除项目只等待本项目在途操作；删除后的迟到保存不留下孤儿回执',async t=>{
+  const directory=mkdtempSync(join(tmpdir(),'dubbing-delete-http-'));
+  const app=await startServer({port:0,directory,config:{key:'',model:'seed-audio-1.0',baseUrl:'https://example.invalid/v1',audioUrl:'https://example.invalid/audio'}}),base=`http://127.0.0.1:${app.server.address().port}`;
+  t.after(async()=>{await app.close();rmSync(directory,{recursive:true,force:true});});
+  const post=async(path,p)=>{const r=await fetch(base+'/api'+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(p)});return {status:r.status,body:await r.json()};};
+  const project=app.domain.mutate('project.create',{name:'正在预检'}),other=app.domain.mutate('project.create',{name:'可直接删除'});
+  const chapter=app.domain.mutate('chapter.create',{projectId:project.id,title:'样本',source:'自拟一句。',segment:true}),segment=app.domain.list(chapter.id)[0];
+  let entered,release;const started=new Promise(resolve=>{entered=resolve;}),paused=new Promise(resolve=>{release=resolve;});
+  t.mock.method(app.worker,'submit',async()=>{entered();await paused;throw Object.assign(Error('仅暂停预检，不发送请求'),{status:400});});
+  const operation=post('/operations',{operationId:uid(),kind:'generateSelection',chapterId:chapter.id,revision:chapter.revision,ids:[segment.id]});
+  await started;
+  const blocked=await post('/action',{action:'project.delete',id:project.id});assert.equal(blocked.status,409);assert.ok(app.store.maybe('projects',project.id));
+  const unrelated=await post('/action',{action:'project.delete',id:other.id});assert.equal(unrelated.status,200);assert.equal(app.store.maybe('projects',other.id),null);
+  release();assert.equal((await operation).status,200);
+  const deleted=await post('/action',{action:'project.delete',id:project.id});assert.equal(deleted.status,200);assert.equal(app.store.maybe('chapters',chapter.id),null);
+  const lateId=uid(),late=await post('/operations',{operationId:lateId,kind:'save',action:'segment.update',data:{chapterId:chapter.id,revision:chapter.revision,id:segment.id,text:'迟到内容'}});
+  assert.equal(late.status,404);assert.equal(app.store.maybe('settings',`ux-operation:${lateId}`),null);
+  const nested=await post('/operations',{operationId:uid(),kind:'save',action:'project.delete',data:{id:project.id}});assert.equal(nested.status,400);
+});

@@ -172,7 +172,7 @@ export function RecoveryCenter({chapter,state,onClose,onRecovered}:{chapter:Chap
     {error&&<p className="error-inline" role="alert">{error}</p>}
   </Dialog>;
 }
-export function GeneratePlan({plan,chapter,model,grantId,unknown,routeBlocked,retryUnknown,resumeRoute,busy,onGrant,onRetryUnknown,onResumeRoute,onGenerate,onRecheck,onClose}:{plan:GenerationPlan;chapter:ChapterDetail;model?:string;grantId:string|null;unknown:boolean;routeBlocked:boolean;retryUnknown:boolean;resumeRoute:boolean;busy:boolean;onGrant:(id:string|null)=>void;onRetryUnknown:(value:boolean)=>void;onResumeRoute:(value:boolean)=>void;onGenerate:()=>Promise<void>;onRecheck:()=>Promise<void>;onClose:()=>void}){
+export function GeneratePlan({plan,chapter,model,grantId,unknown,routeBlocked,retryUnknown,resumeRoute,busy,onGrant,onRetryUnknown,onResumeRoute,onGenerate,onRecheck,onEdit,onClose}:{plan:GenerationPlan;chapter:ChapterDetail;model?:string;grantId:string|null;unknown:boolean;routeBlocked:boolean;retryUnknown:boolean;resumeRoute:boolean;busy:boolean;onGrant:(id:string|null)=>void;onRetryUnknown:(value:boolean)=>void;onResumeRoute:(value:boolean)=>void;onGenerate:()=>Promise<void>;onRecheck:()=>Promise<void>;onEdit:(id:string)=>void;onClose:()=>void}){
   const [invalid,setInvalid]=useState(false),[pending,setPending]=useState(false),[error,setError]=useState(''),[updated,setUpdated]=useState(false);
   const execute=async(recheck:boolean)=>{
     if(pending||busy||!recheck&&invalid)return;
@@ -189,6 +189,11 @@ export function GeneratePlan({plan,chapter,model,grantId,unknown,routeBlocked,re
     {!invalid&&updated&&<p className="hint" role="status">已按当前内容重新核对，请查看下面的范围后再开始生成。</p>}
     <p className="task-panel-summary">{invalid?'之前核对的范围：':'本次覆盖 '}{plan.memberIds.length} 条台词，其中 {plan.units.filter(u=>u.reuse).length} 个已有声音直接复用；实际发送 {plan.audioRequests} 次音频请求。</p>
     <div className="task-member-list">{plan.units.map(unit=><p key={unit.unitId}>{unit.members.length>1?'一起演绎':'单句'} · 第 {unit.members.map(id=>{const segment=chapter.segments.find(s=>s.id===id);return segment?segment.order+1:'已移除';}).join('、')} 条 · {unit.mode==='scene'?'声音背景':'纯人声'} · {unit.reuse?'复用已有声音':'生成新声音'}</p>)}</div>
+    {!invalid&&plan.units.filter(unit=>!unit.reuse).map(unit=>{
+      const members=chapter.segments.filter(s=>unit.members.includes(s.id)),length=members.reduce((total,s)=>total+Array.from(s.text||'').length,0);
+      if(length<=350*(1+(members[0]?.config?.speech_rate||0)/100))return null;
+      return <div className="warning section-rule" key={unit.unitId} role="note"><p>第 {members.map(s=>s.order+1).join('、')} 条共 {length} 字符，可能超过单次 120 秒。建议按语义拆短正文；字数不是精确时长预测{unit.members.length>1?'，一起演绎需先缩小整段范围':''}。</p><button className="text-button" disabled={busy||pending} onClick={()=>onEdit(unit.members[0])}>返回编辑</button></div>;
+    })}
     {!invalid&&plan.audioRequests>0&&<>
       <TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="生成所列台词" steps={["unit-generate"]} model={model} requests={plan.audioRequests} voiceIds={[...new Set(chapter.segments.filter(s=>plan.memberIds.includes(s.id)).flatMap(s=>s.voiceId?[s.voiceId]:[]))]} onReady={onGrant} disabled={busy||pending}/>
       {unknown&&<label className="check-label warning"><input type="checkbox" checked={retryUnknown} disabled={busy||pending} onChange={e=>onRetryUnknown(e.target.checked)}/>上次结果不明，可能已计费；明确再发送上述请求。</label>}

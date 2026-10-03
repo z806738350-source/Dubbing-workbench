@@ -656,6 +656,9 @@ input[type="range"]::-moz-range-thumb {
 .inspector-head {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
   padding: var(--space-md);
   border-bottom: 1px solid var(--color-rule);
   font-size: var(--text-sm);
@@ -1945,17 +1948,24 @@ input[type="range"]::-moz-range-thumb {
 .chapter-nav-label > small { font-size: var(--text-xs); color: var(--color-muted); font-weight: 400; }
 
 /* Selected value persists while the menu cursor moves. */
-.select-menu button[aria-selected="true"] {
+.select-menu button[aria-selected="true"],
+.select-menu button[aria-pressed="true"] {
   background: var(--color-accent);
   color: var(--color-accent-ink);
 }
-.select-menu button.cursor:not([aria-selected="true"]) {
+.select-menu button.cursor:not([aria-selected="true"]):not([aria-pressed="true"]) {
   background: var(--color-secondary);
 }
 .select-menu button.cursor {
   outline: 1px solid var(--color-paper);
   outline-offset: -2px;
 }
+.select-option-row { display: flex; align-items: stretch; gap: 4px; min-width: 0; }
+.select-menu .select-option { flex: 1; min-width: 0; }
+.select-menu .select-option > span { min-width: 0; }
+.select-menu .select-delete { flex: 0 0 36px; width: 36px; min-height: 36px; justify-content: center; padding: 8px; }
+.select-menu .select-delete:hover:not(:disabled) { background: var(--color-error-bg); color: var(--color-error); }
+@media (pointer: coarse) { .select-menu .select-delete { flex-basis: 44px; width: 44px; min-height: 44px; } }
 .loading-layout { padding: 0; gap: 0; flex: 1; min-height: 0; overflow: hidden; }
 .loading-heading { padding: var(--space-xl); border-bottom: 1px solid var(--color-rule); }
 .loading-heading .skeleton { height: 24px; width: 35%; margin-bottom: var(--space-md); }
@@ -2072,7 +2082,8 @@ input[type="range"]::-moz-range-thumb {
 .quick-start li { padding:8px 0 12px 6px; }
 .quick-start strong { font-size:16px; }
 .quick-start p { line-height:1.75; color:var(--color-secondary); margin-top:6px; }
-.demo-entry { display:flex; margin:20px auto 0; }
+.welcome-empty { align-items: center; text-align: center; }
+.welcome-empty .empty-actions { flex-direction: column; }
 .draft-preview { max-height:230px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:var(--text-xs); background:var(--color-canvas); padding:12px; }
 .empty-inline { color:var(--color-muted); padding:20px 0; line-height:1.75; }
 .analysis-panel { overflow-y:auto; display:block; }
@@ -2139,3 +2150,28 @@ input[type="range"]::-moz-range-thumb {
 .inspector-identity .select-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .inspector-identity-options > summary { min-height: 32px; padding-block: 6px; cursor: pointer; color: var(--color-secondary); font-size: 13px; }
+.semantic-split-preview ol { margin:12px 0; padding-left:24px; }
+.semantic-split-preview li { padding:8px 0; border-bottom:1px solid var(--color-rule); }
+.semantic-split-preview li p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.semantic-split-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; }
+
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V3
+ * component: chapter controls · modern-minimal · studied-DNA green · Workbench
+ * Retain the shared tokens, state controls and 17px script reading size. */
+.chapter-heading { align-items: center; gap: var(--space-xs) var(--space-md); padding: var(--space-xs) var(--space-lg); }
+.chapter-heading > div:first-child { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-xs); flex: 1 1 15rem; min-width: 0; }
+.chapter-heading .title-button { min-height: 32px; max-width: 100%; min-width: 0; }
+.chapter-heading .title-button h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-heading); line-height: 1.25; }
+.chapter-heading .title-button svg { flex-shrink: 0; }
+.chapter-heading p { margin: 0; line-height: 1.4; }
+.chapter-heading .production-steps { flex: 0 1 auto; order: 1; max-width: 100%; min-width: 0; flex-wrap: wrap; gap: var(--space-2xs) var(--space-sm); }
+.chapter-heading .production-steps button { min-height: 32px; font-size: var(--text-xs); }
+.chapter-heading .chapter-actions { width: auto; max-width: 100%; flex: 0 1 auto; margin-left: auto; gap: var(--space-xs); }
+.chapter-heading .chapter-actions .button { min-height: 32px; padding: var(--space-2xs) var(--space-xs); font-size: var(--text-xs); }
+.chapter-heading .task-banner { order: 3; flex: 1 0 100%; min-width: 0; flex-wrap: wrap; gap: var(--space-xs); padding: var(--space-2xs) var(--space-sm); border: 1px solid var(--color-rule); border-radius: var(--radius-xs); font-size: var(--text-xs); color: var(--color-ink); }
+.chapter-heading .task-banner > svg { flex-shrink: 0; }
+.chapter-heading .task-banner > div { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2xs) var(--space-xs); flex: 1 1 24rem; }
+.chapter-heading .task-banner strong { white-space: nowrap; }
+.chapter-heading .task-banner span { display: inline; overflow-wrap: anywhere; }
+.chapter-heading .task-banner button { min-height: 32px; }
+@media (max-width: 760px) { .chapter-heading { padding-inline: var(--space-md); } .chapter-heading .chapter-actions > .primary { margin-left: 0; } }

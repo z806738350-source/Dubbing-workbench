@@ -97,7 +97,7 @@ export function mergeSavedValues<T extends object>(before: T, after: T, saved: T
   })) as T;
 }
 
-type Saver = { scope: string; dependencies: string[]; state: () => SaveState; dirty: () => boolean; flush: () => Promise<unknown>; freeze: (value: boolean) => void; mounted?: boolean };
+type Saver = { scope: string; dependencies: string[]; state: () => SaveState; dirty: () => boolean; flush: () => Promise<unknown>; freeze: (value: boolean) => void; mounted?: boolean; deferUnmounted?: () => boolean };
 const savers = new Map<string, Saver>(), timers = new Map<string, ReturnType<typeof setTimeout>>(), listeners = new Set<() => void>();
 export const hasLiveDraft = (key:string) => !!activeDraftSave(key) || !!savers.get(key)?.dirty();
 export async function flushRegisteredDraft(key:string) {
@@ -108,14 +108,14 @@ export const notifyDraftSaves = () => {for(const [key,saver]of savers)if(saver.m
 export const subscribeDraftSaves = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 export function registerDraftSave(key: string, saver: Saver) {
   saver.mounted=true;savers.set(key, saver); notifyDraftSaves();
-  return () => {saver.mounted=false;notifyDraftSaves();};
+  return () => {saver.mounted=false;if(saver.deferUnmounted?.())cancelDraftSave(key);notifyDraftSaves();};
 }
 export function cancelDraftSave(key: string) { clearTimeout(timers.get(key)); timers.delete(key); }
 export function scheduleDraftSave(key: string, save: () => Promise<unknown>, delay = 600) {
   cancelDraftSave(key);
   timers.set(key, setTimeout(() => { timers.delete(key); void save().catch(() => {}); }, delay));
 }
-const selected = (scope: string, dependencies?: string[]) => [...savers.values()].filter(saver => saver.scope === scope && (!dependencies || intersects(dependencies, saver.dependencies)));
+const selected = (scope: string, dependencies?: string[]) => [...savers.values()].filter(saver => saver.scope === scope && !(saver.mounted === false && saver.deferUnmounted?.()) && (!dependencies || intersects(dependencies, saver.dependencies)));
 export function draftSaveStatus(scope: string, dependencies?: string[]): SaveState {
   const states = selected(scope, dependencies).map(saver => saver.state());
   return (["unreliable", "conflict", "saving", "local", "saved"] as SaveState[]).find(state => states.includes(state)) || "saved";

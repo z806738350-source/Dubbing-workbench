@@ -31,6 +31,11 @@ export const templateCatalog = {
       defaults: {speech_rate:0, loudness_rate:0, pitch_rate:0},
       compile: s => compileUnit(s, true),
     },
+    "scene-v2": {
+      name: "场景 v2 · 背景清楚可辨", scope: "unit", mode: "scene",
+      defaults: {speech_rate:0, loudness_rate:0, pitch_rate:0},
+      compile: s => compileUnit(s, true, true),
+    },
   },
 };
 export function templateOf(id) {
@@ -41,7 +46,7 @@ export const compile = s => templateOf(s.template).compile(s);
 export const listTemplates = () => Object.entries(templateCatalog.versions).filter(([,t]) => !t.scope || t.scope === "single").map(([id,t]) => ({id,name:t.name,description:t.description,current:id===templateCatalog.current}));
 export const listUnitTemplates = () => Object.entries(templateCatalog.versions).filter(([,t]) => t.scope !== "candidate").map(([id,t]) => ({id,name:t.name,description:t.description,mode:t.mode,scope:t.scope || "single"}));
 
-function compileUnit(s, scene) {
+function compileUnit(s, scene, audible = false) {
   const roles = s.slots.map(slot => `说话者 ${slot.speaker} 使用 @音频${slot.reference} 的声音身份。`).join("\n");
   const lines = s.members.map((member, i) => {
     const slot = s.slots.find(slot => slot.roleId === member.roleId);
@@ -57,5 +62,5 @@ function compileUnit(s, scene) {
     const location = event.startMemberId ? `${anchor(event.startMemberId, event.startPosition || "before")}至${anchor(event.endMemberId, event.endPosition || "after")}` : anchor(event.memberId, event.position);
     return `${({environment:"环境声",effect:"一次性音效",music:"音乐"})[event.kind]}：${location}，${event.description}`;
   }).join("\n") : "";
-  return `[任务]\n按下列顺序生成一段中文${scene ? "有声场景" : "对白干声"}。每条正文只朗读一次；编号、说话者标签、标题和表演说明都不读出。不增加、遗漏或改写台词。\n\n[角色参考]\n${roles}\n\n[互动]\n${s.guidance || s.performance || "轮流说话，不重叠；衔接自然，不增加回应。"}\n\n[逐条正文与表演]\n${lines}\n\n${scene ? `[已采用声音事件]\n${events || "无"}\n\n[声音主次]\n对白清楚，声音事件次要，不以事件替代台词，不添加未列出的事件。` : "[声音呈现]\n清晰干声，无音乐、环境声、额外音效和明显空间混响。"}`;
+  return `[任务]\n按下列顺序生成一段中文${scene ? "有声场景" : "对白干声"}。每条正文只朗读一次；编号、说话者标签、标题和表演说明都不读出。不增加、遗漏或改写台词。\n\n[角色参考]\n${roles}\n\n[互动]\n${s.guidance || s.performance || "轮流说话，不重叠；衔接自然，不增加回应。"}\n\n[逐条正文与表演]\n${lines}\n\n${scene ? `[已采用声音事件]\n${events || "无"}\n\n[声音主次]\n${audible ? "对白始终清晰可懂；已采用的环境声和音乐应在指定范围内持续清楚可辨，不只是几乎听不到的底噪；台词之间的自然停顿中也保持可闻。一次性音效应在指定位置清楚可辨。对白时适度降低背景声音，但不能消失。不遮盖字词，不代替或添加台词，不增加未列出的事件，不延长停顿。" : "对白清楚，声音事件次要，不以事件替代台词，不添加未列出的事件。"}` : "[声音呈现]\n清晰干声，无音乐、环境声、额外音效和明显空间混响。"}`;
 }

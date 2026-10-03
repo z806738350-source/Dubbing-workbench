@@ -90,3 +90,64 @@ test('新对象稳定ID续写未挂载时屏障停止，接入目标后可转交
   registerDraftSave('stable',{scope:'chapter:one',dependencies:['events:u'],dirty:()=>dirty,state:()=>dirty?'local':'saved',freeze:()=>{},flush:async()=>{dirty=false;}});
   await withSavedDrafts('chapter:one',['events:u'],async()=>sent++);assert.equal(sent,1);
 });
+
+test('关闭未创建背景只保留本机草稿；已有事件冲突、在途保存和创建后的续写仍参与屏障',async t=>{
+  const {registerDraftSave,withSavedDrafts,scheduleDraftSave,hasLiveDraft,draftSaveStatus}=await fresh();
+  t.mock.timers.enable({apis:['setTimeout']});
+  let pending=false,targetId='',flushed=0,sent=0,release;const frozen=[];
+  const waiting=new Promise(resolve=>release=resolve);
+  const flush=async()=>{flushed++;if(pending)await waiting;};
+  const unmount=registerDraftSave('new-background',{scope:'chapter:one',dependencies:['events:u'],dirty:()=>true,state:()=> 'local',freeze:value=>frozen.push(value),flush,deferUnmounted:()=>!pending&&!targetId});
+  scheduleDraftSave('new-background',flush,20);unmount();t.mock.timers.tick(21);
+  await withSavedDrafts('chapter:one',['events:u'],async()=>sent++);
+  await withSavedDrafts('chapter:one',undefined,async()=>sent++);
+  assert.equal(flushed,0);assert.deepEqual(frozen,[]);assert.equal(sent,2);
+  assert.equal(hasLiveDraft('new-background'),true,'未完成草稿仍保留，不能把排除屏障当作丢弃');
+  assert.equal(draftSaveStatus('chapter:one',['events:u']),'saved');
+
+  let existingDirty=true;
+  const removeExisting=registerDraftSave('existing-background',{scope:'chapter:one',dependencies:['events:u'],dirty:()=>existingDirty,state:()=> 'conflict',freeze:()=>{},flush:async()=>{throw new Error('已有声音背景发生冲突');}});
+  await assert.rejects(withSavedDrafts('chapter:one',['events:u'],async()=>sent++),/已有声音背景发生冲突/);
+  assert.equal(sent,2);assert.equal(flushed,0);assert.deepEqual(frozen,[]);
+  existingDirty=false;removeExisting();
+
+  pending=true;const barrier=withSavedDrafts('chapter:one',['events:u'],async()=>sent++);
+  assert.equal(flushed,1);assert.deepEqual(frozen,[true]);assert.equal(sent,2,'在途保存回执回来前不能派发');
+  release();await barrier;assert.deepEqual(frozen,[true,false]);
+  pending=false;targetId='created-background';await withSavedDrafts('chapter:one',undefined,async()=>sent++);
+  assert.equal(flushed,2);assert.deepEqual(frozen,[true,false,true,false]);assert.equal(sent,4);
+});
+
+test('真实未挂载判断保留同对象在途保存、未确认创建回执与损坏存储的保护',async()=>{
+  const objectSource=readFileSync(new URL('../src/ObjectDraft.tsx',import.meta.url),'utf8');
+  const file=ts.createSourceFile('ObjectDraft.tsx',objectSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let callback;function visit(node){if(ts.isPropertyAssignment(node)&&node.name.getText(file)==='deferUnmounted')callback=node.initializer;else ts.forEachChild(node,visit);}visit(file);
+  assert.ok(callback,'必须测试ObjectDraft生产注册中的原始回调');
+  const compiled=ts.transpileModule('const callback=('+callback.getText(file)+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const {registerDraftSave,withSavedDrafts,runDraftSave,activeDraftSave,saveOperationId,pendingSaveOperation,forgetSaveOperation,draftSaveStatus}=await fresh();
+  const descriptors=['localStorage','sessionStorage'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]),storage=new Map();let storageFailure=false;
+  Object.defineProperty(globalThis,'sessionStorage',{configurable:true,value:{getItem:()=>null}});
+  Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{getItem:key=>{if(storageFailure)throw new Error('存储不可读');return storage.get(key)??null;},setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)}});
+  const current={current:{options:{deferUnmounted:true},targetId:undefined}},pending={current:null},key='new-background';let release,sent=0,flushed=0;
+  const waiting=new Promise(resolve=>release=resolve);
+  try{
+    const defer=new Function('current','pending','key','activeDraftSave','pendingSaveOperation',compiled+'\nreturn callback;')(current,pending,key,activeDraftSave,pendingSaveOperation);
+    const unmount=registerDraftSave(key,{scope:'chapter:one',dependencies:['events:u'],dirty:()=>true,state:()=> 'local',freeze:()=>{},deferUnmounted:defer,flush:async()=>{flushed++;const active=activeDraftSave(key);if(active)return active;throw new Error('创建回执尚未确认');}});
+    unmount();assert.equal(defer(),true);await withSavedDrafts('chapter:one',['events:u'],async()=>sent++);assert.equal(flushed,0);
+
+    const saving=runDraftSave(key,async()=>waiting);assert.equal(pending.current,null);assert.equal(defer(),false);
+    const barrier=withSavedDrafts('chapter:one',['events:u'],async()=>sent++);assert.equal(flushed,1);assert.equal(sent,1);
+    release();await saving;await barrier;assert.equal(defer(),true);assert.equal(sent,2);
+
+    const operationId=saveOperationId(key,{value:{description:''},revision:0,chapterRevision:13});assert.equal(pending.current,null);assert.equal(defer(),false);
+    await assert.rejects(withSavedDrafts('chapter:one',['events:u'],async()=>sent++),/创建回执尚未确认/);assert.equal(sent,2);
+    forgetSaveOperation(key,operationId);assert.equal(defer(),true);await withSavedDrafts('chapter:one',undefined,async()=>sent++);assert.equal(sent,3);
+
+    for(const raw of ['{',JSON.stringify({id:operationId,signature:'{'})]){
+      storage.set('pending-save:page:'+key,raw);assert.doesNotThrow(()=>assert.equal(defer(),false));
+      assert.doesNotThrow(()=>assert.equal(draftSaveStatus('chapter:one'),'local'));
+    }
+    storage.clear();storageFailure=true;assert.doesNotThrow(()=>assert.equal(defer(),false));assert.doesNotThrow(()=>assert.equal(draftSaveStatus('chapter:one'),'local'));
+    storageFailure=false;assert.equal(defer(),true);current.current.targetId='created-background';assert.equal(defer(),false);
+  }finally{release();for(const [key,descriptor]of descriptors)if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}
+});

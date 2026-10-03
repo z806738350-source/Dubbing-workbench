@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { openStore, uid } from "../server/store.mjs";
 import { createDomain, basisOf, inputOf } from "../server/domain.mjs";
 import { createWorker } from "../server/worker.mjs";
-import { compile, listTemplates } from "../server/templates.mjs";
+import { compile, listTemplates, listUnitTemplates } from "../server/templates.mjs";
 import { saveCandidateVoice, drainReferenceDeletes, inspect, ffmpeg } from "../server/audio.mjs";
 import { createAnalysis } from "../server/analysis.mjs";
 
@@ -182,6 +182,32 @@ test("新模板隔离；角色与共享参考分别映射，姓名正文不替�
   assert.match(dry, /小林，你来了。/); assert.doesNotMatch(dry, /两下轻敲门声/);
   assert.match(scene, /第2条正文之后，两下轻敲门声/);
   assert.doesNotMatch(scene, /r1|r2|s1|s2|voiceId|unitId/);
+  assert.equal(scene, `[任务]
+按下列顺序生成一段中文有声场景。每条正文只朗读一次；编号、说话者标签、标题和表演说明都不读出。不增加、遗漏或改写台词。
+
+[角色参考]
+说话者 A 使用 @音频1 的声音身份。
+说话者 B 使用 @音频1 的声音身份。
+
+[互动]
+轮流说话，不重叠；衔接自然，不增加回应。
+
+[逐条正文与表演]
+1. 说话者 A；表演：轻声；正文：小林，你来了。
+2. 说话者 B；表演：自然清楚地朗读；正文：我来了。
+
+[已采用声音事件]
+一次性音效：第2条正文之后，两下轻敲门声
+
+[声音主次]
+对白清楚，声音事件次要，不以事件替代台词，不添加未列出的事件。`);
+  assert.equal(listUnitTemplates().find(template=>template.id==='scene-v2')?.name,'场景 v2 · 背景清楚可辨');
+  const ranged={...input,events:[...input.events,{kind:'environment',description:'持续细雨',startMemberId:'s1',startPosition:'before',endMemberId:'s2',endPosition:'after'},{kind:'music',description:'舒缓音乐',startMemberId:'s1',startPosition:'during',endMemberId:'s2',endPosition:'during'}]};
+  const previous=compile({...ranged,template:'scene-v1'}),audible=compile({...ranged,template:'scene-v2'});
+  assert.equal(audible.split('[声音主次]')[0],previous.split('[声音主次]')[0]);
+  assert.match(audible,/环境声：第1条正文之前至第2条正文之后，持续细雨/);assert.match(audible,/音乐：第1条正文期间至第2条正文期间，舒缓音乐/);assert.match(audible,/一次性音效：第2条正文之后，两下轻敲门声/);
+  for(const clause of ['对白始终清晰可懂','指定范围内持续清楚可辨','不只是几乎听不到的底噪','自然停顿中也保持可闻','一次性音效应在指定位置清楚可辨','适度降低背景声音，但不能消失','不遮盖字词','不代替或添加台词','不增加未列出的事件','不延长停顿'])assert.ok(audible.includes(clause),clause);
+  assert.doesNotMatch(audible,/r1|r2|s1|s2|voiceId|unitId/);
 });
 
 test("候选零参考且不锁章节；描述修改或放弃后的产物归原尝试", async t => {

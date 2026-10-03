@@ -41,7 +41,7 @@ export default function VoiceCreation(props: VoiceCreationProps) {
 function SessionEditor({ session, draftId, enabled, configured, audioTools, routeBlocked, voices, jobs, playingId, play, refresh, bind, target, projectId, chapterId, model, onUsed, resumeSelection, created }: VoiceCreationProps & {
   session?: VoiceSession; draftId: string; resumeSelection?: Selection; created: (session: VoiceSession, warning?: string, selection?: Selection) => void;
 }) {
-  const [error, setError] = useState(""), [pending, setPending] = useState(false), [grantId, setGrantId] = useState<string | null>(null), [retryUnknown, setRetryUnknown] = useState(false);
+  const [error, setError] = useState(""), [pending, setPending] = useState(false), [grantId, setGrantId] = useState<string | null>(null), [retryUnknown, setRetryUnknown] = useState(false), [resumeRoute,setResumeRoute]=useState(false);
   const text = useRef<HTMLTextAreaElement>(null), active = useRef(true), savedSession = useRef<VoiceSession | undefined>(session);
   useEffect(() => () => { active.current = false; }, []);
   useEffect(() => { if (resumeSelection && text.current) { text.current.focus(); text.current.setSelectionRange(resumeSelection.start || 0, resumeSelection.end || 0); } }, []);
@@ -65,18 +65,20 @@ function SessionEditor({ session, draftId, enabled, configured, audioTools, rout
   const latestJob = session?.id ? jobs.filter(job => job.sessionId === session.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] : undefined;
   const unknown = latestJob?.status === "unknown";
   const actualProject = target?.projectId || projectId, actualChapter = target?.chapterId || chapterId;
+  useEffect(()=>{setResumeRoute(false);},[actualProject,actualChapter,target?.roleId,target?.segmentId,target?.scope,model,routeBlocked]);
   const generate = async () => {
+    if(routeBlocked&&!resumeRoute){setError("请先核对接口权限与额度，再明确恢复本次声音请求。");return;}
     setPending(true); setError("");
     try {
       const saved = await draft.flush();
       const id = session?.id || saved.targetId || savedSession.current?.id;
       if (!id || saved.dirty) throw new Error("描述仍有未保存修改，请稍后再生成。");
-      const operation = await submitOperation("voice-candidate:" + id, { kind: "voiceCandidate", projectId: actualProject, ...(actualChapter ? { chapterId: actualChapter, revision: target?.revision } : {}), sessionId: id, entityRevision: saved.revision, grantId, ...(unknown && retryUnknown ? { retryUnknown: true } : {}) }, jobs);
+      const operation = await submitOperation("voice-candidate:" + id, { kind: "voiceCandidate", projectId: actualProject, ...(actualChapter ? { chapterId: actualChapter, revision: target?.revision } : {}), sessionId: id, entityRevision: saved.revision, grantId, ...(unknown && retryUnknown ? { retryUnknown: true } : {}), ...(resumeRoute?{resumeRoute:true}:{}) }, jobs);
       if (operation.error) throw new Error(operation.error);
       if (active.current) setRetryUnknown(false);
       await refresh();
     } catch (failure) { if (active.current) setError((failure as Error).message); }
-    finally { if (active.current) setPending(false); }
+    finally { if (active.current) {setResumeRoute(false);setPending(false);} }
   };
   return <>
     {error && <p className="error-inline" role="alert">{error}</p>}
@@ -87,9 +89,10 @@ function SessionEditor({ session, draftId, enabled, configured, audioTools, rout
       <p className="task-request-summary">每次生成 1 个候选 · 1 次音频请求 · 历史候选保留</p>
       {actualProject ? <TaskAuthorization projectId={actualProject} chapterId={actualChapter} label={target?.label ? "为" + target.label + "创建声音候选" : "创建声音候选"} steps={["voice-create"]} model={model} onReady={setGrantId} disabled={pending || !!currentJob} /> : <p className="warning">请从当前项目的角色或台词进入声音选择，再描述创建声音，以确定授权范围。</p>}
       {unknown && <label className="check-label warning"><input type="checkbox" checked={retryUnknown} onChange={event => setRetryUnknown(event.target.checked)} />上次结果不明，可能已计费；本次明确再发送 1 次请求。</label>}
-      <button className="button primary" disabled={!enabled || !configured || !audioTools || !actualProject || pending || !!currentJob || draft.composing || !grantId || target?.needsReview || (!!unknown && !retryUnknown) || routeBlocked} onClick={() => void generate()}>{currentJob ? labels[currentJob.status] + "…" : pending ? "正在保存与准备…" : "生成一个候选"}</button>
+      {routeBlocked&&<label className="check-label warning"><input type="checkbox" checked={resumeRoute} disabled={pending||!!currentJob} onChange={event=>setResumeRoute(event.target.checked)}/>已核对接口权限与额度，恢复本次声音请求。</label>}
+      <button className="button primary" disabled={!enabled || !configured || !audioTools || !actualProject || pending || !!currentJob || draft.composing || !grantId || target?.needsReview || (!!unknown && !retryUnknown) || (routeBlocked&&!resumeRoute)} onClick={() => void generate()}>{currentJob ? labels[currentJob.status] + "…" : pending ? "正在保存与准备…" : "生成一个候选"}</button>
       {currentJob && <button className="text-button" onClick={() => void (async () => { try { await action("job.stop", { id: currentJob.id }); await refresh(); } catch (failure) { setError((failure as Error).message); } })()}>停止后续请求</button>}
-      {!configured && <p className="warning">请先打开设置与连接，配置声音接口。</p>}{!audioTools && <p className="warning">音频处理不可用，请打开设置与连接检查。</p>}{routeBlocked && <p className="warning">声音接口已暂停，请核对连接后恢复。</p>}
+      {!configured && <p className="warning">请先打开设置与连接，配置声音接口。</p>}{!audioTools && <p className="warning">音频处理不可用，请打开设置与连接检查。</p>}{routeBlocked && <p className="warning">声音接口已暂停。核对权限与额度后，勾选上方恢复选项，再点击生成；已有授权可继续使用。</p>}
     </section>}
     <section className="task-panel-section"><h3>试听并选用</h3>
       {!session?.candidates.length && <p className="empty-inline">候选完成后出现在这里。关闭面板不会取消已发送请求，结果仍可找回。</p>}

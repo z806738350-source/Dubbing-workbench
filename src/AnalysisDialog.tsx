@@ -26,6 +26,9 @@ interface DraftItem {
   reason: string;
   uncertain: boolean;
   issues?: string[];
+  splitParts?: string[];
+  splitIssue?: string;
+  splitRequiresPerformanceConfirmation?: boolean;
 }
 interface Suggestion {
   id: string;
@@ -41,6 +44,8 @@ interface Suggestion {
   createdAt?: string;
   draftVersion?: number;
   appliedItemIds?: string[];
+  splitOnly?: boolean;
+  splitResults?: {segmentId:string;itemId:string;childIds:string[]}[];
   automation?: {applied:number;needsDecision:number;pendingItemIds?:string[];error?:string};
   roles?: Role[];
   blocks?: { id: number; text: string }[];
@@ -92,6 +97,7 @@ export default function AnalysisDialog({
   const [viewId, setViewId] = useState("");
   const [editing, setEditing] = useState<DraftItem | null>(null);
   const [confirmRoles, setConfirmRoles] = useState(false);
+  const [inheritPerformanceConfirmed,setInheritPerformanceConfirmed]=useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [experience, setExperience] = useState<ExperienceState | null>(null);
   const [plan, setPlan] = useState<TextPlan | null>(null), [advancedPlan, setAdvancedPlan] = useState<TextPlan | null>(null);
@@ -119,7 +125,7 @@ export default function AnalysisDialog({
     setViewId(draft.id);
     setEditing({...item, editVersion: draft.draftVersion});
   }
-  useEffect(() => { setAck(false); setConfirmRoles(false); setChecked([]); }, [draft?.id, draft?.draftVersion]);
+  useEffect(() => { setAck(false); setConfirmRoles(false); setChecked([]); setInheritPerformanceConfirmed(false); }, [draft?.id, draft?.draftVersion]);
   const applicable =
     draft?.revision === chapter.revision &&
     draft?.contextRevision === contextRevision;
@@ -165,16 +171,18 @@ export default function AnalysisDialog({
     draft.contextRevision === contextRevision;
   const invalidItems = draft?.items.filter(item => item.issues?.length) || [];
   const firstInvalid = invalidItems[0];
+  const selectedSplits=draft?.items.filter(item=>checked.includes(item.id)&&item.splitParts?.length&&item.splitParts.length>=2)||[];
+  const needsPerformanceConfirmation=selectedSplits.some(item=>item.splitRequiresPerformanceConfirmation===true);
   return (
     <section className="analysis-panel" aria-label="AI 剧本整理">
       <div className="analysis-prepare">
         <h3>{chapter.segments.length ? "AI 帮我准备下一步" : "AI 整理这一章"}</h3>
-        <p className="hint">{chapter.segments.length ? "补充表演建议，沿用角色和声音，保留你改过的内容。" : "从原文整理台词与角色；有歧义的地方集中交给你判断。"}</p>
+        <p className="hint">{chapter.segments.length ? "补充表演建议，并按语义拆短适合拆分的长段；沿用角色和声音，保留你改过的表演。" : "从原文整理台词与角色，按语义拆短长段；有歧义的地方集中交给你判断。"}</p>
         <div className="tabs analysis-policy" aria-label="AI 协作方式">
           <button type="button" aria-pressed={experience?.policy.mode==="smart" && experience.policy.revision>0} disabled={!experience || policySaving || preparing || working} onClick={()=>void choosePolicy("smart")}>AI 先安排</button>
           <button type="button" aria-pressed={experience?.policy.mode==="review" && experience.policy.revision>0} disabled={!experience || policySaving || preparing || working} onClick={()=>void choosePolicy("review")}>逐项审阅</button>
         </div>
-        <p className="hint">{!experience?.policy.revision ? "先选择本项目的协作方式。" : experience.policy.mode==="smart" ? "明确说话人和常规表演可自动进入初稿，疑点、强烈表演与人工修改仍由你决定。AI 安排不会标记为试听通过。" : "所有建议先保存在草稿中，审阅后再应用。"}</p>
+        <p className="hint">{!experience?.policy.revision ? "先选择本项目的协作方式。" : experience.policy.mode==="smart" ? "明确说话人、常规表演和适合拆分的长段自动安排。已有制作结果、整段演绎、声音背景与需要重新分配的人工表演保留，交给你判断。AI 安排不会标记为试听通过。" : "表演与拆分建议先保存在草稿中，审阅后再应用。"}</p>
         {plan && <>
           <p className="hint">{plan.kind==="extract" ? "整章原文" : selected.length ? `所选 ${plan.memberIds.length} 条台词` : `本章 ${plan.memberIds.length} 条台词`} · 本次 {plan.textRequests} 次文本请求</p>
           <TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="准备这一章" step="text" steps={[plan.kind]} model={defaultModel} requests={plan.textRequests} onReady={setGrantId} disabled={preparing || working}/>
@@ -183,7 +191,7 @@ export default function AnalysisDialog({
         {prepareError && <p className="error-inline" role="alert">{prepareError}</p>}
       </div>
       {draft && <div className="analysis-summary" aria-live="polite">
-        <div><strong>{draft.status === "running" ? "正在分析" : draft.automation ? `AI 已安排 ${draft.automation.applied} 条 · 需你判断 ${draft.automation.needsDecision} 条` : draft.status === "applied" ? "已应用" : !applicable ? "草稿已过期" : invalidItems.length ? `${invalidItems.length} 条需校对` : current ? "草稿待审阅" : "草稿需要处理"}</strong><span>{draft.items.length} 条标注 · {draft.doneChunks || 0}/{draft.totalChunks || 1} 批</span></div>
+        <div><strong>{draft.status === "running" ? "正在分析" : draft.automation ? `AI 已安排 ${draft.automation.applied} 条 · 需你判断 ${draft.automation.needsDecision} 条` : draft.status === "applied" ? "已应用" : !applicable ? "草稿已过期" : invalidItems.length ? `${invalidItems.length} 条需校对` : current ? "草稿待审阅" : "草稿需要处理"}</strong><span>{draft.items.length} 条标注 · {draft.doneChunks || 0}/{draft.totalChunks || 1} 批{draft.splitResults?.length ? ` · 已拆短 ${draft.splitResults.length} 处` : ""}</span></div>
         {editable && firstInvalid && <button type="button" className="text-button" onClick={() => editItem(firstInvalid)}>校对第 {draft.items.indexOf(firstInvalid) + 1} 条</button>}
         {!!draft.automation?.needsDecision && onIssues && <button type="button" className="text-button" onClick={onIssues}>集中处理疑点</button>}
         {experience?.changes.some(change=>change.changeId===draft.id && !change.undoneAt) && <Form primary={false} label="撤销这次 AI 安排" children={null} onSubmit={async()=>{await withSavedDrafts("chapter:"+chapter.id,undefined,async()=>{await api("/experience/undo",{changeId:draft.id,revision:draftScopeRevision("chapter:"+chapter.id,chapter.revision)});});await refresh();}}/>}
@@ -199,7 +207,7 @@ export default function AnalysisDialog({
               .reverse()
               .map((d) => ({
                 value: d.id,
-                label: `${d.model} · ${d.createdAt ? new Date(d.createdAt).toLocaleString() : "历史草稿"}`,
+                label: `${d.splitOnly?"语义拆分 · ":""}${d.model} · ${d.createdAt ? new Date(d.createdAt).toLocaleString() : "历史草稿"}`,
               }))}
             onChange={(id) => {
               setViewId(id);
@@ -348,13 +356,14 @@ export default function AnalysisDialog({
                     aria-label={`采用 ${item.text.slice(0, 16)} 的建议`}
                     checked={!!draft.appliedItemIds?.includes(item.id) || checked.includes(item.id)}
                     disabled={!current || !!draft.appliedItemIds?.includes(item.id)}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      setInheritPerformanceConfirmed(false);
                       setChecked((v) =>
                         e.target.checked
                           ? [...v, item.id]
                           : v.filter((x) => x !== item.id),
-                      )
-                    }
+                      );
+                    }}
                   />
                 )}
                 <div>
@@ -374,10 +383,12 @@ export default function AnalysisDialog({
                       <span>{!draft.appliedItemIds ? "历史记录未区分采用条目" : draft.appliedItemIds.includes(item.id) ? "本轮已采用" : "未采用 · 需重新分析"}</span>
                     )}
                   </div>
-                  <p className="suggestion-text">
+                  {!item.splitParts?.length&&<p className="suggestion-text">
                     {item.text || "原文范围待修正"}
-                  </p>
-                  <p className="suggestion-performance">{item.performance}</p>
+                  </p>}
+                  {!!item.splitParts?.length&&<section className="semantic-split-preview" aria-label="语义拆分预览"><strong>{draft.splitResults?.some(result=>result.itemId===item.id)?"已拆为":"建议拆为"} {item.splitParts.length} 条</strong><ol>{item.splitParts.map((text,index)=><li key={index}><p>{text}</p></li>)}</ol><p className="hint">原文、角色、声音和参数沿用；人工表演保留。拆分后需要重新生成。</p></section>}
+                  {item.splitIssue&&!draft.splitResults?.some(result=>result.itemId===item.id)&&<p className="warning">{item.splitIssue}</p>}
+                  {draft.splitOnly||item.splitParts?.length ? <p className="hint">应用拆分时沿用当前表演指导，不应用新的表演建议。</p> : <p className="suggestion-performance">{item.performance}</p>}
                   {(item.reason || item.sourceQuote) && (
                     <details open={item.uncertain}>
                       <summary className="hint">判断说明与依据</summary>
@@ -390,7 +401,7 @@ export default function AnalysisDialog({
                       <AlertTriangle size={14} /> {item.issues.join("；")}
                     </p>
                   )}
-                  {onLocate && (item.segmentId || chapter.segments.some(s=>s.analysisOrigin?.draftId===draft.id && s.analysisOrigin.itemId===item.id)) && <button type="button" className="text-button" onClick={()=>{const id=item.segmentId || chapter.segments.find(s=>s.analysisOrigin?.draftId===draft.id && s.analysisOrigin.itemId===item.id)?.id;if(id)onLocate(id);}}>前往这句</button>}
+                  {onLocate && (item.segmentId || chapter.segments.some(s=>s.analysisOrigin?.draftId===draft.id && s.analysisOrigin.itemId===item.id)) && <button type="button" className="text-button" onClick={()=>{const id=draft.splitResults?.find(result=>result.itemId===item.id)?.childIds[0] || item.segmentId || chapter.segments.find(s=>s.analysisOrigin?.draftId===draft.id && s.analysisOrigin.itemId===item.id)?.id;if(id)onLocate(id);}}>{draft.splitResults?.some(result=>result.itemId===item.id)?"前往拆分后的台词":"前往这句"}</button>}
                   {chapter.segments.some(s=>(s.id===item.segmentId || s.analysisOrigin?.draftId===draft.id && s.analysisOrigin.itemId===item.id) && s.protectedFields?.includes('performance')) && <Form primary={false} label="允许 AI 下次安排这句表演" children={<p className="hint">当前人工表演仍保留；只解除这一句的表演保护。</p>} onSubmit={async()=>{const segment=chapter.segments.find(s=>s.id===item.segmentId || s.analysisOrigin?.draftId===draft.id && s.analysisOrigin.itemId===item.id);if(!segment)return;await withSavedDrafts("chapter:"+chapter.id,["segment:"+segment.id],async()=>{await api("/experience/unprotect",{chapterId:chapter.id,revision:draftScopeRevision("chapter:"+chapter.id,chapter.revision),segmentId:segment.id,field:"performance"});});await refresh();}}/>}
                   {editable && (
                     <div className="analysis-actions">
@@ -421,10 +432,11 @@ export default function AnalysisDialog({
           {current && (
             <Form
               label={draft.kind === "extract" ? "应用校对稿" : "应用本轮选择"}
+              busy={needsPerformanceConfirmation&&!inheritPerformanceConfirmed}
               onSubmit={async () => {
                 await withSavedDrafts("chapter:"+chapter.id,undefined,async()=>{
                   await api("/analysis/apply", {
-                    id:draft.id,draftVersion:draft.draftVersion,revision:draftScopeRevision("chapter:"+chapter.id,chapter.revision),selected:checked,replaceConfirmed:ack,confirmRoles,
+                    id:draft.id,draftVersion:draft.draftVersion,revision:draftScopeRevision("chapter:"+chapter.id,chapter.revision),selected:checked,replaceConfirmed:ack,confirmRoles,...(inheritPerformanceConfirmed?{inheritPerformanceConfirmed:true}:{}),
                   });
                 });
                 await refresh();
@@ -452,9 +464,7 @@ export default function AnalysisDialog({
                   </label>
                 </>
               ) : (
-                <p className="hint">
-                  已选 {checked.length} 条，一次应用；未选择的指导不改变。
-                </p>
+                <><p className="hint">已选 {checked.length} 条，一次应用{selectedSplits.length ? `，其中 ${selectedSplits.length} 处按语义拆短` : ""}；未选择的台词和指导不改变。</p>{needsPerformanceConfirmation&&<label className="check-label"><input type="checkbox" checked={inheritPerformanceConfirmed} onChange={event=>setInheritPerformanceConfirmed(event.target.checked)}/>我已核对所选拆分，决定沿用各条原有的人工表演指导</label>}</>
               )}
             </Form>
           )}

@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AlertCircle, Check, ChevronDown, X } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Trash2, X } from "lucide-react";
 
 export const ErrorContext = createContext({ message: "", dismiss: () => {} });
 const DialogDepth = createContext(0);
@@ -89,6 +89,7 @@ export function Select({
   disabled = false,
   label,
   onOpen,
+  onDelete,
 }: {
   value: string;
   options: { value: string; label: string }[];
@@ -96,6 +97,7 @@ export function Select({
   disabled?: boolean;
   label: string;
   onOpen?: () => void;
+  onDelete?: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false),
     [cursor, setCursor] = useState(0);
@@ -144,6 +146,10 @@ export function Select({
       window.removeEventListener("resize", place);
       document.removeEventListener("scroll", place, true);
     };
+  }, [open, options.length]);
+  const focusOption = (index: number) => root.current?.querySelector<HTMLButtonElement>(`[data-choice-index="${index}"]`)?.focus();
+  useEffect(() => {
+    if (open && onDelete) focusOption(cursor);
   }, [open]);
   const choose = (v: string) => {
     onChange(v);
@@ -151,16 +157,19 @@ export function Select({
     trigger.current?.focus();
   };
   return (
-    <div className="select" ref={root}>
+    <div className="select" ref={root} onBlur={onDelete ? e => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false);
+    } : undefined}>
       <button
         ref={trigger}
         className="select-trigger"
         type="button"
-        role="combobox"
+        role={onDelete ? undefined : "combobox"}
+        aria-haspopup={onDelete ? "dialog" : "listbox"}
         aria-label={label}
         aria-expanded={open}
         aria-controls={listId.current}
-        aria-activedescendant={open ? `${listId.current}-${cursor}` : undefined}
+        aria-activedescendant={open && !onDelete ? `${listId.current}-${cursor}` : undefined}
         disabled={disabled || !options.length}
         onClick={() => {
           if (!open) onOpen?.();
@@ -182,7 +191,7 @@ export function Select({
             return;
           }
           if (e.key === "Tab") {
-            setOpen(false);
+            if (!onDelete) setOpen(false);
             return;
           }
           if (!["ArrowDown", "ArrowUp", "Enter", "Home", "End"].includes(e.key))
@@ -221,11 +230,30 @@ export function Select({
             bottom: "auto",
             right: "auto",
           }}
-          role="listbox"
+          role={onDelete ? "dialog" : "listbox"}
           id={listId.current}
           aria-label={label}
+          onKeyDown={onDelete ? e => {
+            if (e.key === "Escape") {
+              e.preventDefault(); e.stopPropagation(); setOpen(false); trigger.current?.focus();
+            } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+              e.preventDefault();
+              const next = e.key === "Home" ? 0 : e.key === "End" ? options.length - 1 : (cursor + (e.key === "ArrowUp" ? -1 : 1) + options.length) % options.length;
+              setCursor(next); focusOption(next);
+            }
+          } : undefined}
         >
-          {options.map((o, i) => (
+          {options.map((o, i) => onDelete ? <div className="select-option-row" key={o.value}>
+            <button type="button" data-choice-index={i} aria-pressed={o.value === value} title={o.label}
+              className={"select-option" + (i === cursor ? " cursor" : "")} disabled={disabled}
+              onFocus={() => setCursor(i)} onClick={() => choose(o.value)}>
+              <span>{o.label}</span>{o.value === value && <Check size={14} />}
+            </button>
+            <button type="button" className="select-delete" aria-label={"删除" + o.label} title={"删除" + o.label} disabled={disabled}
+              onFocus={() => setCursor(i)} onClick={e => {
+                e.stopPropagation(); setOpen(false); trigger.current?.focus(); onDelete(o.value);
+              }}><Trash2 size={16} aria-hidden="true" /></button>
+          </div> : (
             <button
               type="button"
               id={`${listId.current}-${i}`}
@@ -270,14 +298,16 @@ export function Empty({
   heading,
   children,
   action,
+  className = "",
 }: {
   icon: ReactNode;
   heading: string;
   children: ReactNode;
   action?: ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="empty">
+    <div className={"empty" + (className ? " " + className : "")}>
       <div className="empty-icon">{icon}</div>
       <h2>{heading}</h2>
       <p>{children}</p>

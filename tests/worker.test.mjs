@@ -117,6 +117,35 @@ test("HTTP 402 共享余额错误停止余下项，成功数不混入失败", as
   assert.equal(store.get('jobs',following.id).status,'stopped');
   assert.equal(store.all('attempts',following.id)[0].status,'stopped');
 });
+test('供应商402时长错误只失败本条，保留旧音频且短句继续，错误回显不泄漏',async t=>{
+  const {store,d,c,worker:initialWorker,enqueue}=setup(t);
+  const requests=t.mock.method(globalThis,'fetch',async()=>new Response(wav(),{headers:{'Content-Type':'audio/wav'}}));
+  enqueue();await initialWorker.tick();const before=d.list(c.id),key='private-fixture-'+uid();
+  d.mutate('segment.update',{chapterId:c.id,revision:d.chapter(c.id).revision,id:before[0].id,text:'长'.repeat(847)});
+  const worker=createWorker(store,d,{key,model:'seed-audio-1.0',audioUrl:'https://example.invalid',callLimit:2,usageScope:'duration-error'});let calls=0;
+  requests.mock.mockImplementation(async(_,options)=>{
+    calls++;assert.equal(options.headers.Authorization,`Bearer ${key}`);
+    return calls===1?Response.json({error:{message:`status_code=402 InvalidPayload:DurationOutOfRange upstream echoed ${key}`}},{status:402}):new Response(wav(),{headers:{'Content-Type':'audio/wav'}});
+  });
+  const request={kind:'generate',chapterId:c.id,revision:d.chapter(c.id).revision,ids:before.map(s=>s.id),commandId:uid()};
+  const job=await worker.submit(request);await worker.tick();const attempts=store.all('attempts',job.id),saved=store.get('jobs',job.id);
+  assert.equal(calls,2);assert.equal(saved.status,'failed');assert.equal(saved.done,1);assert.deepEqual(attempts.map(a=>a.status),['failed','success']);
+  assert.equal(attempts[0].providerErrorCode,'DurationOutOfRange');assert.match(attempts[0].error,/参考.*30.*输出.*120.*拆短正文/);
+  assert.notEqual(store.maybe('settings','audio-route')?.blocked,true);
+  assert.equal(d.list(c.id)[0].current,before[0].current);assert.notEqual(d.list(c.id)[1].current,before[1].current);
+  for(const s of before)assert.ok(store.maybe('audios',s.current));
+  assert.ok(!JSON.stringify([saved,attempts,d.snapshot()]).includes(key));assert.ok(!JSON.stringify(attempts).includes('upstream echoed'));
+  const quota=store.get('settings','audio-usage:duration-error');assert.equal(quota.used,2);assert.equal(quota.reserved,0);
+  assert.throws(()=>worker.enqueue({...request,commandId:uid()}),/额度不足/);
+  await worker.tick();assert.equal(calls,2,'不得自动重发时长失败');
+});
+test('时长错误码不完整或读取失败时仍保留共享HTTP保护',async t=>{
+  for(const [status,body] of [[402,'InvalidPayload:DurationOutOfRangeExtra'],[401,'InvalidPayload:DurationOutOfRange'],[403,'InvalidPayload:DurationOutOfRange'],[429,'InvalidPayload:DurationOutOfRange'],[402,null]])await t.test(`${status}/${body??'读取失败'}`,async t=>{
+    const {store,worker,enqueue}=setup(t);let calls=0;
+    t.mock.method(globalThis,'fetch',async()=>{calls++;return body===null?new Response(new ReadableStream({start(controller){controller.error(new Error('unreadable'));}}),{status}):new Response(body,{status});});
+    const job=enqueue();await worker.tick();assert.equal(calls,1);assert.equal(store.get('settings','audio-route').blocked,true);assert.deepEqual(store.all('attempts',job.id).map(a=>a.status),['failed','stopped']);
+  });
+});
 test("正式导出预检损坏源音频，不提前通过检查；修复后保存确认依据",async t=>{
   const {store,d,c,worker,enqueue,dir}=setup(t);const old=global.fetch;let calls=0;
   global.fetch=async()=>{calls++;return new Response(wav(),{headers:{"Content-Type":"audio/wav"}})};t.after(()=>global.fetch=old);

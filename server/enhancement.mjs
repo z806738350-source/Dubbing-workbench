@@ -21,7 +21,7 @@ export function createEnhancement(store, d) {
   const enabled = key => { if (!features()[key]) fail('此增强功能已关闭，已有资源仍可查看和处理'); };
   function syncLegacySegment(s) {
     let u = store.maybe('units', s.id);
-    if (!u) u = { id: s.id, chapterId: s.chapterId, kind: 'single', members: [s.id], state: 'active', revision: 1, membershipRevision: 1, mode: 'dry', guidance: '', variants: { dry: variant(), scene: variant() }, createdAt: stamp() };
+    if (!u) u = { id: s.id, chapterId: s.chapterId, kind: 'single', members: [s.id], state: 'active', revision: 1, membershipRevision: 1, mode: 'dry', guidance: '', variants: { dry: variant(), scene: {...variant(),template:'scene-v2'} }, createdAt: stamp() };
     u.state = s.retired ? 'retired' : 'active';
     const before = u.variants.dry;
     const dry = { ...before, current: s.current || null, previous: s.previous || null, approved: s.approved || null, review: s.review || null, latest: s.latest || 'none' };
@@ -196,7 +196,7 @@ export function createEnhancement(store, d) {
     const rows = d.list(c.id), start = rows.findIndex(s => s.id === p.ids[0]);
     if (!same(rows.slice(start, start + p.ids.length).map(s => s.id), p.ids) || rows.slice(start, start + p.ids.length).some(s => s.excluded)) fail('只能选择同章按真实顺序连续的有效台词');
     if (store.all('units', c.id).some(u => u.kind === 'group' && ['active', 'pending'].includes(u.state) && u.members.some(id => p.ids.includes(id)))) fail('成员已属于活动或待生成组，请先解除', 409);
-    const u = { id: uid(), chapterId: c.id, kind: 'group', members: p.ids, state: 'pending', revision: 1, membershipRevision: 1, mode: 'dry', guidance: p.guidance || '', variants: { dry: variant(), scene: variant() }, createdAt: stamp() };
+    const u = { id: uid(), chapterId: c.id, kind: 'group', members: p.ids, state: 'pending', revision: 1, membershipRevision: 1, mode: 'dry', guidance: p.guidance || '', variants: { dry: variant(), scene: {...variant(),template:'scene-v2'} }, createdAt: stamp() };
     if (typeof u.guidance !== 'string' || u.guidance.length > 2000) fail('组指导最多 2000 字');
     u.variants.dry.guidance = u.guidance;
     const input = buildInput(u, 'dry', undefined, true);

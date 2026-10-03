@@ -204,6 +204,30 @@ test('SC06/SC07/SC08 干场景引用与指导分开，空切换零请求，恢�
   assert.equal(current.variants.dry.current,dry.audio.id);assert.equal(e.events(current).find(x=>x.id===sound.id).state,'adopted');
 });
 
+test('场景模板 v2 仅初始化新单元；旧缺省声音保持匹配，明确切换和恢复保留历史',t=>{
+  const {store,d,c,e,edit,complete,mutateUnit}=setup(t),ids=d.list(c.id).map(s=>s.id),group=edit('unit.create',{ids:ids.slice(0,2)});
+  for(const id of [ids[2],group.id]){
+    const initial=store.get('units',id);assert.equal(initial.variants.scene.template,'scene-v2');assert.equal(e.input(initial,'scene').template,'scene-v2');
+    delete initial.variants.scene.template;store.put('units',initial,c.id);
+    const old=complete(id,'scene');assert.equal(old.audio.input.template,'scene-v1');
+    mutateUnit('unit.review',store.get('units',id),{mode:'scene',audioId:old.audio.id,basis:old.a.basis,state:'passed'});
+    let current=store.get('units',id);const savedAudio=store.get('audios',old.audio.id);
+    const reopened=createDomain(store).enhancement;
+    assert.equal(reopened.input(current,'scene').template,'scene-v1');assert.equal(reopened.status(current,'scene').validity,'matched');
+    const before=store.all('units'),preview=e.preview({chapterId:c.id,revision:store.get('chapters',c.id).revision,id,entityRevision:current.revision,mode:'scene',kind:'template',template:'scene-v2'});
+    assert.equal(preview.from,'scene-v1');assert.equal(preview.to,'scene-v2');assert.equal(preview.before,old.audio.prompt);assert.notEqual(preview.after,preview.before);assert.deepEqual(store.all('units'),before);
+    assert.throws(()=>mutateUnit('unit.template',current,{mode:'scene',template:'scene-v2'}),/明确确认/);
+    current=mutateUnit('unit.template',current,{mode:'scene',template:'scene-v2',confirm:true});
+    assert.equal(current.variants.scene.template,'scene-v2');assert.equal(current.variants.scene.status.validity,'stale');assert.equal(current.variants.scene.current,old.audio.id);
+    assert.equal(current.variants.scene.history.find(audio=>audio.id===old.audio.id).matched,false);assert.deepEqual(store.get('audios',old.audio.id),savedAudio);
+    assert.throws(()=>mutateUnit('unit.restore',current,{mode:'scene',audioId:old.audio.id}),{status:409});
+    current=mutateUnit('unit.restore',current,{mode:'scene',audioId:old.audio.id,restoreSettings:true});
+    assert.equal(current.variants.scene.template,'scene-v1');assert.equal(current.variants.scene.status.validity,'matched');assert.equal(current.variants.scene.current,old.audio.id);
+    assert.equal(current.variants.scene.history.find(audio=>audio.id===old.audio.id).matched,true);assert.deepEqual(store.get('audios',old.audio.id),savedAudio);
+    e.syncLegacy();assert.equal(store.get('units',id).variants.scene.template,'scene-v1');
+  }
+});
+
 test('EX06/CP07 四层资格不能绕过，参考停用不阻断本地导出，关闭增强不拆活动组',t=>{
   const {store,d,c,e,v,edit,complete,mutateUnit}=setup(t),ids=d.list(c.id).map(s=>s.id),u=edit('unit.create',{ids:ids.slice(0,2)});complete(u.id);complete(ids[2]);
   const cNow=()=>store.get('chapters',c.id), payload=()=>({kind:'export',format:'wav',confirm:true,arrangement:cNow().arrangement,reviewItems:e.resolve(c.id).map(r=>({id:r.s.id,audioId:r.a.id,basis:r.basis}))});

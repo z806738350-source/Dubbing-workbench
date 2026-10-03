@@ -5,7 +5,7 @@ import { activeDraftSave, cancelDraftSave, draftSaveStatus, flushRegisteredDraft
 
 type Value<T> = { type: string; version: 1; value: T };
 export type Saved<T> = { value: T; revision: number; chapterRevision?: number; targetId?: string; changes?: string[] };
-export type DraftOptions<T> = { scope?: string; chapterRevision?: number; dependencies?: string[]; changes?: string[]; coupled?: string[][]; legacyRaw?: boolean; locked?: boolean; delay?: number; validate?: (value: T) => string | null; persist?: (value: T, expected: number, context: SaveContext) => Promise<Saved<T>> };
+export type DraftOptions<T> = { scope?: string; chapterRevision?: number; dependencies?: string[]; changes?: string[]; coupled?: string[][]; legacyRaw?: boolean; deferUnmounted?: boolean; locked?: boolean; delay?: number; validate?: (value: T) => string | null; persist?: (value: T, expected: number, context: SaveContext) => Promise<Saved<T>> };
 const envelope = <T,>(type: string, value: T): Value<T> => ({type, version: 1, value});
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const storageFailure = (error:unknown) => ["QuotaExceededError","SecurityError"].includes((error as Error)?.name);
@@ -165,7 +165,7 @@ export function useObjectDraft<T extends object>(type: string, id: string, value
   const compositionStart = () => {current.current.composing=true;setComposing(true);cancelDraftSave(key);};
   const compositionEnd = () => {current.current.composing=false;setComposing(false);};
   const hasTransferredDraft=()=>{if(!current.current.transferredKey)return false;try{return !!readDraft(current.current.transferredKey);}catch{return true;}};
-  useEffect(()=>registerDraftSave(key,{scope:options.scope || key,dependencies:options.dependencies || [key],state:()=>hasTransferredDraft()?"local":current.current.status,dirty:()=>current.current.dirty || hasTransferredDraft(),flush,freeze}),[key,options.scope,JSON.stringify(options.dependencies)]);
+  useEffect(()=>registerDraftSave(key,{scope:options.scope || key,dependencies:options.dependencies || [key],deferUnmounted:()=>{if(!current.current.options.deferUnmounted || current.current.targetId || pending.current || activeDraftSave(key))return false;try{return !pendingSaveOperation(key);}catch{return false;}},state:()=>hasTransferredDraft()?"local":current.current.status,dirty:()=>current.current.dirty || hasTransferredDraft(),flush,freeze}),[key,options.scope,JSON.stringify(options.dependencies)]);
   useEffect(()=>{
     if(!dirty || !options.persist || composing || options.locked || status === "conflict" || status === "unreliable")return;
     if(options.validate?.(draft))return;

@@ -2,28 +2,17 @@ import { templateCatalog, templateOf } from "./templates.mjs";
 import { textModel, knownRoles } from "./domain.mjs";
 import { fail, uid, same } from "./store.mjs";
 import { policyOf, decide, reserveGrant, settleGrant } from './experience.mjs';
+import { longSegment, segmentLimit, semanticBlocks, shortRanges, partsAfter } from './semantic.mjs';
+import { storedAudioUnavailable } from './audio.mjs';
 
 export function sourceBlocks(source) {
-  const chars = Array.from(source),
-    blocks = [];
+  const chars = Array.from(source), blocks = [];
   let start = 0;
-  const push = (end) => {
-    if (end <= start) return;
-    const text = chars.slice(start, end).join("");
-    if (!text.trim() && blocks.length) {
-      const last = blocks.at(-1);
-      last.end = end;
-      last.text += text;
-    } else if (text.trim())
-      blocks.push({ id: blocks.length, start, end, text });
-    else return; // Leading whitespace belongs to the first meaningful block.
-    start = end;
-  };
-  for (let i = 0; i < chars.length; i++) {
-    if (/[“「『]/u.test(chars[i])) push(i);
-    if (/[”」』\n]/u.test(chars[i]) || i - start >= 250) push(i + 1);
+  for (const range of shortRanges(source)) {
+    const value = chars.slice(start,range.end).join('');
+    if (!value.trim() && blocks.length) { const last=blocks.at(-1);last.end=range.end;last.text+=value;start=range.end; }
+    else if (value.trim()) { blocks.push({id:blocks.length,start,end:range.end,text:value});start=range.end; }
   }
-  push(chars.length);
   return blocks;
 }
 export function validateExtraction(blocks, items) {
@@ -100,17 +89,55 @@ export function createAnalysis(store, domain, config) {
       fail("草稿已在另一页面修改，请刷新后核对", 409);
     return r;
   }
+  const manualPerformance = s => s.protectedFields?.includes('performance') || !!s.performance && s.decisions?.performance?.source !== 'policy_ai' && !s.aiAllowedFields?.includes('performance');
+  const positionPerformance = s => manualPerformance(s) && /(前半|后半|前一半|后一半|上半|下半|前段|后段|句首|句尾|开头|结尾|末尾|从.+开始|第[一二三四五六七八九十\d]+(?:句|段))/u.test(s.performance);
+  function splitProtection(s, automatic = false) {
+    const units = store.all('units',s.chapterId);
+    if (units.some(u => u.kind === 'group' && ['active','pending'].includes(u.state) && u.members.includes(s.id))) return '这条已在对戏组中，请先处理分组后再拆分。';
+    const unit = store.maybe('units',s.id);
+    if (unit?.mode === 'scene' || unit?.variants?.scene?.guidance || store.all('events',s.id).some(e => e.state !== 'removed')) return '这条有声音背景或场景事件，请先处理场景设置后再拆分。';
+    if (s.latest === 'unknown' || Object.values(unit?.variants || {}).some(v => v.latest === 'unknown')) return '上次声音结果不明，请先核对请求记录后再拆分。';
+    if (automatic) {
+      const linked = [s.current,s.previous,s.approved,...Object.values(unit?.variants || {}).flatMap(v => [v.current,v.previous,v.approved])].filter(Boolean);
+      if (store.all('audios',s.chapterId).some(a => (linked.includes(a.id) || a.targetId === s.id || a.input?.unitId === s.id) && !storedAudioUnavailable(store,a))) return '已有可用声音，保留当前制作结果；需要拆分时可单独预览后应用。';
+      if (positionPerformance(s)) return '原表演包含前后位置要求，需预览后明确沿用原表演，AI不会改写。';
+    }
+    return '';
+  }
+  function splitItem(c, draft, item, p = {}) {
+    const parent = store.get('segments',item.segmentId), blocked = splitProtection(parent);
+    if (blocked) fail(blocked,409);
+    if (positionPerformance(parent) && p.inheritPerformanceConfirmed !== true) fail('原表演包含位置要求，请先明确确认拆分后沿用原表演；原指导不会清空');
+    if (!item.splitParts || item.splitParts.length < 2 || item.splitParts.join('') !== parent.text) fail('语义拆分结果无效或正文已变化',409);
+    const children = domain.mutate('segment.split',{chapterId:c.id,revision:c.revision,id:parent.id,parts:item.splitParts,performance:item.splitParts.map(() => parent.performance)});
+    Object.assign(c,store.get('chapters',c.id));
+    const result = {segmentId:parent.id,itemId:item.id,childIds:children.map(s => s.id)};
+    draft.splitResults = [...(draft.splitResults || []),result];
+    return {parent,children};
+  }
   function inspectDraft(r) {
     const items = [],
       gaps = [],
       issues = [];
     for (const batch of r.batches) {
+      if (r.kind === 'extract') batch.items = batch.items.flatMap(raw => {
+        if (!Number.isInteger(raw.from) || !Number.isInteger(raw.to) || raw.from > raw.to || !batch.blockIds.includes(raw.from) || !batch.blockIds.includes(raw.to)) return [raw];
+        const groups = []; let first=raw.from,size=0;
+        for (let id=raw.from;id<=raw.to;id++) {
+          const next=Array.from(r.blocks[id].text).length;
+          if (size && size+next>longSegment) { groups.push([first,id-1]);first=id;size=0; }
+          size+=next;
+        }
+        groups.push([first,raw.to]);
+        return groups.length === 1 ? [raw] : groups.map(([from,to],i) => ({...raw,id:i?uid():raw.id,from,to,splitOrigin:raw.id}));
+      });
       if (r.kind === "scene" && batch.items.length > 30) issues.push("本批声音事件超过30项，请删减后采用");
       const expected = r.kind === "extract" ? batch.blockIds : batch.segmentIds;
       const counts = new Map(expected.map((id) => [id, 0]));
       let last = -1;
       for (const raw of batch.items) {
         const item = { ...raw, batchId: batch.id, issues: [], text: "" };
+        delete item.splitParts; delete item.splitIssue; delete item.splitNotice; delete item.splitRequiresPerformanceConfirmation;
         const issue = (message) => item.issues.push(message);
         if (r.kind === "extract") {
           const rangeValid =
@@ -163,6 +190,21 @@ export function createAnalysis(store, domain, config) {
           else {
             counts.set(item.segmentId, counts.get(item.segmentId) + 1);
             item.text = s.text;
+            if (r.splitOnly) item.performance = s.performance;
+            if (r.splitOnly || Array.from(s.text).length > segmentLimit(s.config?.speech_rate)) {
+              const ids = raw.splitAfter;
+              const parts = ids === undefined || Array.isArray(ids) && !ids.length ? [] : partsAfter(s.text,ids);
+              if (!parts) issue('AI返回了无效、重复或逆序的语义边界，本轮未拆分');
+              else if (parts.length > 1) {
+                const blocked = splitProtection(s);
+                if (blocked) item.splitIssue = blocked;
+                else {
+                  item.splitParts = parts;
+                  if (positionPerformance(s)) { item.splitIssue = '原表演包含位置要求；拆分后需明确沿用原表演，AI不会改写。';item.splitRequiresPerformanceConfirmation=true; }
+                  else if (manualPerformance(s)) item.splitNotice = '子条沿用原人工表演指导，AI未改写。';
+                }
+              } else item.splitIssue = 'AI本次未给出可用的语义拆分建议，原文保持完整；没有从字中间截断。';
+            }
           }
         }
         if (r.kind !== "scene" && (
@@ -283,7 +325,7 @@ export function createAnalysis(store, domain, config) {
           const request = {
             model: r.model,
             messages: [
-              { role: "system", content: instruction(r.kind) },
+              { role: "system", content: instruction(r.kind) + (r.kind === 'director' ? '\n对于提供splitBoundaries的长片段，请按完整意思拆成较短朗读单元，目标长度见splitTargetChars（慢速更短，字符数只是建议，不能保证时长）。在原items结构的对应条目中追加splitAfter:[边界id...]，从输入splitBoundaries中选择升序、去重的id，切点在该块之后；不得改写正文、角色、声音或数值。边界id是程序给出的语句标记，不是字符数；不能选择不存在的id。长片段有可用边界时必须给splitAfter；没有可用边界则返回空数组并在reason说明。' + (r.splitOnly ? '本次仅做语义拆分预览，不提出或改写表演指导；performance保持输入值。' : '') : '') },
               { role: "user", content: JSON.stringify(input) },
             ],
             temperature: 0.2,
@@ -384,6 +426,7 @@ export function createAnalysis(store, domain, config) {
     )
       fail("文本模型名称无效");
     const kind = ["director", "scene"].includes(p.kind) ? p.kind : "extract";
+    if (p.splitOnly === true && kind !== 'director') fail('局部语义拆分请使用现有片段分析');
     if (p.retryUnknown !== true && store.all('suggestions',c.id).some(r => r.kind === kind && r.revision === c.revision && r.contextRevision === store.get('projects',c.projectId).contextRevision && r.batches?.some(b => b.status === 'unknown'))) fail('本章这一用途有结果不明的请求，可能已计费；请先查看记录并明确决定后再提交');
     let sceneUnit;
     if (kind === "scene") {
@@ -418,10 +461,11 @@ export function createAnalysis(store, domain, config) {
     const r = {
       id: uid(),
       ...(p.operationId ? {operationId:p.operationId,operationRequest:JSON.parse(JSON.stringify(p))} : {}),
-      grantId:p.grantId,requireGrant:p.requireGrant,autoApply:p.autoApply === true,
+      grantId:p.grantId,requireGrant:p.requireGrant,autoApply:p.splitOnly !== true && p.autoApply === true,
       policyRef:policyOf(store,c.projectId).revision,
       chapterId: c.id,
       kind,
+      ...(p.splitOnly === true ? {splitOnly:true} : {}),
       ...(sceneUnit ? { unitId: sceneUnit.id, unitRevision: sceneUnit.revision, memberIds: [...sceneUnit.members], existingEvents: store.all("events", sceneUnit.id).filter(e => e.state === "adopted") } : {}),
       revision: c.revision,
       contextRevision: store.get("projects", c.projectId).contextRevision,
@@ -436,6 +480,11 @@ export function createAnalysis(store, domain, config) {
         referenceObservations: s.voiceId ? store.maybe("voices",s.voiceId)?.observations || null : null,
         type: s.type,
         performance: s.performance,
+        config:s.config,
+        decisions:s.decisions,
+        protectedFields:s.protectedFields,
+        aiAllowedFields:s.aiAllowedFields,
+        ...(kind === 'director' && (p.splitOnly || Array.from(s.text).length > segmentLimit(s.config?.speech_rate)) ? {splitBoundaries:semanticBlocks(s.text).slice(0,-1).map(({id,text}) => ({id,text})),splitTargetChars:segmentLimit(s.config?.speech_rate)} : {}),
         source: s.source,
       })),
       status: "partial",
@@ -563,24 +612,47 @@ export function createAnalysis(store, domain, config) {
       return apply({id:r.id,revision:c.revision,draftVersion:r.draftVersion,replaceConfirmed:true},true);
     }
     if (r.kind !== 'director') { r.automation = {applied:0,needsDecision:r.items.length}; return save(r); }
+    const working = JSON.parse(JSON.stringify(r));
     return store.transaction(() => {
+      r = working;
       current(r); domain.editable(c.id,c.revision);
-      const changed = [], pendingItems = [];
+      const changed = [], pendingItems = [], splits = [];
       for (const item of r.items) {
         const s = store.get('segments',item.segmentId);
-        if (s.performance === item.performance || s.protectedFields?.includes('performance') || s.performance && s.decisions?.performance?.source !== 'policy_ai' && !s.aiAllowedFields?.includes('performance')) continue;
-        if (item.uncertain || item.evidence !== '原文明示' || !lowRisk(item.performance)) { pendingItems.push(item.id); continue; }
+        const parent = JSON.parse(JSON.stringify(s));
         const before = {performance:s.performance,decisions:s.decisions || {}};
-        s.performance = item.performance;
-        s.decisions = {...s.decisions,performance:{source:'policy_ai',at:new Date().toISOString(),values:s.performance,policyVersion:policy.revision,draftId:r.id,inputRevision:r.revision}};
-        const after = {performance:s.performance,decisions:s.decisions};
-        changed.push({id:s.id,before,after}); store.put('segments',s,c.id);
+        let performanceChanged = false;
+        if (item.uncertain && item.splitParts?.length > 1) pendingItems.push(item.id);
+        if (!r.splitOnly && s.performance !== item.performance && !manualPerformance(s)) {
+          if (item.uncertain || item.evidence !== '原文明示' || !lowRisk(item.performance)) pendingItems.push(item.id);
+          else {
+            s.performance = item.performance;
+            s.decisions = {...s.decisions,performance:{source:'policy_ai',at:new Date().toISOString(),values:s.performance,policyVersion:policy.revision,draftId:r.id,inputRevision:r.revision}};
+            performanceChanged = true; store.put('segments',s,c.id);
+          }
+        }
+        if (item.splitParts?.length > 1 && Array.from(s.text).length > segmentLimit(s.config?.speech_rate) && !pendingItems.includes(item.id)) {
+          const blocked = splitProtection(parent,true);
+          if (blocked) { item.splitIssue = blocked; pendingItems.push(item.id); }
+          else {
+            const split = splitItem(c,r,item);
+            split.parent = parent; splits.push(split);
+            continue;
+          }
+        } else if (item.splitIssue) pendingItems.push(item.id);
+        if (performanceChanged) changed.push({id:s.id,before,after:{performance:s.performance,decisions:s.decisions}});
       }
-      if (changed.length) { domain.touch(c,true,false); domain.enhancement.syncLegacy(); store.put('settings',{id:`ux-change:${r.id}`,changeId:r.id,projectId:c.projectId,chapterId:c.id,items:changed,policyVersion:policy.revision,at:new Date().toISOString()}); }
-      r.automation = {applied:changed.length,needsDecision:pendingItems.length,pendingItemIds:pendingItems};
+      if (changed.length) domain.touch(c,true,false);
+      if (changed.length || splits.length) {
+        domain.enhancement.syncLegacy();
+        for (const split of splits) split.children = split.children.map(s => store.get('segments',s.id));
+        store.put('settings',{id:`ux-change:${r.id}`,changeId:r.id,projectId:c.projectId,chapterId:c.id,items:changed,splits,policyVersion:policy.revision,at:new Date().toISOString()});
+      }
+      const pendingItemIds = [...new Set(pendingItems)];
+      r.automation = {applied:changed.length+splits.reduce((n,s) => n+s.children.length,0),needsDecision:pendingItemIds.length,pendingItemIds,splitCount:splits.length,splitSegmentIds:splits.map(s => s.parent.id)};
       r.revision = c.revision;
-      r.status = pendingItems.length ? 'ready' : 'applied';
-      r.appliedItemIds = changed.map(row => r.items.find(i => i.segmentId === row.id)?.id);
+      r.status = pendingItemIds.length ? 'ready' : 'applied';
+      r.appliedItemIds = [...changed.map(row => r.items.find(i => i.segmentId === row.id)?.id),...(r.splitResults || []).map(row => row.itemId)];
       save(r); return r;
     });
   }
@@ -715,17 +787,25 @@ export function createAnalysis(store, domain, config) {
           p.selected.some((id) => !draft.items.some((i) => i.id === id))
         )
           fail("请勾选需要采用的建议");
+        const splits = [];
         for (const item of draft.items.filter((i) =>
           p.selected.includes(i.id),
         )) {
           const s = store.get("segments", item.segmentId);
           if (s.retired) fail("片段已改变", 409);
+          if (item.splitParts?.length > 1) { splits.push(splitItem(c,draft,item,p)); continue; }
+          if (draft.splitOnly) fail('AI本次没有可应用的语义拆分建议，原文保持完整');
           s.performance = item.performance;
           if (s.decisions || policyOf(store,c.projectId).revision) {
             s.protectedFields = [...new Set([...(s.protectedFields || []),'performance'])];
             s.decisions = {...s.decisions,performance:{source:'human',values:s.performance,draftId:draft.id,at:new Date().toISOString()}};
           }
           store.put("segments", s, c.id);
+        }
+        if (splits.length) {
+          for (const split of splits) split.children = split.children.map(s => store.get('segments',s.id));
+          const old = store.maybe('settings',`ux-change:${draft.id}`);
+          store.put('settings',{...old,id:`ux-change:${draft.id}`,changeId:draft.id,projectId:c.projectId,chapterId:c.id,items:old?.items || [],splits:[...(old?.splits || []),...splits],policyVersion:draft.policyRef,at:new Date().toISOString()});
         }
         draft.appliedItemIds = draft.items.filter((i) => p.selected.includes(i.id)).map((i) => i.id);
       }
@@ -743,6 +823,7 @@ export function createAnalysis(store, domain, config) {
       if (c.revision !== p.revision) fail('章节已改变，请刷新后核对范围',409);
       const kind = p.kind || (domain.list(c.id).length ? 'director' : 'extract');
       if (!['extract','director','scene'].includes(kind)) fail('分析用途无效');
+      if (p.splitOnly === true && kind !== 'director') fail('局部语义拆分请使用现有片段分析');
       if (p.source !== undefined && typeof p.source !== 'string') fail('分析原文无效');
       if (p.ids !== undefined && (!Array.isArray(p.ids) || new Set(p.ids).size !== p.ids.length || p.ids.some(id => !domain.list(c.id).some(s => s.id === id && !s.excluded)))) fail('请选择当前章节的有效台词');
       let rows = kind === 'extract' ? sourceBlocks(p.source === undefined ? c.source : p.source) : domain.list(c.id).filter(s => !s.excluded && (!p.ids?.length || p.ids.includes(s.id)));

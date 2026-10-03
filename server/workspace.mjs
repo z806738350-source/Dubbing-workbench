@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, mkdirSync, renameSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, renameSync, writeFileSync, readdirSync, rmSync, lstatSync, mkdtempSync, realpathSync } from 'node:fs';
 import { cp, lstat, mkdir, realpath, rename, rm, writeFile, readdir, mkdtemp } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -161,7 +161,95 @@ export function renameProjectFolder(store, project, name) {
   }
 }
 
+// Filesystem renames cannot join a SQLite transaction. Keep their original paths
+// until the outer commit so an interrupted delete can restore or finish on restart.
+const deleteManifest = '.project-delete.json';
+function deletionPath(store, path) {
+  if (typeof path !== 'string' || !path || isAbsolute(path) || /[\\\x00-\x1f]/.test(path)) fail('项目素材路径无效，未删除任何资料', 409);
+  const target = resolve(store.directory, path), inside = relative(resolve(store.directory), target);
+  if (!inside || inside === '..' || inside.startsWith('../') || isAbsolute(inside) || inside !== path) fail('项目素材路径越出工作区或未规范化，未删除任何资料', 409);
+  let current = store.directory;
+  for (const part of inside.split('/')) {
+    current = join(current, part);
+    try { if (lstatSync(current).isSymbolicLink()) fail('项目素材路径包含符号链接，未删除任何资料', 409); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  return target;
+}
+function restoreDeletion(store, staging, manifest) {
+  for (let i = manifest.paths.length - 1; i >= 0; i--) {
+    const saved = join(staging, String(i));
+    if (!existsSync(saved)) continue;
+    const original = deletionPath(store, manifest.paths[i]);
+    if (existsSync(original)) fail('删除回滚的原位置已有资料，请保留暂存目录并恢复备份', 409);
+    mkdirSync(dirname(original), { recursive: true });
+    renameSync(saved, original);
+  }
+  rmSync(staging, { recursive: true, force: true });
+}
+function finishDeletion(staging, manifest) {
+  try {
+    manifest.paths.forEach((_, i) => rmSync(join(staging, String(i)), { recursive: true, force: true }));
+    rmSync(staging, { recursive: true, force: true });
+    return false;
+  } catch { return true; }
+}
+export function stageProjectDeletion(store, project, paths, sharedPaths = []) {
+  const folder = project.folder;
+  const root = realpathSync(store.directory);
+  sharedPaths = sharedPaths.map(path => {
+    const file = resolve(root, path); return relative(root, existsSync(file) ? realpathSync(file) : file);
+  });
+  if (folder) {
+    validateFolderName(folder);
+    const directory = deletionPath(store, folder);
+    if (existsSync(directory)) {
+      const marker = join(directory, '.project-id');
+      if (!lstatSync(directory).isDirectory() || !existsSync(marker) || !lstatSync(marker).isFile() || lstatSync(marker).isSymbolicLink() || readFileSync(marker, 'utf8') !== project.id)
+        fail('项目文件夹归属不一致，未删除任何资料', 409);
+      if (sharedPaths.some(path => path === folder || path.startsWith(folder + '/')))
+        fail('项目文件夹仍含共用素材，未删除任何资料', 409);
+    }
+  }
+  const shared = new Set(sharedPaths.map(path => resolve(store.directory, path)));
+  const files = [...new Set(paths)].filter(Boolean).filter(path => !shared.has(resolve(store.directory, path)));
+  for (const path of files) {
+    if (!['audio', 'masters', 'exports'].some(kind => path.startsWith(kind + '/')) && !(folder && path.startsWith(folder + '/')))
+      fail('项目素材不在本项目或系统素材目录，未删除任何资料', 409);
+    deletionPath(store, path);
+  }
+  const sources = [...(folder ? [folder] : []), ...files.filter(path => !folder || !path.startsWith(folder + '/'))]
+    .filter(path => existsSync(deletionPath(store, path)));
+  if (!sources.length) return { undo() {}, finish: () => false };
+  const staging = mkdtempSync(join(store.directory, '.project-delete-'));
+  const manifest = { projectId: project.id, paths: sources };
+  try {
+    writeFileSync(join(staging, deleteManifest), JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
+    sources.forEach((path, i) => renameSync(deletionPath(store, path), join(staging, String(i))));
+  } catch (error) { restoreDeletion(store, staging, manifest); throw error; }
+  return {
+    undo: () => restoreDeletion(store, staging, manifest),
+    finish: () => finishDeletion(staging, manifest),
+  };
+}
+export function recoverProjectDeletions(store, projectId) {
+  let pending = false;
+  for (const entry of readdirSync(store.directory, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('.project-delete-') || store.all('projects').some(p => p.folder === entry.name)) continue;
+    const staging = join(store.directory, entry.name), marker = join(staging, deleteManifest);
+    if (!existsSync(marker)) continue;
+    if (!lstatSync(marker).isFile() || lstatSync(marker).isSymbolicLink()) fail('删除暂存记录无效，请保留目录并恢复备份');
+    const manifest = JSON.parse(readFileSync(marker, 'utf8'));
+    if (typeof manifest.projectId !== 'string' || !Array.isArray(manifest.paths)) fail('删除暂存记录无效，请保留目录并恢复备份');
+    if (projectId !== undefined && manifest.projectId !== projectId) continue;
+    manifest.paths.forEach(path => deletionPath(store, path));
+    if (store.maybe('projects', manifest.projectId)) restoreDeletion(store, staging, manifest);
+    else pending = finishDeletion(staging, manifest) || pending;
+  }
+  return pending;
+}
 export function recoverProjectFolders(store) {
+  recoverProjectDeletions(store);
   for (const project of store.all('projects').filter(p => p.folder)) {
     if (existsSync(join(store.directory, project.folder))) continue;
     const found = readdirSync(store.directory, { withFileTypes: true }).filter(e => e.isDirectory()).find(e => {

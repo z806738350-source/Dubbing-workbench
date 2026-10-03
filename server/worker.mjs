@@ -487,10 +487,21 @@ export function createWorker(store, domain, config) {
         });
         if (!response.ok) {
           a.httpStatus = response.status;
-          if ([401, 402, 403, 429].includes(response.status)) setRouteBlocked(true);
+          let durationError = false;
+          try {
+            let errorText = '', bytes = 0;
+            for await (const chunk of Readable.fromWeb(response.body)) {
+              bytes += chunk.length;
+              if (bytes > 64 * 1024) break;
+              errorText += chunk.toString('utf8');
+            }
+            durationError = ![401, 403, 429].includes(response.status) && /\bDurationOutOfRange\b/.test(errorText);
+          } catch {} // An unreadable error body keeps the existing HTTP protection.
+          if (durationError) a.providerErrorCode = 'DurationOutOfRange';
+          if (!durationError && [401, 402, 403, 429].includes(response.status)) setRouteBlocked(true);
           throw Object.assign(
             new Error(
-              `音频服务返回 ${response.status}，请检查权限、额度或稍后手动重试`,
+              durationError ? '音频服务拒绝本条时长：参考须不超过30秒，输出不超过120秒；请拆短正文后再生成，短句仍失败时请核对参考素材。' : `音频服务返回 ${response.status}，请检查权限、额度或稍后手动重试`,
             ),
             { known: true },
           );
