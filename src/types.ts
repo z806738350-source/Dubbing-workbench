@@ -242,7 +242,7 @@ export interface SoundEvent {
   evidence: {kind: string; quote?: string; quotes?: string[]; reason?: string};
 }
 export interface UnitVariant {
-  history?: {id:string;prompt:string;matched:boolean;selected:boolean}[];
+  history?: {id:string;prompt:string;matched:boolean;selected:boolean;available?:boolean;createdAt?:string;duration?:number}[];
   guidance?: string;
   current: string | null;
   previous: string | null;

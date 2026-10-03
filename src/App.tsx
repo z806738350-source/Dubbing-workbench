@@ -2756,7 +2756,7 @@ function Editor({
                   </button>
                 ))}
               </div>
-              <p className="hint">只描述怎么说，不改写台词。当前制作纯人声，不加入音乐或环境音效。生成时会将正文、表演要求和参考录音发送至配音服务。
+              <p className="hint">只描述怎么说，不改写台词。{unit?.mode === "scene" ? "当前使用带背景声版本；环境、音乐和音效请在声音背景面板设置。" : "当前制作纯人声，不加入音乐或环境音效。"}生成时会将正文、表演要求和参考录音发送至配音服务。
               {draft.voiceId && !voices.find(v => v.id === draft.voiceId)?.tested && <span className="hint"> 当前参考尚未验证，可先试听或生成测试样音。</span>}</p>
               {!!s.promptIssues?.length && <p className="error-inline">{s.promptIssues.join("；")}</p>}
             </div>
@@ -2839,9 +2839,9 @@ function Editor({
                   最近通过版
                 </button>
               </div>
-              {enhancedUnit ? <button className="text-button" onClick={onUnit}>查看单元检查与返工</button> : s.validity === "matched" && (
+              {enhancedUnit ? <button className="button secondary small" onClick={onUnit}>查看单元检查与返工</button> : s.validity === "matched" && (
                 <button
-                  className="text-button warning"
+                  className="button secondary small warning"
                   disabled={!connectionReady || locked || dirty}
                   onClick={() =>
                     run(() =>

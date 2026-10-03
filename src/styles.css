@@ -2155,6 +2155,36 @@ input[type="range"]::-moz-range-thumb {
 .semantic-split-preview li p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
 .semantic-split-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; }
 
+/* Hallmark · component: sound workflow · Workbench tokens
+ * pre-emit critique: P4 H5 E4 S5 R5 V3 */
+.unit-current-result { margin-top: var(--space-sm); }
+.unit-current-result .status { margin-bottom: var(--space-xs); }
+.unit-history > summary, .unit-advanced > summary { min-height: 44px; cursor: pointer; font-weight: 600; }
+.unit-history-list { display: grid; gap: var(--space-sm); margin-top: var(--space-md); }
+.unit-history-item { padding: var(--space-md); border: var(--rule-width) solid var(--color-rule); border-radius: var(--radius-sm); background: var(--color-paper); min-width: 0; }
+.unit-history-item.is-current { border-color: var(--color-selected-border); }
+.unit-history-item .section-heading { margin-bottom: var(--space-xs); gap: var(--space-xs); align-items: center; flex-wrap: wrap; }
+.unit-history-item h3 { margin: 0; }
+.unit-history-item .button-row { margin-block: var(--space-sm); gap: var(--space-xs); align-items: center; }
+.unit-history-item .button { white-space: nowrap; }
+.unit-history-prompt > summary { min-height: 32px; color: var(--color-muted); cursor: pointer; font-size: var(--text-xs); }
+.unit-member-context .unit-member-range { margin-block: var(--space-xs); }
+.unit-edit-settings { margin-top: var(--space-lg); border-top: var(--rule-width) solid var(--color-rule); padding-top: var(--space-xs); }
+.unit-edit-settings > summary { min-height: 44px; }
+.unit-edit-settings .text-button, .unit-member-context .text-button, .unit-submit-authorization .text-button, .dialog:has(.unit-preview) .dialog-head .text-button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: var(--space-xs) var(--space-sm); border: var(--rule-width) solid var(--color-rule); border-radius: var(--radius-sm); background: var(--color-paper); white-space: nowrap; }
+.unit-current-result .button-row { align-items: center; gap: var(--space-xs); }
+.unit-current-result .success-text, .unit-history .success-text, .task-event-card .success-text { color: var(--color-accent); }
+.unit-current-result .button, .unit-submit .button { white-space: nowrap; }
+.button.warning { color: var(--color-warning); }
+.unit-request-record { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-xs) var(--space-sm); padding-block: var(--space-sm); border-bottom: var(--rule-width) solid var(--color-rule); }
+.unit-request-record > p { flex-basis: 100%; }
+.unit-restore-differences, .unit-restore-settings ul { padding-left: var(--space-lg); margin-block: var(--space-sm); }
+.unit-restore-settings { margin-block: var(--space-md); padding: var(--space-md); background: var(--color-canvas); border-radius: var(--radius-sm); }
+@media (max-width: 760px) {
+  .unit-history-item .section-heading { align-items: flex-start; flex-direction: column; }
+  .unit-current-result .button, .unit-history .button, .unit-edit-settings .button, .unit-edit-settings .text-button, .unit-submit-authorization .text-button { min-height: 44px; }
+}
+
 /* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V3
  * component: chapter controls · modern-minimal · studied-DNA green · Workbench
  * Retain the shared tokens, state controls and 17px script reading size. */

@@ -133,7 +133,24 @@ export function createEnhancement(store, d) {
       if (a.input?.unitId === u.id) return (a.input.mode || a.mode || 'dry') === mode;
       if (u.kind !== 'single' || mode !== 'dry') return false;
       return a.targetKind === 'single' && a.targetId === u.id || refs.includes(a.id) || store.maybe('attempts',a.id)?.segmentId === u.id;
-    }).map(a => { let matched = false; try { matched = !!identity && !storedAudioUnavailable(store,a) && same(identity,requestIdentity(a.input,a.prompt)); } catch {} return { ...a, matched, selected: u.variants[mode].current === a.id }; });
+    }).map(a => { let matched = false, available = false; try { available = !storedAudioUnavailable(store,a); matched = !!identity && available && same(identity,requestIdentity(a.input,a.prompt)); } catch {} return { ...a, available, matched, selected: u.variants[mode].current === a.id }; });
+  }
+  function restorePlan(u, mode, audioId) {
+    if (!['dry','scene'].includes(mode)) fail('目标类型无效');
+    if (['dissolved','retired'].includes(u.state)) fail('这段已解除或移除，只能试听历史声音',409);
+    const audio = history(u,mode).find(a => a.id === audioId);
+    if (!audio) fail('这份历史声音不属于当前这段或声音类型，请重新选择',409);
+    if (!audio.available) fail('这份历史声音文件损坏或缺失，不能恢复使用',409);
+    if (!audio.input) fail('这份历史声音缺少生成设置，不能恢复使用，请重新生成',409);
+    const input = buildInput(u,mode), changed = !same(requestIdentity(input),requestIdentity(audio.input,audio.prompt));
+    if (changed && (!same(input.members,audio.input.members) || !same(input.referenceVoiceIds,audio.input.referenceVoiceIds) || !same(input.config,audio.input.config) || (input.model || 'seed-audio-1.0') !== (audio.input.model || 'seed-audio-1.0')))
+      fail('正文、角色、参考声音或成员设置已变化，不能直接恢复这份旧声音；请核对当前台词后重新生成',409);
+    const restoredEvents = changed && mode === 'scene' ? (audio.input.events || []).map(saved => {
+      const existing = store.maybe('events',saved.id);
+      if (existing && existing.unitId !== u.id) fail('历史声音事件已不属于当前这段，不能恢复',409);
+      return validateEvent(u,{ ...existing,...saved,state:'adopted',evidence:existing?.evidence });
+    }) : [];
+    return { audio,input,changed,restoredEvents };
   }
   function view(u) {
     const diagnostics = []; try { members(u); } catch (error) { diagnostics.push(error.message); }
@@ -328,9 +345,14 @@ export function createEnhancement(store, d) {
     const c = d.editable(p.chapterId, p.revision), u = getUnit(p.id);
     if (u.chapterId !== c.id) fail('单元不属于当前章'); revision(u, p.entityRevision);
     if (p.kind === 'dissolve') return { unit: view(u), items: dissolvePlan(u), arrangement: c.arrangement, events: events(u).filter(e => e.state === 'adopted') };
-    const mode = p.mode || u.mode, input = buildInput(u, mode);
+    const mode = p.mode || u.mode;
+    if (p.kind === 'restore') {
+      const { audio:a,input } = restorePlan(u,mode,p.audioId), differences = [];
+      if (!same(input.members,a.input.members)) differences.push('成员正文、角色或表演设置不同'); if (!same(input.referenceVoiceIds,a.input.referenceVoiceIds)) differences.push('实际参考声音不同'); if (!same(input.config,a.input.config)) differences.push('有效数值配置不同'); if (input.template !== a.input.template) differences.push('提示模板不同'); if (input.guidance !== a.input.guidance) differences.push('单元指导不同'); if (!same(input.events,a.input.events)) differences.push('已采用声音事件不同');
+      return { input:a.input,basis:a.basis,currentInput:input,differences,identityChanged:!same(a.basis,basis(u,mode)) };
+    }
+    const input = buildInput(u, mode);
     if (p.kind === 'template') return { before: compile(input), after: compile({ ...input, template: p.template }), from: input.template, to: p.template };
-    if (p.kind === 'restore') { const a = store.get('audios', p.audioId); const differences = []; if (!same(input.members, a.input.members)) differences.push('成员正文、角色或表演设置不同'); if (!same(input.referenceVoiceIds, a.input.referenceVoiceIds)) differences.push('实际参考声音不同'); if (!same(input.config, a.input.config)) differences.push('有效数值配置不同'); if (input.template !== a.input.template) differences.push('提示模板不同'); if (input.guidance !== a.input.guidance) differences.push('单元指导不同'); if (!same(input.events, a.input.events)) differences.push('已采用声音事件不同'); return { input:a.input,basis:a.basis,currentInput:input,differences,identityChanged:!same(a.basis,basis(u,mode)) }; }
     fail('预览类型无效');
   }
   function dissolvePlan(u) {
@@ -415,20 +437,16 @@ export function createEnhancement(store, d) {
       if (u.kind === 'single' && mode === 'dry') { const s=store.get('segments',u.id); Object.assign(s,{current:v.current,previous:v.previous,review:v.review,latest:'success'});store.put('segments',s,c.id); }
       d.touch(c,false,true);
     } else if (action === 'unit.restore') {
-      const mode = p.mode || u.mode, v = u.variants[mode];
-      if (![v.previous, v.approved].includes(p.audioId)) fail('只能恢复上一版或最近通过版');
-      const a = store.get('audios', p.audioId); if (storedAudioUnavailable(store, a)) fail('历史音频损坏或缺失');
-      if (!same(requestIdentity(buildInput(u, mode)), requestIdentity(a.input, a.prompt))) {
+      const mode = p.mode || u.mode, { audio:a,changed,restoredEvents } = restorePlan(u,mode,p.audioId), v = u.variants[mode];
+      if (changed) {
         if (!p.restoreSettings) fail('旧设置不同，请先查看差异并明确恢复设置', 409);
-        const now = buildInput(u, mode);
-        if (!same(now.members, a.input.members) || !same(now.referenceVoiceIds, a.input.referenceVoiceIds) || !same(now.config, a.input.config)) fail('旧正文、身份或成员设置已变化，请手工核对；恢复不能撤销身份纠正', 409);
         v.guidance = a.input.guidance || ''; if (mode === 'dry') u.guidance = v.guidance; v.template = a.input.template;
         if (mode === 'scene') {
           for (const e of store.all('events', u.id)) { e.state = 'removed'; store.put('events', e, u.id); }
-          for (const saved of a.input.events || []) { const existing = store.maybe('events', saved.id), restored = validateEvent(u, { ...existing, ...saved, state: 'adopted', evidence: existing?.evidence }); store.put('events', restored, u.id); }
+          for (const restored of restoredEvents) store.put('events',restored,u.id);
         }
       }
-      u.mode = mode;
+      u.mode = mode; u.state = 'active';
       const rework = v.review?.state === 'rework', old = v.current; v.current = a.id; if (old !== a.id) v.previous = old;
       v.review = !rework && a.review && same(compatibleReviewBasis(u,mode,a.review,a), basis(u, mode)) ? a.review : { audioId: a.id, basis: basis(u, mode), state: rework ? 'rework' : 'pending', at: stamp() };
       if (u.kind === 'single' && mode === 'dry') { const s = store.get('segments', u.id); Object.assign(s, { current: v.current, previous: v.previous, review: v.review }); store.put('segments', s, c.id); }

@@ -204,6 +204,70 @@ test('SC06/SC07/SC08 干场景引用与指导分开，空切换零请求，恢�
   assert.equal(current.variants.dry.current,dry.audio.id);assert.equal(e.events(current).find(x=>x.id===sound.id).state,'adopted');
 });
 
+test('历史中较早的场景声音可预览并恢复其设置，零生成请求且保留其他版本',t=>{
+  const {store,d,c,e,edit,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id;
+  const event=edit('event.create',{unitId:id,entityRevision:store.get('units',id).revision,kind:'environment',description:'清晰的山洞滴水声',memberId:id,position:'during',state:'adopted'});
+  const old=complete(id,'scene');
+  edit('event.update',{unitId:id,id:event.id,entityRevision:store.get('units',id).revision,eventRevision:event.revision,description:'远处的风声'});
+  mutateUnit('unit.update',store.get('units',id),{mode:'scene',guidance:'远处风声伴随旁白'});
+  complete(id,'scene');const newest=complete(id,'scene');
+  const current=store.get('units',id);assert.ok(![current.variants.scene.previous,current.variants.scene.approved].includes(old.audio.id));
+  const snapshot=()=>['units','events','chapters','audios','jobs','attempts'].map(table=>store.all(table)),before=snapshot();
+  const preview=e.preview({kind:'restore',chapterId:c.id,revision:store.get('chapters',c.id).revision,id,entityRevision:current.revision,mode:'scene',audioId:old.audio.id});
+  assert.ok(preview.differences.includes('已采用声音事件不同'));assert.ok(preview.differences.includes('单元指导不同'));assert.deepEqual(snapshot(),before);
+  assert.throws(()=>mutateUnit('unit.restore',current,{mode:'scene',audioId:old.audio.id}),{status:409});assert.deepEqual(snapshot(),before);
+  const restored=mutateUnit('unit.restore',current,{mode:'scene',audioId:old.audio.id,restoreSettings:true});
+  assert.equal(restored.state,'active');assert.equal(restored.mode,'scene');assert.equal(restored.variants.scene.current,old.audio.id);assert.equal(restored.variants.scene.previous,newest.audio.id);
+  assert.equal(restored.variants.scene.status.validity,'matched');assert.equal(restored.variants.scene.status.review,'pending');assert.equal(e.resolve(c.id)[0].a.id,old.audio.id);
+  assert.equal(e.events(restored).find(item=>item.id===event.id).description,'清晰的山洞滴水声');
+  assert.deepEqual(store.all('jobs'),before[4]);assert.deepEqual(store.all('attempts'),before[5]);assert.deepEqual(store.all('audios'),before[3]);
+});
+
+test('历史恢复预览与提交共同拒绝跨单元、跨类型、缺失文件和改变的台词身份',async t=>{
+  for(const defect of ['other-unit','other-mode','missing-file','text','voice','config','model'])await t.test(defect,t=>{
+    const {dir,store,d,c,e,edit,v,complete,mutateUnit}=setup(t),ids=d.list(c.id).map(s=>s.id),old=complete(ids[0],'scene');
+    let audioId=old.audio.id, expected=/正文|角色|参考声音|设置/;
+    if(defect==='other-unit'){audioId=complete(ids[1],'scene').audio.id;expected=/不属于/;}
+    else if(defect==='other-mode'){audioId=complete(ids[0],'dry').audio.id;expected=/不属于/;}
+    else if(defect==='missing-file'){rmSync(join(dir,old.audio.path));expected=/损坏|缺失/;assert.equal(e.history(store.get('units',ids[0]),'scene')[0].available,false);}
+    else if(defect==='text')edit('segment.update',{id:ids[0],text:'现在是新旁白。'});
+    else if(defect==='voice'){const voice={...v,id:uid(),name:'新的参考'};store.put('voices',voice);edit('segment.update',{id:ids[0],voiceId:voice.id});}
+    else if(defect==='config')edit('segment.update',{id:ids[0],config:{speech_rate:5,loudness_rate:0,pitch_rate:0}});
+    else {const segment=store.get('segments',ids[0]);segment.model='different-model';store.put('segments',segment,c.id);}
+    const current=store.get('units',ids[0]),before=['units','events','chapters','audios','jobs','attempts'].map(table=>store.all(table));
+    assert.throws(()=>e.preview({kind:'restore',chapterId:c.id,revision:store.get('chapters',c.id).revision,id:ids[0],entityRevision:current.revision,mode:'scene',audioId}),expected);
+    assert.throws(()=>mutateUnit('unit.restore',current,{mode:'scene',audioId,restoreSettings:true}),expected);
+    assert.deepEqual(['units','events','chapters','audios','jobs','attempts'].map(table=>store.all(table)),before);
+  });
+});
+
+test('恢复历史声音保留本地播放资格，删除参考后不生成；无效历史事件不部分写入',t=>{
+  const {dir,store,d,c,e,v,edit,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id;
+  const event=edit('event.create',{unitId:id,entityRevision:store.get('units',id).revision,kind:'effect',description:'两下滴水',memberId:id,position:'during',state:'adopted'}),old=complete(id,'scene');
+  mutateUnit('unit.update',store.get('units',id),{mode:'scene',guidance:'背景滴水清楚可辨'});complete(id,'scene');
+  store.put('voices',{...v,state:'deleted',path:null});rmSync(join(dir,v.path));
+  const jobs=store.all('jobs'),restored=mutateUnit('unit.restore',store.get('units',id),{mode:'scene',audioId:old.audio.id,restoreSettings:true});
+  assert.equal(restored.variants.scene.status.validity,'matched');assert.equal(e.history(restored,'scene').find(item=>item.id===old.audio.id).available,true);assert.deepEqual(store.all('jobs'),jobs);
+  assert.throws(()=>e.prepare({kind:'unit-generate',chapterId:c.id,revision:store.get('chapters',c.id).revision,unitId:id,mode:'scene'},{model:'seed-audio-1.0'}),/参考声音已/);
+  const audio=store.get('audios',old.audio.id);audio.input.events[0]={...audio.input.events[0],startMemberId:id,endMemberId:id,startPosition:'after',endPosition:'before'};store.put('audios',audio,c.id);
+  mutateUnit('unit.update',restored,{mode:'scene',guidance:'新的要求'});
+  const current=store.get('units',id),before=['units','events','chapters'].map(table=>store.all(table));
+  const payload={kind:'restore',chapterId:c.id,revision:store.get('chapters',c.id).revision,id,entityRevision:current.revision,mode:'scene',audioId:old.audio.id};
+  assert.throws(()=>e.preview(payload),/顺序|范围/);assert.throws(()=>mutateUnit('unit.restore',current,{mode:'scene',audioId:old.audio.id,restoreSettings:true}),/顺序|范围/);
+  assert.deepEqual(['units','events','chapters'].map(table=>store.all(table)),before);assert.equal(store.get('events',event.id).state,'adopted');
+});
+
+test('待生成对戏的匹配历史产物明确恢复后才启用整段编排',t=>{
+  const {dir,store,d,c,e,edit,mutateUnit}=setup(t),ids=d.list(c.id).map(s=>s.id),group=edit('unit.create',{ids:ids.slice(0,2)}),input=e.input(group,'dry');
+  const audio={id:uid(),path:`audio/${uid()}.wav`,input,basis:e.basis(group,'dry'),prompt:compile(input),model:input.model};
+  mkdirSync(join(dir,'audio'),{recursive:true});writeFileSync(join(dir,audio.path),'saved historical result');store.put('audios',audio,c.id);
+  assert.equal(store.get('units',group.id).state,'pending');assert.deepEqual(e.resolve(c.id).map(row=>row.s.id),ids);
+  const preview=e.preview({kind:'restore',chapterId:c.id,revision:store.get('chapters',c.id).revision,id:group.id,entityRevision:group.revision,mode:'dry',audioId:audio.id});
+  assert.deepEqual(preview.differences,[]);assert.equal(store.get('units',group.id).state,'pending');
+  const restored=mutateUnit('unit.restore',group,{mode:'dry',audioId:audio.id});
+  assert.equal(restored.state,'active');assert.equal(restored.status.validity,'matched');assert.equal(restored.status.review,'pending');assert.equal(e.resolve(c.id)[0].s.id,group.id);assert.equal(e.resolve(c.id)[0].a.id,audio.id);assert.equal(store.all('jobs').length,0);
+});
+
 test('场景模板 v2 仅初始化新单元；旧缺省声音保持匹配，明确切换和恢复保留历史',t=>{
   const {store,d,c,e,edit,complete,mutateUnit}=setup(t),ids=d.list(c.id).map(s=>s.id),group=edit('unit.create',{ids:ids.slice(0,2)});
   for(const id of [ids[2],group.id]){
