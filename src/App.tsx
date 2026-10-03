@@ -237,7 +237,7 @@ export default function App() {
           pendingPlay.current = null;
           const intent=pendingPlaySnapshot.current;pendingPlaySnapshot.current=null;
           if(intent&&intent.intent===playIntent.current&&intent.arrangement===c.arrangement&&playbackIdentity(intent.items)===playbackIdentity(c.playbackItems)&&document.visibilityState==='visible'&&!s.jobs.some(j=>j.chapterId===id&&active(j.status))){
-            const bookmark=bookmarks.current[id],point=master.mapping.find(x=>x.segmentId===bookmark||x.unitId===bookmark||x.members?.includes(bookmark));
+            const bookmark=bookmarks.current[id],point=master.mapping.find(x=>x.segmentId===bookmark||x.unitId===bookmark||x.memberIds?.includes(bookmark));
             if(bookmark&&!point){delete bookmarks.current[id];setNotice('断点已变化，试听已准备好，请重新选择播放位置。');}
             else setPlayer({kind:'masters',id:master.id,title:c.title,chapterId:id,arrangement:c.arrangement,playbackItems:c.playbackItems,master,intent:intent.intent,resumeAt:(point?.startFrame||0)/master.sampleRate});
           }else if(intent?.intent===playIntent.current)setNotice('整章试听已准备好；版本已变化，请点击播放继续。');
@@ -313,10 +313,10 @@ export default function App() {
     void refresh().catch((e) => setError(e.message));
   }, [chapterId, refresh]);
   useEffect(() => {
-    if (follow && currentSegment) {
-      document
-        .getElementById("segment-" + currentSegment)
-        ?.scrollIntoView({ block: "center", behavior: "instant" });
+    const list = listRef.current, row = document.getElementById("segment-" + currentSegment);
+    if (follow && currentSegment && row && list?.contains(row)) {
+      const offset = row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+      list.scrollTo({ top: list.scrollTop + offset - Math.max(0, (list.clientHeight - row.offsetHeight) / 2), behavior: "instant" });
     }
   }, [currentSegment, follow, filter, search]);
   const run = async (fn: () => Promise<unknown>) => {
@@ -519,7 +519,7 @@ export default function App() {
       return;
     }
     const bookmark = bookmarks.current[chapterId];
-    if (master && bookmark && !master.mapping.some(x => x.segmentId === bookmark || x.unitId === bookmark || x.members?.includes(bookmark))) {
+    if (master && bookmark && !master.mapping.some(x => x.segmentId === bookmark || x.unitId === bookmark || x.memberIds?.includes(bookmark))) {
       delete bookmarks.current[chapterId];
       setNotice("原断点片段已拆分、合并或移除。请重新选择片段；再次点击试听将从开头播放。");
       return;
@@ -540,7 +540,7 @@ export default function App() {
       master,
       resumeAt: master
         ? (master.mapping.find(
-            (x) => x.segmentId === bookmarks.current[chapterId] || x.unitId === bookmarks.current[chapterId] || x.members?.includes(bookmarks.current[chapterId]),
+            (x) => x.segmentId === bookmarks.current[chapterId] || x.unitId === bookmarks.current[chapterId] || x.memberIds?.includes(bookmarks.current[chapterId]),
           )?.startFrame || 0) / master.sampleRate
         : 0,
     });
@@ -557,6 +557,7 @@ export default function App() {
       return;
     }
     const el = audio.current!;
+    if (player.master) { setFollow(true); setCurrentSegment(""); setCurrentMembers([]); }
     el.src = player.kind === "demo" ? "/demo.mp3" : `/api/media/${player.kind}/${player.id}`;
     el.load();
     const intent=player.intent;
@@ -1272,20 +1273,19 @@ export default function App() {
                   : "准备试听"}
               </button>
               <button
-                className={`${currentHidden ? "button small" : "icon"} ${follow ? "is-active" : ""}`}
-                aria-label={currentHidden ? "当前播放被筛选隐藏，回到当前播放" : follow ? "暂停跟随" : "回到当前播放"}
+                className={`button secondary small ${follow ? "is-active" : ""}`}
+                aria-label={currentHidden ? "当前播放被筛选隐藏，回到当前播放" : follow ? "暂停跟随播放" : "回到当前播放"}
                 aria-pressed={follow}
+                title={follow && !currentHidden ? "正在跟随播放；点击或手动滚动可暂停跟随" : "回到正在播放的台词，并恢复自动跟随"}
+                disabled={!currentSegment}
                 onClick={() => {
                   if (follow && !currentHidden) { setFollow(false); return; }
                   setSearch("");
                   setFilter("all");
                   setFollow(true);
-                  document
-                    .getElementById("segment-" + currentSegment)
-                    ?.scrollIntoView({ block: "nearest" });
                 }}
               >
-                <Link2 size={17} />{currentHidden && "回到当前播放"}
+                <Link2 size={17} />{follow && !currentHidden ? "跟随播放" : "回到当前播放"}
               </button>
               <Volume2 size={17} />
             </div>
@@ -1326,11 +1326,11 @@ export default function App() {
                   t < m.mapping[i + 1].startFrame / m.sampleRate),
             );
             if (current) {
-              setCurrentSegment(current.members?.[0] || current.segmentId || "");
-              setCurrentMembers(current.members && current.members.length > 1 ? current.members : []);
+              setCurrentSegment(current.memberIds?.[0] || current.segmentId || "");
+              setCurrentMembers(current.memberIds && current.memberIds.length > 1 ? current.memberIds : []);
               setTransitioning(t >= current.endFrame / m.sampleRate && current !== m.mapping.at(-1));
               if (player.chapterId)
-                bookmarks.current[player.chapterId] = (t >= current.endFrame / m.sampleRate ? m.mapping.find(x => x.startFrame > current.endFrame)?.unitId || m.mapping.find(x => x.startFrame > current.endFrame)?.segmentId : current.unitId || current.segmentId) || current.members?.[0] || current.segmentId || "";
+                bookmarks.current[player.chapterId] = (t >= current.endFrame / m.sampleRate ? m.mapping.find(x => x.startFrame > current.endFrame)?.unitId || m.mapping.find(x => x.startFrame > current.endFrame)?.segmentId : current.unitId || current.segmentId) || current.memberIds?.[0] || current.segmentId || "";
             }
           }
         }}

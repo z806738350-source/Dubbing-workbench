@@ -2275,3 +2275,8 @@ input[type="range"]::-moz-range-thumb {
 .unit-edit-settings > summary::-webkit-details-marker { display: none; }
 .unit-edit-settings > summary .unit-disclosure-icon { flex: 0 0 auto; }
 .unit-edit-settings[open] > summary .unit-disclosure-icon { transform: rotate(90deg); }
+
+@media (max-width: 45rem) {
+  .player { display: grid; grid-template-columns: 38px minmax(0, 1fr); height: auto; min-height: 96px; gap: 8px; padding: 8px 16px; }
+  .player-options { grid-column: 1 / -1; justify-content: flex-end; }
+}

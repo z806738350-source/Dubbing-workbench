@@ -186,7 +186,7 @@ export interface Master {
   mapping: {
     segmentId?: string;
     unitId?: string;
-    members?: string[];
+    memberIds?: string[];
     mode?: "dry" | "scene";
     audioId: string;
     startFrame: number;
