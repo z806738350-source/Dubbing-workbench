@@ -8,6 +8,7 @@ import {createDomain} from '../server/domain.mjs';
 import {createWorker} from '../server/worker.mjs';
 import {createAnalysis} from '../server/analysis.mjs';
 import {uploadVoice} from '../server/audio.mjs';
+import {compile} from '../server/templates.mjs';
 import {createExperience,configurationDecided,reserveGrant,settleGrant} from '../server/experience.mjs';
 
 function wav() {
@@ -142,6 +143,34 @@ test('OP07 整章混合dry与scene一次任务逐项发送，保留各单元实�
   const g=grant(),ids=rows.map(s=>s.id),plan=e.plan({kind:'generateSelection',chapterId:c.id,revision:rev(),ids});assert.deepEqual(plan.units.map(u=>u.mode),['dry','scene']);assert.equal(plan.audioRequests,2);
   let calls=0;t.mock.method(globalThis,'fetch',async()=>{calls++;return new Response(wav(),{headers:{'content-type':'audio/wav'}});});const op=await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),grantId:g.grantId,ids});assert.equal(op.outcome,'processing');assert.equal(op.jobIds.length,1);assert.deepEqual(store.all('attempts',op.jobIds[0]).map(a=>a.mode),['dry','scene']);
   await w.tick();assert.equal(calls,2);assert.equal(e.get(op.operationId).outcome,'completed');assert.deepEqual(d.enhancement.resolve(c.id).map(r=>r.s.mode),['dry','scene']);assert.equal(store.get('settings',g.id).audioUsed,2);
+});
+test('场景生成计划核对存在感与指导或已采用事件，干声和轻背景不误挡',async t=>{
+  for (const source of ['guidance','event']) await t.test(source,t=>{
+    const {d,c,rev,e,store}=setup(t,true),id=d.list(c.id)[0].id;
+    d.mutate('unit.update',{chapterId:c.id,revision:rev(),unitId:id,entityRevision:store.get('units',id).revision,mode:'scene',backgroundPresence:'clear',guidance:source==='guidance'?'背景音乐极微弱，几乎不可闻':''});
+    if (source==='event') d.mutate('event.create',{chapterId:c.id,revision:rev(),unitId:id,entityRevision:store.get('units',id).revision,kind:'music',description:'极微弱的音乐，几乎不可闻',startMemberId:id,endMemberId:id,startPosition:'before',endPosition:'after',state:'adopted'});
+    const before=['chapters','units','events','audios','jobs','attempts','settings'].map(kind=>store.all(kind)),fetchMock=t.mock.method(globalThis,'fetch',async()=>{throw Error('计划不得发送');});
+    assert.throws(()=>e.plan({chapterId:c.id,revision:rev(),ids:[id],mode:'scene'}),error=>error.status===409&&/背景存在感.*清楚/.test(error.message));
+    assert.equal(e.plan({chapterId:c.id,revision:rev(),ids:[id],mode:'dry'}).audioRequests,1);
+    assert.deepEqual(['chapters','units','events','audios','jobs','attempts','settings'].map(kind=>store.all(kind)),before);
+    d.mutate('unit.update',{chapterId:c.id,revision:rev(),unitId:id,entityRevision:store.get('units',id).revision,mode:'scene',backgroundPresence:'subtle'});
+    assert.equal(e.plan({chapterId:c.id,revision:rev(),ids:[id],mode:'scene'}).audioRequests,1);
+    assert.equal(fetchMock.mock.callCount(),0);
+  });
+});
+test('存在感矛盾不阻断matched场景免费复用或修改旧音频历史，仅阻断重生成',t=>{
+  const {d,c,rev,e,store,dir}=setup(t,true),id=d.list(c.id)[0].id;
+  d.mutate('unit.update',{chapterId:c.id,revision:rev(),unitId:id,entityRevision:store.get('units',id).revision,mode:'scene',backgroundPresence:'clear',guidance:'背景音乐极微弱，几乎不可闻'});
+  const unit=store.get('units',id),input=d.enhancement.input(unit,'scene',undefined,false,false),audio={id:uid(),path:'old-scene.wav',input,prompt:compile(input),model:input.model};
+  writeFileSync(join(dir,audio.path),wav());store.put('audios',audio,c.id);unit.variants.scene.current=audio.id;unit.mode='scene';store.put('units',unit,c.id);
+  const before=['chapters','units','audios','jobs','attempts','settings'].map(kind=>store.all(kind)),fetchMock=t.mock.method(globalThis,'fetch',async()=>{throw Error('复用不得发送');});
+  assert.equal(d.enhancement.status(unit,'scene').validity,'matched');
+  for (const actionKind of ['fillMissing','updateSelected','redoRejected']) {
+    const plan=e.plan({chapterId:c.id,revision:rev(),ids:[id],actionKind});assert.equal(plan.audioRequests,0);assert.equal(plan.units[0].reuse,true);assert.equal(plan.units[0].audioId,audio.id);
+  }
+  assert.throws(()=>e.plan({chapterId:c.id,revision:rev(),ids:[id],actionKind:'forceRegenerate'}),error=>error.status===409&&/背景存在感/.test(error.message));
+  assert.equal(d.enhancement.history(unit,'scene').find(a=>a.id===audio.id).matched,true);assert.equal(d.enhancement.status(unit,'scene').validity,'matched');
+  assert.deepEqual(['chapters','units','audios','jobs','attempts','settings'].map(kind=>store.all(kind)),before);assert.equal(fetchMock.mock.callCount(),0);
 });
 test('OP06 无事件时场景指导可生成，实际版本在新音频前保持dry',async t=>{
   const {d,c,rev,e,store,grant}=setup(t,true),unit=store.get('units',d.list(c.id)[0].id),g=grant();

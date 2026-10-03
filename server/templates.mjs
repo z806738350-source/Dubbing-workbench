@@ -99,6 +99,36 @@ export function sceneIntentConflicts(s) {
   return [['music',['无音乐','不要音乐','不添加音乐']],['environment',['无环境声','不要环境声','不添加环境声']],['effect',['无音效','不要音效','不添加音效']]].filter(([kind,words])=>(s.events || []).some(e=>e.kind===kind) && clauses.some(clause=>words.includes(clause))).map(([kind])=>`整体场景指导明确禁止${({music:'音乐',environment:'环境声',effect:'音效'})[kind]}，但已采用同类事件，请一次核对这段的指导和事件`);
 }
 
+export function scenePresenceConflicts({backgroundPresence, guidance, events = []}) {
+  // ponytail: match only explicit audibility phrases and bounded negations;
+  // other prose stays unchanged for review instead of attempting general NLP.
+  const patterns = {
+    clear: /几乎(?:不可闻|听不(?:清|到|见))|听不(?:清|到|见)|极(?:其|度)?微弱|极弱|微弱(?:的)?底噪/gu,
+    natural: /几乎(?:不可闻|听不(?:清|到|见))|听不(?:清|到|见)|极(?:其|度)?微弱/gu,
+    subtle: /(?:压过|盖过|盖住|压住|淹没)(?:人声|旁白|对白|台词)|喧宾夺主/gu,
+  }, pattern = patterns[backgroundPresence];
+  if (!pattern) return [];
+  const negated = /(?:不要|不能|不会|无需|避免|防止|勿|别|禁止|并非|不是|并不|不再|不应|不用|不必|不需要|不)(?:把|将|让|使|音乐|背景|环境声|音效|声音|声响|音量|压低|降低|降到|淡出|减弱|保持|变得|仅|只|到|成|为|得|的|\s)*$/u;
+  const sources = [{label:'整体场景指导',value:guidance}, ...events.filter(event=>event.state === undefined || event.state === 'adopted').flatMap((event,index)=>{
+    const label = `已采用${({music:'音乐',environment:'环境声',effect:'音效'})[event.kind] || '声音'}（第${index+1}个事件）`;
+    return [{label,value:event.description}, {label:label+'的转折音量',value:event.transition?.volumeChange,allowEnding:true}];
+  })];
+  return sources.flatMap(({label,value,allowEnding})=>{
+    if (typeof value !== 'string') return [];
+    let ending = false;
+    for (const clause of value.split(/[，,；;。\n!?！？]|但|而是|而非|却/u)) {
+      const localEnding = /(?:末尾|尾声|收尾|最后|结束后).*(?:淡出|渐弱|减弱)|(?:淡出|渐弱|减弱).*(?:末尾|尾声|收尾|结束后)/u.test(clause);
+      const endingOnly = allowEnding && backgroundPresence !== 'subtle' && (localEnding || ending && /^\s*(?:直到|直至|淡出至|渐弱至)/u.test(clause)) && !/全程|全段|整段|全部|始终|一直|从头到尾|整个|(?:对白|讲话|说话|叙述|旁白)期间/u.test(clause);
+      for (const match of clause.matchAll(pattern)) {
+        if (negated.test(clause.slice(0,match.index)) || endingOnly) continue;
+        return [`背景存在感已选“${({clear:'清楚',natural:'自然',subtle:'轻'})[backgroundPresence]}”，但${label}要求“${match[0]}”，请核对存在感和声音要求`];
+      }
+      ending = !!endingOnly;
+    }
+    return [];
+  });
+}
+
 function compilePresenceScene(s) {
   const conflicts = sceneIntentConflicts(s);
   if (conflicts.length) throw Object.assign(new Error(conflicts.join('；')), {status:409,code:'scene-intent-conflict',conflicts});

@@ -119,6 +119,7 @@ test("存在感生成资格：旧场景模板拒绝选择，明确切换v4后按
   for (const presence of ['clear', 'natural', 'subtle', 'unspecified']) await t.test(presence, async t => {
     const { store, domain, voices, worker } = setup(t), { chapter, group, payload } = chapterFixture(domain, store, voices);
     const update = (action, data) => domain.mutate(action, { chapterId: chapter.id, revision: store.get('chapters', chapter.id).revision, id: group.id, entityRevision: store.get('units', group.id).revision, mode: 'scene', ...data });
+    update('unit.template', { template:'scene-v2', confirm:true });
     update('unit.update', { backgroundPresence: presence });
     let calls = 0;
     t.mock.method(globalThis, 'fetch', async () => { calls++; return new Response(wav(), { headers: { 'content-type': 'audio/wav' } }); });

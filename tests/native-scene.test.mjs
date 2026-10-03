@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compile, compileNativeScene, listTemplates, listUnitTemplates, templateCatalog, resolveCompiler } from '../server/templates.mjs';
+import { compile, compileNativeScene, listTemplates, listUnitTemplates, templateCatalog, resolveCompiler, scenePresenceConflicts } from '../server/templates.mjs';
 
 const single = () => ({
   template: 'scene-v3-native',
@@ -115,4 +115,54 @@ test('B17/B18重复引文转折有真实出现序号，情绪和音量分开，�
   s.events[1].transition.volumeChange='保持清楚可闻';assert.match(compile(s),/音量变化：保持清楚可闻/);
   s.guidance='不要音乐；不要环境声';assert.throws(()=>compile(s),error=>error.code==='scene-intent-conflict' && error.conflicts.length===2);
   s.guidance='人声干净；背景很轻';assert.doesNotThrow(()=>compile(s));
+});
+
+test('明确几乎不可闻与极微弱设置冲突按存在感和来源返回，不改写用户要求',()=>{
+  for(const description of ['音乐几乎不可闻','环境声几乎听不到','水滴听不清','把背景压低到听不到','极微弱的音乐','仅保留微弱底噪']){
+    const input={backgroundPresence:'clear',guidance:description,events:[{kind:'music',state:'adopted',description}]},before=structuredClone(input),conflicts=scenePresenceConflicts(input);
+    assert.equal(conflicts.length,2,description);assert.match(conflicts[0],/清楚.*整体场景指导/);assert.match(conflicts[1],/已采用音乐/);assert.deepEqual(input,before);
+  }
+  for(const description of ['音乐几乎不可闻','环境声几乎听不到','背景听不见','极微弱的音乐'])assert.equal(scenePresenceConflicts({backgroundPresence:'natural',events:[{kind:'music',state:'adopted',description}]}).length,1,description);
+  for(const description of ['音乐响亮压过人声','环境声盖过对白','音效喧宾夺主'])assert.equal(scenePresenceConflicts({backgroundPresence:'subtle',guidance:description}).length,1,description);
+});
+
+test('宁静轻柔和明确否定弱化或压过人声不误报，未知存在感不猜',()=>{
+  for(const backgroundPresence of ['clear','natural'])for(const guidance of ['宁静且旋律清楚可辨','轻柔背景，不抢讲话','音乐清楚但不喧宾夺主','不压低背景','不要把背景压低到几乎不可闻','背景并非极微弱','避免音乐几乎听不到','不要微弱底噪']){
+    assert.deepEqual(scenePresenceConflicts({backgroundPresence,guidance}),[],guidance);
+  }
+  for(const guidance of ['清楚但不喧宾夺主','音乐不盖过人声','不要让音乐压过对白','避免环境声淹没台词'])assert.deepEqual(scenePresenceConflicts({backgroundPresence:'subtle',guidance}),[],guidance);
+  assert.equal(scenePresenceConflicts({backgroundPresence:'clear',guidance:'不要把背景压低到几乎不可闻，但保留微弱底噪'}).length,1,'后半句明确冲突不被前半句否定掩盖');
+  for(const backgroundPresence of ['unspecified',undefined,'unknown'])assert.deepEqual(scenePresenceConflicts({backgroundPresence,guidance:'极微弱，几乎不可闻的音乐'}),[]);
+});
+
+test('存在感只检查整体指导和已采用声音，不扫描身体叙述、表演及草稿移除事件',()=>{
+  const input={...single(),backgroundPresence:'clear',guidance:'旋律宁静且清楚可辨',events:[{kind:'music',state:'draft',description:'极微弱音乐'},{kind:'environment',state:'removed',description:'几乎不可闻的环境声'}]};
+  input.members[0].text='她的呼吸极微弱，远处的话听不清。';input.members[0].performance='声音极微弱的身体状态仍按正文叙述';
+  assert.deepEqual(scenePresenceConflicts(input),[]);
+  input.events.push({kind:'music',description:'极微弱，几乎不可闻的音乐'});
+  assert.equal(scenePresenceConflicts(input).length,1,'已选择事件快照没有state仍需检查');
+});
+
+test('转折音量拒绝整段或对白期间不可闻，明确局部尾声淡出仍允许',()=>{
+  for(const backgroundPresence of ['clear','natural']){
+    const input={backgroundPresence,events:[{kind:'music',state:'adopted',description:'宁静且旋律清楚可辨',transition:{volumeChange:''}}]};
+    for(const volumeChange of ['对白期间保持几乎不可闻','全程极微弱，末尾淡出','末尾淡出，但整段叙述几乎听不到','全段保持几乎不可闻直到尾声淡出']){
+      input.events[0].transition.volumeChange=volumeChange;const conflicts=scenePresenceConflicts(input);assert.equal(conflicts.length,1,volumeChange);assert.match(conflicts[0],/转折音量/);
+    }
+    for(const volumeChange of ['尾声逐渐淡出到几乎不可闻','对白期间旋律清楚可辨，末尾淡出到几乎不可闻','仅在最后一句结束后渐弱至几乎听不到','尾声逐渐淡出，直到几乎不可闻','不要把音乐压低到几乎不可闻']){
+      input.events[0].transition.volumeChange=volumeChange;assert.deepEqual(scenePresenceConflicts(input),[],volumeChange);
+    }
+    input.events[0].transition.volumeChange='全程几乎不可闻';input.events[0].state='removed';assert.deepEqual(scenePresenceConflicts(input),[]);
+  }
+});
+
+test('存在感守卫独立于历史编译，已保存v4及旧模板仍逐字复现和识别',()=>{
+  const s={...single(),template:'scene-v4-presence-1',backgroundPresence:'clear',guidance:'音乐几乎不可闻，仅保留微弱底噪'},before=structuredClone(s),prompt=compile(s);
+  assert.ok(prompt.includes(s.guidance));assert.match(prompt,/明确存在感/);assert.equal(scenePresenceConflicts(s).length,1);
+  assert.equal(compile(s),prompt);assert.equal(resolveCompiler(s,prompt),'scene-v4-presence-1');assert.deepEqual(s,before);
+  for(const template of ['scene-v1','scene-v2','scene-v3-native']){
+    const old={...s,template},saved=compile(old);assert.ok(saved.includes(s.guidance));assert.equal(compile(old),saved);assert.ok(resolveCompiler(old,saved));
+  }
+  s.events[1].transition={memberId:'s1',quote:'缓缓睁开眼睛',occurrence:1,development:'宁静旋律继续',volumeChange:'对白期间压到几乎不可闻'};
+  const savedTransition=compile(s);assert.match(savedTransition,/音量变化：对白期间压到几乎不可闻/);assert.equal(resolveCompiler(s,savedTransition),'scene-v4-presence-1');assert.equal(scenePresenceConflicts(s).length,2);assert.equal(compile(s),savedTransition);
 });

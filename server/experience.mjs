@@ -1,5 +1,6 @@
 import { fail, same, text } from './store.mjs';
 import { saveCandidateVoice } from './audio.mjs';
+import { scenePresenceConflicts } from './templates.mjs';
 
 const now = () => new Date().toISOString();
 const recordId = (kind, id) => `ux-${kind}:${id}`;
@@ -165,8 +166,12 @@ export function createExperience(store, domain, worker, analysis, config) {
     const units = rows.map(row => {
       const mode = p.mode || row.s.mode;
       if (!['dry','scene'].includes(mode)) fail('声音版本无效');
-      const st = domain.enhancement.status(domain.enhancement.getUnit(row.s.id),mode);
+      const unit = domain.enhancement.getUnit(row.s.id), st = domain.enhancement.status(unit,mode);
       const rejected=st.review === 'rework', request=actionKind === 'forceRegenerate' || actionKind === 'redoRejected' ? actionKind === 'forceRegenerate' || rejected : st.validity !== 'matched' || actionKind === 'updateSelected' && rejected;
+      if (request && mode === 'scene') {
+        const conflicts=scenePresenceConflicts(domain.enhancement.input(unit,mode,undefined,false,false,c));
+        if (conflicts.length) fail(conflicts.join('；')+'；请修改背景描述或共同要求后再生成，本次未发送',409);
+      }
       const outstandingAttemptIds=outstandingAttempts(store,[{targetKind:'unit',targetId:row.s.id,mode}],history,true).map(a=>a.id);
       return {unitId:row.s.id,members:row.s.members,mode,reuse:!request,rejected,audioId:st.audio?.id || null,outstandingAttemptIds};
     });

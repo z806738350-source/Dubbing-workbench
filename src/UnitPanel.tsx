@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronRight, CircleHelp } from "lucide-react";
 import { api, action } from "./api";
 import { hasDraft } from "./drafts";
 import { Dialog, Field, Select, Status } from "./components";
 import { ObjectDraftTools, objectDraftId, useObjectDraft } from "./ObjectDraft";
-import { saveAction, withSavedDrafts, draftScopeRevision } from "./autosave";
+import { saveAction, withSavedDrafts, draftScopeRevision, type SaveContext } from "./autosave";
 import TaskAuthorization from "./TaskAuthorization";
 import { submitOperation } from "./taskOperations";
 import SceneSuggestions from "./SceneSuggestions";
@@ -101,6 +102,7 @@ export default function UnitPanel(props: UnitPanelProps) {
 }
 function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, close, open, play, playingId, mode, setMode, initialEventId, onTask }: UnitPanelProps & { mode: "dry" | "scene"; setMode: (mode: "dry" | "scene") => void }) {
   const [error, setError] = useState(""), [pending, setPending] = useState(false), [grantId, setGrantId] = useState<string | null>(null), [resumeRoute,setResumeRoute]=useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [feedbackScope, setFeedbackScope] = useState("generate"), [notice, setNotice] = useState("");
   useEffect(()=>{setResumeRoute(false);},[state.settings.routeBlocked,state.settings.model]);
   const confirmed = useRef({ revision: unit.revision, chapterRevision: chapter.revision });
@@ -120,23 +122,27 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
   const variant = unit.variants[mode], status = variant.status;
   const relatedDraft = unitHasDraft(unit, events, mode);
   const using = !invalid && unit.state === "active" && unit.mode === mode && status.validity === "matched" && chapter.playbackItems.some(item => (item.unitId || item.id) === unit.id && (item.mode || "dry") === mode && item.audioId === variant.current && item.validity === "matched");
-  const switchHint = invalid ? "这段声音需要修复，请先处理上方提示。" : unit.state === "dissolved" ? "这段对戏已取消，这里仅保留历史声音。" : locked ? "本章正在制作，完成后才能切换声音。" : relatedDraft ? "相关修改尚未完成，请先保存或处理未完成编辑，再选用声音。" : status.validity === "missing" ? `还没有${modeLabel(mode)}版本，请先生成；生成会发送音频请求。` : status.validity === "broken" ? "声音文件不可用，请恢复已有声音或重新生成。" : status.validity === "stale" ? "设置已修改，请按当前设置生成，或从历史中恢复匹配的声音。" : status.validity !== "matched" ? "这份声音暂时不能选用，请先处理上方提示。" : using ? "这份声音已经选用，无需再次点击。" : unit.mode === mode ? "这份声音未进入当前整章编排，请在正文中查看所属片段或对戏段。" : "选用只切换已有声音，用于整章试听与导出，不会重新生成或产生费用。";
+  const switchHint = invalid ? "这段声音需要修复，请先处理上方提示。" : unit.state === "dissolved" ? "这段对戏已取消，这里仅保留历史声音。" : locked ? "本章正在制作，完成后才能切换声音。" : relatedDraft ? "相关修改尚未完成，请先保存或处理未完成编辑，再选用声音。" : status.validity === "missing" ? `还没有${modeLabel(mode)}版本，请先生成；生成会发送音频请求。` : status.validity === "broken" ? "声音文件不可用，请恢复已有声音或重新生成。" : status.validity === "stale" ? "设置已修改，请按当前设置生成，或从历史中恢复匹配的声音。" : status.validity !== "matched" ? "这份声音暂时不能选用，请先处理上方提示。" : !using && unit.mode === mode ? "这份声音未进入当前整章编排，请在正文中查看所属片段或对戏段。" : "";
   const switchHintId = "unit-switch-" + unit.id + "-" + mode;
   const singleDry = unit.kind === "single" && mode === "dry";
-  const controller = useObjectDraft("unit", unit.id + "/" + mode, { guidance: variant.guidance || "", backgroundPresence:variant.backgroundPresence||"unspecified", chapterRevision: chapter.revision }, unit.revision, {
-    scope: "chapter:" + chapter.id, chapterRevision: chapter.revision, dependencies: ["unit:" + unit.id + "/" + mode], locked: editLocked || !!editingEvent || singleDry,
-    persist: async (value, expected, context) => {
+  const persistSettings = async (value: { guidance: string; backgroundPresence: NonNullable<typeof variant.backgroundPresence>; chapterRevision: number }, expected: number, context: SaveContext) => {
       const saved = await saveAction<GenerationUnit>("unit.update", { chapterId: chapter.id, revision: context.chapterRevision, id: unit.id, entityRevision: expected, mode, guidance: value.guidance, ...(mode==='scene'?{backgroundPresence:value.backgroundPresence}:{}) }, context.operationId, context.replay);
       if (saved.revision >= confirmed.current.revision) confirmed.current = { revision: saved.revision, chapterRevision: saved.chapterRevision! };
       void refresh().catch(failure => { if (active.current) { setFeedbackScope("settings"); setError("要求已保存，界面更新失败：" + failure.message); } });
-      return { value: { guidance: saved.variants[mode].guidance || "", backgroundPresence:saved.variants[mode].backgroundPresence||"unspecified", chapterRevision: saved.chapterRevision! }, revision: saved.revision, chapterRevision: saved.chapterRevision, changes: ["unit:" + unit.id + "/" + mode] };
-    },
+      return { value: { guidance: saved.variants[mode].guidance || "", backgroundPresence:saved.variants[mode].backgroundPresence??"clear", chapterRevision: saved.chapterRevision! }, revision: saved.revision, chapterRevision: saved.chapterRevision, changes: ["unit:" + unit.id + "/" + mode] };
+  };
+  const controller = useObjectDraft("unit", unit.id + "/" + mode, { guidance: variant.guidance || "", backgroundPresence:variant.backgroundPresence??"clear", chapterRevision: chapter.revision }, unit.revision, {
+    scope: "chapter:" + chapter.id, chapterRevision: chapter.revision, dependencies: ["unit:" + unit.id + "/" + mode], locked: editLocked || !!editingEvent || singleDry,
+    persist: persistSettings,
   });
+  // Persist the visible default only on an explicit operation, preserving old audio on opening.
+  const flushSettings = () => mode === "scene" && variant.backgroundPresence === undefined && !controller.dirty && controller.base === unit.revision
+    ? controller.save(persistSettings) : controller.flush();
   const active = useRef(true); useEffect(() => () => { active.current = false; }, []);
   const currentTemplate = status.input?.template || variant.template || (singleDry ? chapter.segments.find(segment => segment.id === unit.id)?.template : "") || "";
   const effectiveTemplate = variant.resolvedCompilerId || currentTemplate;
   const needsPresenceTemplate = mode === "scene" && controller.draft.backgroundPresence !== "unspecified" && effectiveTemplate !== "scene-v4-presence-1";
-  const presenceTemplateWarning = `所选“${({subtle:"轻",natural:"自然",clear:"清楚",unspecified:"未指定"})[controller.draft.backgroundPresence]}”尚未生效。请先核对并启用背景存在感，再生成新版。`;
+  const presenceTemplateWarning = `当前旧模板不支持“${({subtle:"轻",natural:"自然",clear:"清楚",unspecified:"未指定"})[controller.draft.backgroundPresence]}”。先切换至 v4，再按此存在感生成。`;
   const templates = (state.enhancementTemplates || []).filter(template => mode === "scene" ? template.mode === "scene" : unit.kind === "group" ? template.scope === "group" : template.scope === "single" && template.mode === "dry");
   const [targetTemplate, setTargetTemplate] = useState(currentTemplate);
   const enabled = !invalid && unit.state !== "dissolved" && (unit.kind !== "group" || state.settings.features?.groups !== false) && (mode !== "scene" || state.settings.features?.scenes !== false);
@@ -147,14 +153,14 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
   const payload = { chapterId: chapter.id, revision: chapter.revision, id: unit.id, entityRevision: unit.revision };
   const run = async (next: () => Promise<unknown>, scope = "settings", success = "") => { setFeedbackScope(scope); setError(""); setNotice(""); try { await next(); if (active.current) setNotice(success); } catch (failure) { if (active.current) setError((failure as Error).message); } };
   const feedback = (scope: string) => feedbackScope === scope && (error ? <p className="error-inline" role="alert">{error}</p> : notice ? <p className="success-text" role="status">{notice}</p> : null);
-  const previewPresenceTemplate = (scope = "settings") => void run(async () => {
+  const previewTemplate = (template: string, scope = "settings") => void run(async () => {
     setPending(true);
     try {
-      await controller.flush();
+      await flushSettings();
       if (!active.current) return;
       if (unitHasDraft(unit, events, mode)) throw new Error("还有相关未完成编辑，请先处理后核对模板。");
       const base = { revision: draftScopeRevision("chapter:" + chapter.id, confirmed.current.chapterRevision), entityRevision: confirmed.current.revision };
-      const result = await api<{before:string;after:string;to:string}>("/enhancement-preview", { kind:"template", ...payload, ...base, mode, template:"scene-v4-presence-1" });
+      const result = await api<{before:string;after:string;to:string}>("/enhancement-preview", { kind:"template", ...payload, ...base, mode, template });
       if (active.current) setPreview({ ...result, kind:"template", base });
     } finally { if (active.current) setPending(false); }
   }, scope);
@@ -186,7 +192,7 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
     try {
       await withSavedDrafts("chapter:" + chapter.id, dependencies(unit, mode), async () => {
         if(!active.current)return;
-        await controller.flush();
+        await flushSettings();
         if(!active.current)return;
         if (unitHasDraft(unit, events, mode)) throw new Error("还有相关未完成编辑，请通过恢复入口处理；其他页面的编辑不会被覆盖。");
         const revision = draftScopeRevision("chapter:" + chapter.id, baseRevision);
@@ -212,15 +218,16 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
   const footer = !preview && <div className="unit-submit">
     {feedback("generate")}
     <div className="unit-submit-scope">
-      <p className="task-request-summary">{unit.kind === "group" ? "整段 " : ""}{unit.members.length} 句 · {modeLabel(mode)} · 本次发送 1 次请求 · 原有声音和历史保留</p>
+      <p className="task-request-summary">{unit.kind === "group" ? "整段 " : ""}{unit.members.length} 句 · {modeLabel(mode)} · 本次发送 1 次请求</p>
       {mode === "scene" && hasDraft(objectDraftId("sound-event", "new-" + unit.id)) && <p className="hint">未添加的声音草稿已保留，不加入本次生成。<button className="button secondary small" disabled={pending || editLocked || !!editingEvent} onClick={() => openEvent("new", "generate")}>继续编辑草稿</button></p>}
       {unknown && !job && <label className="check-label"><input type="checkbox" checked={retryUnknown} disabled={pending} onChange={event => setRetryUnknown(event.target.checked)} />我已核对这次记录，明确再次提交 1 次请求，可能再次计费。</label>}
       {state.settings.routeBlocked&&!job&&<label className="check-label warning"><input type="checkbox" checked={resumeRoute} disabled={pending} onChange={event=>setResumeRoute(event.target.checked)}/>已核对接口权限与额度，恢复本次声音请求。</label>}
+      {needsPresenceTemplate && !job && <p className="unit-presence-required" id={"unit-template-required-" + unit.id}>{presenceTemplateWarning}切换免费，不会生成声音。</p>}
     </div>
     <div className="unit-submit-actions">
     {job ? <div role="status"><p>{labels[job.status]} · {job.done} / {job.total}</p><button className="button secondary" onClick={() => void run(async () => { await action("job.stop", { id: job.id }); await refresh(); }, "generate")}>停止后续请求</button></div> : <>
-      <button className="button primary" disabled={needsPresenceTemplate || !enabled || !state.settings.configured || !state.settings.audioTools || locked || pending || !grantId || !!editingEvent || controller.composing || (!!unknown && !retryUnknown) || (state.settings.routeBlocked&&!resumeRoute)} onClick={() => void generate()}>{pending ? feedbackScope === "generate" ? "正在保存与准备…" : "正在处理当前操作…" : unknown ? "再次提交 1 次请求" : status.validity === "matched" ? "再做一版" : mode === "scene" ? "应用并生成带背景声" : unit.kind === "group" ? "生成这段对话" : "更新这句声音"}</button>
-      {needsPresenceTemplate && <div className="hint"><p>{presenceTemplateWarning}</p><button className="button secondary small" disabled={editLocked || pending || !!editingEvent || controller.composing || controller.frozen} onClick={() => previewPresenceTemplate("generate")}>核对并启用背景存在感</button><p>核对与启用免费；生成新版才会发送音频请求。</p></div>}
+      <button className={"button " + (needsPresenceTemplate ? "secondary" : "primary")} aria-describedby={needsPresenceTemplate ? "unit-template-required-" + unit.id : undefined} disabled={needsPresenceTemplate || !enabled || !state.settings.configured || !state.settings.audioTools || locked || pending || !grantId || !!editingEvent || controller.composing || (!!unknown && !retryUnknown) || (state.settings.routeBlocked&&!resumeRoute)} onClick={() => void generate()}>{pending ? feedbackScope === "generate" ? "正在保存与准备…" : "正在处理当前操作…" : unknown ? "再次提交 1 次请求" : status.validity === "matched" ? "再做一版" : mode === "scene" ? "应用并生成带背景声" : unit.kind === "group" ? "生成这段对话" : "更新这句声音"}</button>
+      {needsPresenceTemplate && <button className="button primary" aria-describedby={"unit-template-required-" + unit.id} disabled={editLocked || pending || !!editingEvent || controller.composing || controller.frozen} onClick={() => previewTemplate("scene-v4-presence-1", "generate")}>查看并切换到 v4</button>}
       {state.settings.routeBlocked && <p className="warning">声音接口已暂停。核对权限与额度后，勾选上方恢复选项，再点击生成。</p>}
       {!state.settings.configured && <p className="warning">尚未连接声音接口，请打开设置与连接。</p>}
       {!state.settings.audioTools && <p className="warning">音频处理不可用，请打开设置与连接检查。</p>}
@@ -229,7 +236,8 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
     </>}
     </div>
   </div>;
-  return <Dialog title={preview ? preview.kind === "dissolve" ? "取消一起演绎" : preview.kind === "template" ? "切换提示模板" : "恢复历史声音" : mode === "scene" ? "声音背景" : unit.kind === "group" ? "一起演绎" : "这句声音"} presentation="sidepanel" onClose={close} onBack={preview ? () => setPreview(null) : undefined} footer={footer}>
+  return <Dialog title={preview ? preview.kind === "dissolve" ? "取消一起演绎" : preview.kind === "template" ? "切换提示模板" : "恢复历史声音" : mode === "scene" ? "声音背景" : unit.kind === "group" ? "一起演绎" : "这句声音"} presentation="sidepanel" onClose={close} onBack={preview ? () => setPreview(null) : undefined} footer={footer}
+    headerActions={<button type="button" className="icon unit-help-trigger" aria-label={mode === "scene" ? "声音背景操作说明" : "纯人声操作说明"} title="操作说明" aria-haspopup="dialog" aria-expanded={showHelp} onClick={() => setShowHelp(true)}><CircleHelp size={18} aria-hidden="true" /></button>}>
     {preview ? <section className="task-panel-section unit-preview">
       {preview.kind === "dissolve" ? <>
         <p>将恢复以下单句纯人声；对话历史保留，不裁切、不自动补生成。</p>
@@ -238,7 +246,7 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
         <button className="button primary" disabled={locked} onClick={() => void run(async () => { await action("unit.dissolve", { ...payload, ...preview.base }); await refresh(); close(); })}>确认取消一起演绎</button>
       </> : preview.kind === "template" ? <>
         <h3>当前提示</h3><pre className="prompt-text">{preview.before}</pre><h3>新模板提示</h3><pre className="prompt-text">{preview.after}</pre>
-        <p>只切换此声音版本的模板，原音频与历史设置保留。</p><button className="button primary" disabled={locked} onClick={() => void run(async () => { await action("unit.template", { ...payload, ...preview.base, mode, template: preview.to, confirm: true }); await refresh(); setPreview(null); })}>使用这个模板</button>
+        <p>仅更新下一次生成的模板设置，不发送声音请求。原音频与历史保留。</p><button className="button primary" disabled={locked} onClick={() => void run(async () => { await action("unit.template", { ...payload, ...preview.base, mode, template: preview.to, confirm: true }); await refresh(); if (preview.to) setTargetTemplate(preview.to); setPreview(null); })}>使用这个模板</button>
       </> : <>
         <h3>恢复已有{modeLabel(mode)}版本</h3>
         <p className="hint">将选用这份已生成音频，恢复当时的表演、背景和提示模板。不重新生成，不产生 API 费用。</p>
@@ -254,22 +262,20 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
       {error && <p className="error-inline" role="alert">{error}</p>}
     </section> : <>
       {unknown && <section className="unit-safe-result" aria-label="先处理这次未确认的结果"><h3>这次新结果尚未确认，可能已计费。已有声音仍然保留。</h3><div className="unit-safe-actions"><button className="button primary" disabled={!keptId || !connected || !memberAudio && kept.status.validity === "broken"} onClick={() => play(keptId!, memberAudio ? "第 " + ((chapter.segments.find(segment => segment.id === (memberAudio.members || [memberAudio.id])[0])?.order ?? -1) + 1) + " 句 · 已有纯人声" : modeLabel(keptMode) + " · 已有声音", !!memberAudio || invalid || unit.state === "dissolved" || kept.status.validity !== "matched")}>{playingId===keptId?"暂停已有声音":"试听已有声音"}</button><button className="button secondary" disabled={pending || !onTask} onClick={viewRecord}>查看这次记录</button></div>{memberAudio && <p className="hint">尚无整段声音，可先试听第 {(chapter.segments.find(segment => segment.id === (memberAudio.members || [memberAudio.id])[0])?.order ?? -1) + 1} 句已有纯人声；其他单句声音仍按原顺序保留。</p>}{!keptId && <p className="hint">这段还没有可试听的声音。先查看这次记录，再决定是否再次提交。</p>}{feedback("record")}</section>}
-      <div className="task-version-summary"><strong>整章使用：{modeLabel(unit.mode)}</strong><p className="hint">{unit.state === "pending" ? "这段对话尚未生成，原单句声音仍在使用。" : unit.state === "dissolved" ? "此对话已取消，以下仅为历史记录。" : "修改背景设置不会改变已生成的音频。完成编辑后，点击底部按钮制作新版。"}{mode !== unit.mode && " 下面正在编辑另一个版本，当前播放声音尚未改变。"}</p></div>
+      <div className="task-version-summary"><strong>整章使用：{modeLabel(unit.mode)}</strong>{unit.state === "pending" ? <p className="hint">这段对话尚未生成，原单句声音仍在使用。</p> : unit.state === "dissolved" ? <p className="hint">此对话已取消，以下仅为历史记录。</p> : mode !== unit.mode && <p className="hint">当前查看：{modeLabel(mode)}</p>}</div>
       {invalid && <div className="error-inline" role="alert"><p>{unit.diagnostics!.join("；")}</p><p>历史声音仍保留。{unit.kind === "group" ? "请预览并取消一起演绎，再处理缺失成员。" : "请先修复相关台词。"}</p></div>}
       <div className="tabs enhancement-mode-tabs"><button className={mode === "dry" ? "active" : ""} aria-pressed={mode === "dry"} disabled={pending || controller.saving || !!editingEvent} onClick={() => { setRetryUnknown(false); setResumeRoute(false); setMode("dry"); }}>纯人声</button><button className={mode === "scene" ? "active" : ""} aria-pressed={mode === "scene"} disabled={pending || controller.saving || !!editingEvent} onClick={() => { setRetryUnknown(false); setResumeRoute(false); setMode("scene"); }}>带背景声</button></div>
       <section className="task-panel-section unit-current-result" aria-label="试听与选用">
         <h3>试听与选用 · {modeLabel(mode)}</h3><Status kind={status.review === "passed" ? "success" : status.validity === "stale" ? "warning" : ""}>{labels[status.validity] || status.validity} · {labels[status.review] || status.review}</Status>
         {!!status.promptIssues?.length && <p className="warning">{status.promptIssues.join("；")}</p>}
-        <div className="button-row">{!unknown && <button className="button secondary" disabled={!variant.current || !connected || status.validity === "broken"} onClick={() => play(variant.current!, modeLabel(mode) + (status.validity !== "matched" ? " · 旧版" : ""), invalid || unit.state === "dissolved")}>{playingId===variant.current?"暂停":"试听"}{status.validity === "matched" ? "这份声音" : "旧版声音"}</button>}<button className="button secondary" aria-describedby={switchHintId} disabled={pending || !!editingEvent || editLocked || unit.mode === mode || status.validity !== "matched" || relatedDraft} onClick={() => void run(async () => { await action("unit.switch", { ...payload, mode }); await refresh(); }, "current", "已选用" + modeLabel(mode) + "，整章试听与导出会使用它。") }>{using ? "正在使用" + modeLabel(mode) : mode === "dry" ? "切回纯人声" : "使用这份带背景声"}</button></div>
-        <p className="hint" id={switchHintId}>{switchHint}</p>
-        <div className="button-row"><button className="button secondary small" disabled={status.review === "passed" || pending || editLocked || !connected || status.validity !== "matched" || unitHasDraft(unit, events, mode)} onClick={() => void run(async () => { await action("unit.review", { ...payload, mode, audioId: variant.current, basis: status.basis, state: "passed" }); await refresh(); }, "current", "已记录你的人工听评通过。") }>{status.review === "passed" ? "人工听评已通过" : "我已试听，检查通过"}</button><button className="button secondary small warning" disabled={status.review === "rework" || pending || editLocked || status.validity !== "matched"} onClick={() => void run(async () => { await action("unit.review", { ...payload, mode, audioId: variant.current, basis: status.basis, state: "rework" }); await refresh(); }, "current", "已标记需要重做；当前声音保留，尚未提交生成请求。") }>{status.review === "rework" ? "已标记需要重做" : "标记需要重做"}</button></div>
-        <p className="hint">检查通过只记录人工听评；标记重做保留原声音，需要你另行点击生成。</p>
+        <div className="unit-current-action">{!unknown && <button className="button secondary" disabled={!variant.current || !connected || status.validity === "broken"} onClick={() => play(variant.current!, modeLabel(mode) + (status.validity !== "matched" ? " · 旧版" : ""), invalid || unit.state === "dissolved")}>{playingId===variant.current?"暂停":"试听"}{status.validity === "matched" ? "这份声音" : "旧版声音"}</button>}<button className="button secondary" aria-describedby={switchHint ? switchHintId : undefined} disabled={pending || !!editingEvent || editLocked || unit.mode === mode || status.validity !== "matched" || relatedDraft} onClick={() => void run(async () => { await action("unit.switch", { ...payload, mode }); await refresh(); }, "current", "已选用" + modeLabel(mode) + "，整章试听与导出会使用它。") }>{using ? "正在使用" + modeLabel(mode) : mode === "dry" ? "切回纯人声" : "使用这份带背景声"}</button></div>
+        {switchHint && <p className="hint" id={switchHintId}>{switchHint}</p>}
+        <div className="unit-review-actions"><button className="button secondary small" disabled={status.review === "passed" || pending || editLocked || !connected || status.validity !== "matched" || unitHasDraft(unit, events, mode)} onClick={() => void run(async () => { await action("unit.review", { ...payload, mode, audioId: variant.current, basis: status.basis, state: "passed" }); await refresh(); }, "current", "已记录你的人工听评通过。") }>{status.review === "passed" ? "人工听评已通过" : "我已试听，检查通过"}</button><button className="button secondary small warning" disabled={status.review === "rework" || pending || editLocked || status.validity !== "matched"} onClick={() => void run(async () => { await action("unit.review", { ...payload, mode, audioId: variant.current, basis: status.basis, state: "rework" }); await refresh(); }, "current", "已标记需要重做；当前声音保留，尚未提交生成请求。") }>{status.review === "rework" ? "已标记需要重做" : "标记需要重做"}</button></div>
         {feedback("current")}
       </section>
       <details className="task-panel-section unit-history"><summary>历史声音 · {variant.history?.length || 0} 版</summary>
-        <p className="hint">试听不会改变当前声音。设置一致可直接使用；旧设置先核对差异，再恢复。两种操作都不重新生成。</p>
-        <div className="button-row">{([[variant.previous, "恢复上一版"], [variant.approved, "恢复最近通过版"]] as const).map(([id, label]) => <button key={label} className="button secondary small" disabled={!id || editLocked || pending || relatedDraft || !!editingEvent} onClick={() => previewRestore(id!)}>{label}</button>)}</div>
-        {!variant.approved && <p className="hint">还没有人工听评通过的历史版本；其他声音仍可逐份试听、选用或核对恢复。</p>}
+        <div className="button-row unit-history-actions">{([[variant.previous, "恢复上一版"], [variant.approved, "恢复最近通过版"]] as const).map(([id, label]) => <button key={label} className="button secondary small" disabled={!id || editLocked || pending || relatedDraft || !!editingEvent} onClick={() => previewRestore(id!)}>{label}</button>)}</div>
+        {!variant.approved && <p className="hint">还没有人工听评通过的历史版本。</p>}
         {feedback("history")}
         {(editLocked || relatedDraft || !!editingEvent) && <p className="hint">{editLocked ? switchHint : "请先完成相关编辑，再选用或恢复历史声音。"}</p>}
         {!variant.history?.length && <p className="empty-inline">这个版本还没有历史声音。</p>}
@@ -287,14 +293,13 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
           </section>;
         })}</div>
       </details>
+      {mode === "scene" && <section className="task-panel-section unit-background-presence"><Field label="下一次生成的背景存在感"><Select label="背景存在感" value={controller.draft.backgroundPresence} options={[{value:"clear",label:"清楚"},{value:"natural",label:"自然"},{value:"subtle",label:"轻"},{value:"unspecified",label:"未指定"}]} disabled={editLocked||pending||!!editingEvent||controller.frozen} onChange={backgroundPresence=>controller.edit({backgroundPresence:backgroundPresence as NonNullable<typeof variant.backgroundPresence>})}/>{!needsPresenceTemplate && effectiveTemplate!=='scene-v4-presence-1'&&<button className="button secondary small" disabled={editLocked || pending || !!editingEvent || controller.composing || controller.frozen} onClick={() => previewTemplate("scene-v4-presence-1")}>查看并切换到 v4</button>}</Field>{!!unit.sceneConflicts?.length&&<div className="warning" role="alert"><h3>背景要求存在矛盾</h3>{unit.sceneConflicts.map((conflict,index)=><p key={index}>{conflict}</p>)}<p>请修改声音描述或共同要求，再生成新版。</p></div>}</section>}
       <section className="task-panel-section unit-member-context"><h3>{unit.kind === "group" ? "适用这段对话" : "适用这句台词"}</h3><p className="unit-member-range">覆盖第 {unit.members.map(id => (chapter.segments.find(segment => segment.id === id)?.order ?? -1) + 1).join("、")} 句 · 共 {unit.members.length} 句</p><details><summary>查看全文、角色与声音</summary><Members ids={unit.members} chapter={chapter} roles={roles} voices={state.voices} open={open} /></details></section>
-      <details className="unit-edit-settings" open={!unknown || !!editingEvent}><summary>{mode === "scene" ? "编辑下一版的背景与表演" : "编辑下一版的表演"}</summary>
+      <details className="unit-edit-settings" open={!unknown || !!editingEvent}><summary><ChevronRight className="unit-disclosure-icon" aria-hidden="true" size={18} />{mode === "scene" ? "编辑下一版的背景与表演" : "编辑下一版的表演"}</summary>
       {singleDry ? <button className="button secondary" onClick={() => open(unit.members[0])}>修改这句的文字与表演</button> : <Field label={mode === "scene" ? "希望场景怎样呈现？" : "共同表演要求"}><textarea rows={3} value={controller.draft.guidance} disabled={editLocked || pending || !!editingEvent || controller.frozen} onCompositionStart={controller.compositionStart} onCompositionEnd={controller.compositionEnd} onChange={event => controller.edit({ guidance: event.target.value })} /></Field>}
-      {mode === "scene" && <Field label="下一次生成的背景存在感" hint="影响模型下一次联合生成；已有音频保持原样。轻、自然、清楚均保留旁白正文。"><Select label="背景存在感" value={controller.draft.backgroundPresence} options={[{value:"unspecified",label:"未指定"},{value:"subtle",label:"轻"},{value:"natural",label:"自然"},{value:"clear",label:"清楚"}]} disabled={editLocked||pending||!!editingEvent||controller.frozen} onChange={backgroundPresence=>controller.edit({backgroundPresence:backgroundPresence as NonNullable<typeof variant.backgroundPresence>})}/>{effectiveTemplate!=='scene-v4-presence-1'&&<div className="hint"><p>{needsPresenceTemplate ? presenceTemplateWarning : "存在感选项需先启用对应模板。"}</p><button className="button secondary small" disabled={editLocked || pending || !!editingEvent || controller.composing || controller.frozen} onClick={() => previewPresenceTemplate()}>核对并启用背景存在感</button><p>核对与启用免费；生成新版才会发送音频请求。</p></div>}</Field>}
+
       {mode === "scene" && <section className="task-panel-section">
-        {currentTemplate==='scene-v4-presence-1'&&!!unit.sceneConflicts?.length&&<div className="warning" role="alert"><h3>背景要求需要一次核对</h3>{unit.sceneConflicts.map((conflict,index)=><p key={index}>{conflict}</p>)}<p>修改共同要求或已采用声音后再生成；正文保持原样。</p></div>}
         <div className="section-heading"><h3>加入这次场景的声音</h3><button className="button secondary small" disabled={!enabled || editLocked || pending || !!editingEvent} onClick={() => openEvent("new")}>添加声音</button></div>
-        <p className="hint">加入的环境、音效和音乐用于下一次生成。位置是创作意图，生成后仍需试听检查。</p>
         {editingEvent === "new" && <EventEditor key="new" unit={eventUnit} chapter={eventChapter} descriptionMax={state.sceneContract?.descriptionMax} locked={editLocked || pending} refresh={refresh} onSaved={rememberEvent} close={() => setEditingEvent(null)} created={(event, warning, selection) => { if (active.current) { setCreatedEvent(event); setEditingEvent(event.id); setEventSelection(selection); if (warning) setError(warning); } }} />}
         {!visibleEvents.length && editingEvent !== "new" && <p className="empty-inline">还没有声音背景，可添加声音或让 AI 提建议。</p>}
         {visibleEvents.map(event => <section className="task-event-card" key={event.id}>
@@ -308,18 +313,18 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
           {feedback(event.id)}
         </section>)}
         {createdEvent?.id === editingEvent && !events.some(event => event.id === editingEvent) && <EventEditor key={createdEvent.id} event={createdEvent} unit={eventUnit} chapter={eventChapter} descriptionMax={state.sceneContract?.descriptionMax} locked={editLocked || pending} refresh={refresh} onSaved={rememberEvent} resumeSelection={eventSelection} close={() => setEditingEvent(null)} created={() => {}} />}
-        <SceneSuggestions unit={unit} chapter={chapter} contextRevision={state.projects.find(project => project.id === chapter.projectId)?.contextRevision || 0} model={state.settings.textModel} enabled={enabled && !locked && !pending && !editingEvent} refresh={refresh} savedBase={async () => { await controller.flush(); return { revision: draftScopeRevision("chapter:" + chapter.id, confirmed.current.chapterRevision), entityRevision: confirmed.current.revision }; }} />
+        <SceneSuggestions unit={unit} chapter={chapter} contextRevision={state.projects.find(project => project.id === chapter.projectId)?.contextRevision || 0} model={state.settings.textModel} enabled={enabled && !locked && !pending && !editingEvent} refresh={refresh} savedBase={async () => { await flushSettings(); return { revision: draftScopeRevision("chapter:" + chapter.id, confirmed.current.chapterRevision), entityRevision: confirmed.current.revision }; }} />
       </section>}
       {feedback("settings")}
       </details>
       {!singleDry && <><ObjectDraftTools inline controller={controller} title="表演要求" onError={failure => { setFeedbackScope("draft-tools"); setError(failure); }} render={value => <p>{value.guidance}</p>} />{feedback("draft-tools")}</>}
       {enabled && <details className="unit-submit-authorization" open={!unknown}><summary>生成权限与剩余次数</summary><TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label={mode === "scene" ? "制作这份带背景声" : "制作这段声音"} steps={["unit-generate"]} model={state.settings.model} voiceIds={voiceIds} onReady={setGrantId} disabled={pending || editLocked} /></details>}
       <details className="task-panel-section unit-advanced"><summary>高级设置与请求记录</summary>
-        <Field label="这份声音的提示模板"><Select label="提示模板" value={targetTemplate} options={[...(currentTemplate && !templates.some(template => template.id === currentTemplate) ? [{ value: currentTemplate, label: currentTemplate + " · 已保存" }] : []), ...templates.map(template => ({ value: template.id, label: template.name }))]} onChange={setTargetTemplate} /></Field>
-        <button className="button secondary small" disabled={editLocked || !targetTemplate || targetTemplate === currentTemplate || unitHasDraft(unit, events, mode)} onClick={() => void run(async () => { const result = await api<{ before: string; after: string; to: string }>("/enhancement-preview", { kind: "template", ...payload, mode, template: targetTemplate }); setPreview({ ...result, kind: "template", base: { revision: payload.revision, entityRevision: payload.entityRevision } }); }, "advanced")}>查看模板差异</button>
+        <Field label="下一次生成的提示模板" hint={targetTemplate !== currentTemplate ? "尚未应用，请先查看模板差异。" : undefined}><Select label="提示模板" value={targetTemplate} options={[...(currentTemplate && !templates.some(template => template.id === currentTemplate) ? [{ value: currentTemplate, label: currentTemplate + " · 已保存" }] : []), ...templates.map(template => ({ value: template.id, label: template.name + (mode === "scene" ? template.id === "scene-v4-presence-1" ? " · 默认" : " · 旧版" : "") }))]} onChange={setTargetTemplate} /></Field>
+        <button className="button secondary small" disabled={editLocked || pending || !!editingEvent || controller.composing || controller.frozen || !targetTemplate || targetTemplate === currentTemplate || unitHasDraft(unit, events, mode)} onClick={() => previewTemplate(targetTemplate, "advanced")}>查看模板差异</button>
         <details><summary>本次目标完整要求</summary><pre className="prompt-text">{status.prompt}</pre></details>
         {variant.resolvedCompilerId&&<p className="hint">历史模板：{variant.template} · 精确编译版本：{variant.resolvedCompilerId}</p>}
-        <details className="unit-request-records"><summary>生成请求记录 · {jobs.length} 条</summary><p className="hint">这里记录请求是否成功。已生成的声音请在“历史声音”中试听或选用。</p>
+        <details className="unit-request-records"><summary>生成请求记录 · {jobs.length} 条</summary>
           {!jobs.length && <p className="empty-inline">还没有生成请求记录。</p>}
           {jobs.filter(item => !["queued", "running"].includes(item.status)).slice(0, 5).map(item => <div className="unit-request-record" key={item.id}><strong>{labels[item.status] || item.status}</strong><span className="hint">{new Date(item.createdAt).toLocaleString("zh-CN")}</span>{item.error && <p className="warning">{item.error}</p>}</div>)}
         </details>
@@ -328,6 +333,17 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
       </details>
       {!enabled && !invalid && <p className="warning">此版本的新生成已关闭，历史声音与已有版本仍可查看。</p>}
     </>}
+    {showHelp && <Dialog title={mode === "scene" ? "声音背景 · 操作说明" : "纯人声 · 操作说明"} onClose={() => setShowHelp(false)}>
+      <div className="unit-help-content">
+        <section><h3>试听与选用</h3><p>试听不改变整章使用的声音。选用已有声音用于整章试听与导出，不会重新生成或产生费用。显示“正在使用…”时，已选用，无需再次点击。</p></section>
+        <section><h3>听评与生成</h3><p>检查通过只记录人工听评；标记重做保留原声音，需要你另行点击生成。授权限定本次制作范围与请求次数，不会自动发送。结果不明时先查看记录，再决定是否重试。</p></section>
+        <section><h3>历史声音</h3><p>设置一致可直接使用；旧设置先核对差异，再恢复。恢复不重新生成，也不会撤销后来修改的台词、角色、参考声音或数值设置。新版生成后仍保留旧音频和历史。请求记录与可试听的历史声音分别查看。</p></section>
+        {mode === "scene" ? <>
+          <section><h3>背景存在感</h3><p>默认选择清楚；轻、自然、清楚会同时用于 AI 声音建议与下一次旁白、背景联合生成。已有音频保持原样。声音描述与存在感矛盾时，需要先修改描述或共同要求，不会将两种要求一同发送。首次使用且没有旧模板或场景历史时，默认使用 v4；已保存的旧模板仍保留。点“查看并切换到 v4”比较提示，再点“使用这个模板”。核对与启用免费，确认后仍须点击生成新版。实际背景效果仍需试听检查。</p></section>
+          <section><h3>加入场景的声音</h3><p>AI 建议只分析，不改台词或自动制作；选中后加入场景。分析只建议新增声音，不重复建议已加入或已明确移除的声音；没有新增建议时，已有背景与共同要求保留，也可手工添加声音。需要重新使用旧建议时，打开“历史建议”，选择记录、勾选声音，再点“重新加入选中的…个声音”；曾加入后又移除的声音也可免费重新加入，不调用AI或生成音频。当前已加入的相同声音不会重复添加，原台词或位置失效会单独提示。只有“加入场景”的环境、音效和音乐用于下一次生成；暂不使用或移除后仍保留历史。位置是创作意图，生成后仍需试听检查。音乐转折需使用存在感模板，并按真实台词定位；音乐发展与音量变化分别填写，不填音量变化不会自动淡出。</p></section>
+        </> : <section><h3>表演与模板</h3><p>表演要求描述怎样说，不改写台词。修改要求或模板用于下一次生成，已有音频保持原样；核对模板差异不会发送声音请求。</p></section>}
+      </div>
+    </Dialog>}
   </Dialog>;
 }
 function EventEditor({ event, unit, chapter, locked, refresh, close, created, onSaved, resumeSelection, descriptionMax=1500 }: { descriptionMax?:number; event?: SoundEvent; unit: GenerationUnit; chapter: ChapterDetail; locked: boolean; refresh: () => Promise<void>; close: () => void; created: (event: SoundEvent, warning?: string, selection?: TextSelection) => void; onSaved: (event: SoundEvent) => void; resumeSelection?: TextSelection }) {
@@ -379,7 +395,7 @@ function EventEditor({ event, unit, chapter, locked, refresh, close, created, on
     <Field label="在哪句开始"><Select label="开始台词" value={controller.draft.memberId} options={memberOptions} disabled={locked || controller.frozen} onChange={memberId => controller.edit({ memberId })} /></Field>
     <Field label="开始时机"><Select label="开始时机" value={controller.draft.position} options={positions} disabled={locked || controller.frozen} onChange={position => controller.edit({ position: position as SoundEvent["position"] })} /></Field>
     {controller.draft.kind !== "effect" && <><Field label="持续至"><Select label="结束台词" value={controller.draft.endMemberId} options={[{ value: "", label: "同一个位置" }, ...memberOptions]} disabled={locked || controller.frozen} onChange={endMemberId => controller.edit({ endMemberId })} /></Field>{controller.draft.endMemberId && <Field label="结束时机"><Select label="结束时机" value={controller.draft.endPosition} options={positions} disabled={locked || controller.frozen} onChange={endPosition => controller.edit({ endPosition: endPosition as SoundEvent["position"] })} /></Field>}</>}
-    {controller.draft.kind==='music'&&<details><summary>指定音乐转折（可选）</summary><p className="hint">按真实台词定位情绪或织体转折。音乐发展与音量变化分别描述；不填音量变化不会自动淡出。此定位使用存在感模板。</p><label className="check-label"><input type="checkbox" checked={controller.draft.transitionEnabled} disabled={locked||controller.frozen} onChange={event=>controller.edit({transitionEnabled:event.target.checked})}/>加入一个明确转折</label>{controller.draft.transitionEnabled&&<>
+    {controller.draft.kind==='music'&&<details><summary>指定音乐转折（可选）</summary><label className="check-label"><input type="checkbox" checked={controller.draft.transitionEnabled} disabled={locked||controller.frozen} onChange={event=>controller.edit({transitionEnabled:event.target.checked})}/>加入一个明确转折</label>{controller.draft.transitionEnabled&&<>
       <Field label="转折台词"><Select label="转折台词" value={controller.draft.transition.memberId} options={memberOptions} disabled={locked||controller.frozen} onChange={memberId=>controller.edit({transition:{...controller.draft.transition,memberId}})}/></Field>
       <Field label="真实短引文"><input value={controller.draft.transition.quote} disabled={locked||controller.frozen} onChange={event=>controller.edit({transition:{...controller.draft.transition,quote:event.target.value}})} placeholder="复制对应台词中实际出现的一段"/></Field>
       <Field label="这段引文第几次出现"><input type="number" min={1} step={1} value={controller.draft.transition.occurrence} disabled={locked||controller.frozen} onChange={event=>controller.edit({transition:{...controller.draft.transition,occurrence:Number(event.target.value)}})}/></Field>

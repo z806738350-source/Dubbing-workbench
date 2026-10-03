@@ -28,6 +28,7 @@ export function Dialog({
   variant,
   footer,
   onBack,
+  headerActions,
 }: {
   title: string;
   children: ReactNode;
@@ -37,6 +38,7 @@ export function Dialog({
   variant?: "drawer" | "modal";
   footer?: ReactNode;
   onBack?: () => void;
+  headerActions?: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const depth=useContext(DialogDepth)+1;
@@ -59,6 +61,7 @@ export function Dialog({
     <div className="dialog-head">
       {onBack && <button className="text-button" onClick={onBack}>返回</button>}
       <h2>{title}</h2>
+      {headerActions}
       <button className="icon" aria-label="关闭" onClick={onClose}><X size={18}/></button>
     </div>
     <ErrorBanner/>
@@ -72,7 +75,7 @@ export function Dialog({
       className={"dialog" + (wide ? " wide" : "") + (mode === "sidepanel" ? " sidepanel" : "")}
       data-presentation={mode}
       tabIndex={-1}
-      onCancel={onClose}
+      onCancel={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}
       onClick={(e) => {
         if (e.target === ref.current) onClose();
       }}

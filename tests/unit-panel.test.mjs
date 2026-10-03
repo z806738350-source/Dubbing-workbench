@@ -12,25 +12,91 @@ const check=(tree,label)=>nodes(nodes(tree).find(node=>node.type==='label'&&text
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 let sequence=0;
 async function setup(api=async()=>[],operation=async()=>({outcome:'processing'}),draftIds=new Set(),mutation=async()=>{}) {
-  let index=0;const hooks=[],sent=[],played=[],tasks=[],actions=[],drafts=new Map();
+  let index=0;const hooks=[],sent=[],played=[],tasks=[],actions=[],reads=[],drafts=new Map();
   const runtime={React:{createElement:(type,props,...children)=>({type,props:{...props,children}}),Fragment:'Fragment'},
     useEffect(){},useRef:initial=>{const key=index++;return hooks[key]||=( {current:initial});},
     useState:initial=>{const key=index++;if(!(key in hooks))hooks[key]=typeof initial==='function'?initial():initial;return [hooks[key],value=>{hooks[key]=typeof value==='function'?value(hooks[key]):value;}];},
-    api,action:async(...args)=>{actions.push(args);return mutation(...args);},hasDraft:id=>draftIds.has(id),objectDraftId:(kind,id)=>kind+'/'+id,
-    useObjectDraft:(kind,id,draft,revision=0,options={})=>{const key=kind+'/'+id;if(!drafts.has(key)){const controller={draft,base:revision,options,dirty:false,status:'saved',frozen:false,composing:false,saving:false,flush:async()=>{},edit(value){controller.draft={...controller.draft,...value};},compositionStart(){},compositionEnd(){},save:async persist=>{const saved=await persist(controller.draft);controller.base=saved.revision;controller.draft=saved.value;return {...saved,dirty:false};}};drafts.set(key,controller);}return drafts.get(key);},
+    api:async(...args)=>{reads.push(args);return api(...args);},action:async(...args)=>{actions.push(args);return mutation(...args);},hasDraft:id=>draftIds.has(id),objectDraftId:(kind,id)=>kind+'/'+id,
+    useObjectDraft:(kind,id,draft,revision=0,options={})=>{const key=kind+'/'+id;if(!drafts.has(key)){const controller={draft,base:revision,options,dirty:false,status:'saved',frozen:false,composing:false,saving:false,flush:async()=>{},edit(value){controller.draft={...controller.draft,...value};},compositionStart(){},compositionEnd(){},save:async persist=>{const saved=await persist(controller.draft,controller.base,{chapterRevision:controller.draft.chapterRevision,operationId:'fixture-default',replay:false});controller.base=saved.revision;controller.draft=saved.value;return {...saved,dirty:false};}};drafts.set(key,controller);}return drafts.get(key);},
     saveAction:(...args)=>runtime.persistSave(...args),persistSave:async()=>{},withSavedDrafts:async(_scope,_dependencies,fn)=>fn(),draftScopeRevision:(_scope,revision)=>revision,
     submitOperation:async(...args)=>{sent.push(args);return operation(...args);},
-    Dialog:'Dialog',Field:'Field',Select:'Select',Status:'Status',ObjectDraftTools:'ObjectDraftTools',TaskAuthorization:'TaskAuthorization',SceneSuggestions:'SceneSuggestions'};
+    ChevronRight:'ChevronRight',CircleHelp:'CircleHelp',Dialog:'Dialog',Field:'Field',Select:'Select',Status:'Status',ObjectDraftTools:'ObjectDraftTools',TaskAuthorization:'TaskAuthorization',SceneSuggestions:'SceneSuggestions'};
   globalThis.unitPanelTest=runtime;
-  const header='const {React,useEffect,useRef,useState,api,action,hasDraft,objectDraftId,useObjectDraft,saveAction,withSavedDrafts,draftScopeRevision,submitOperation,Dialog,Field,Select,Status,ObjectDraftTools,TaskAuthorization,SceneSuggestions}=globalThis.unitPanelTest;\n';
+  const header='const {React,useEffect,useRef,useState,api,action,hasDraft,objectDraftId,useObjectDraft,saveAction,withSavedDrafts,draftScopeRevision,submitOperation,ChevronRight,CircleHelp,Dialog,Field,Select,Status,ObjectDraftTools,TaskAuthorization,SceneSuggestions}=globalThis.unitPanelTest;\n';
   const {UnitDetails,CreateGroup}=await import('data:text/javascript;base64,'+Buffer.from(header+compiled+'\n// test '+sequence++).toString('base64'));
   const status=()=>({validity:'matched',review:'passed',prompt:'',promptIssues:[],basis:{}});
-  const variant=(current,latest)=>({current,previous:'previous',approved:null,latest,revision:1,guidance:'保留要求',status:status(),history:[]});
+  const variant=(current,latest)=>({current,previous:'previous',approved:null,latest,revision:1,guidance:'保留要求',backgroundPresence:'unspecified',status:status(),history:[]});
   const unit={id:'group',chapterId:'chapter',kind:'group',state:'active',members:['one','two'],mode:'dry',revision:1,variants:{dry:variant('old-dry','success'),scene:variant(null,'unknown')}};
   const props={unit,chapter:{id:'chapter',projectId:'project',revision:1,segments:[{id:'one',order:0,text:'第一句',roleId:'role',voiceId:'voice'},{id:'two',order:1,text:'第二句',roleId:'role',voiceId:'voice'}],events:[],playbackItems:[]},roles:[{id:'role',name:'角色'}],state:{jobs:[],voices:[],projects:[],settings:{configured:true,audioTools:true,features:{},model:'audio',routeBlocked:false}},locked:false,connected:true,mode:'scene',setMode(){},refresh:async()=>{},close(){},open(){},play:(...args)=>played.push(args),onTask:(...args)=>tasks.push(args)};
   const groups=[];const groupProps={chapter:props.chapter,ids:['one','two'],roles:props.roles,enabled:true,state:props.state,refresh:props.refresh,close:props.close,open:props.open,created:(...args)=>groups.push(args)};
-  return {props,groupProps,groups,sent,played,tasks,actions,runtime,render:()=>{index=0;return UnitDetails(props);},renderGroup:()=>{index=0;return CreateGroup(groupProps);}};
+  return {props,groupProps,groups,sent,played,tasks,actions,reads,runtime,render:()=>{index=0;return UnitDetails(props);},renderGroup:()=>{index=0;return CreateGroup(groupProps);}};
 }
+
+test('SVG说明只开关嵌套弹窗；原面板、编辑与授权保留，零读取、变更或生成',async()=>{
+  for(const mode of ['scene','dry']){
+    const f=await setup();f.props.mode=mode;f.props.unit.variants.scene.latest='success';let closed=0;
+    f.props.close=()=>closed++;
+    let tree=f.render(),controller=nodes(tree).find(node=>node.type==='ObjectDraftTools').props.controller,flushed=0;
+    controller.edit({guidance:'尚未完成的表演稿'});controller.dirty=true;controller.composing=true;controller.flush=async()=>{flushed++;};
+    const before=JSON.stringify(f.props.unit),trigger=tree.props.headerActions;
+    assert.equal(trigger.type,'button');assert.match(trigger.props.className,/\bicon\b/);assert.match(trigger.props.className,/unit-help-trigger/);
+    assert.equal(trigger.props['aria-label'],mode==='scene'?'声音背景操作说明':'纯人声操作说明');assert.equal(trigger.props.title,'操作说明');assert.equal(trigger.props['aria-haspopup'],'dialog');assert.equal(trigger.props['aria-expanded'],false);
+    assert.ok(nodes(trigger).some(node=>node.type==='CircleHelp'&&node.props['aria-hidden']==='true'));
+    assert.doesNotMatch(text(tree),/已选用，无需再次点击|检查通过只记录人工听评|位置是创作意图/);
+    trigger.props.onClick();tree=f.render();
+    const help=nodes(tree).find(node=>node.type==='Dialog'&&node.props.title===(mode==='scene'?'声音背景 · 操作说明':'纯人声 · 操作说明'));
+    assert.ok(help,'帮助作为现有面板的子弹窗挂载');assert.equal(tree.props.presentation,'sidepanel');assert.equal(tree.props.headerActions.props['aria-expanded'],true);
+    assert.match(text(help),/显示“正在使用…”时，已选用，无需再次点击/);assert.match(text(help),/检查通过只记录人工听评/);assert.match(text(help),/旧设置先核对差异/);
+    assert.equal(nodes(help).filter(node=>node.type==='section').length,mode==='scene'?5:4);
+    if(mode==='scene'){assert.match(text(help),/核对与启用免费/);assert.match(text(help),/位置是创作意图/);assert.match(text(help),/AI 建议只分析，不改台词或自动制作/);assert.match(text(help),/音乐转折需使用存在感模板/);}
+    assert.equal(nodes(tree).find(node=>node.type==='ObjectDraftTools').props.controller,controller);assert.ok(nodes(tree).some(node=>node.type==='TaskAuthorization'));assert.ok(nodes(tree).some(node=>node.props.className?.includes('unit-current-result')));
+    help.props.onClose();tree=f.render();assert.equal(tree.props.headerActions.props['aria-expanded'],false);assert.ok(!nodes(tree).some(node=>node.type==='Dialog'&&node.props.title.includes('操作说明')));
+    assert.equal(controller.draft.guidance,'尚未完成的表演稿');assert.equal(controller.dirty,true);assert.equal(controller.composing,true);assert.equal(flushed,0);assert.equal(closed,0);assert.equal(JSON.stringify(f.props.unit),before);
+    assert.equal(f.reads.length,0);assert.equal(f.actions.length,0);assert.equal(f.sent.length,0);assert.equal(f.played.length,0);assert.equal(f.tasks.length,0);
+  }
+});
+
+test('说明收起后未知计费与存在感未生效仍就地可见，启用仅一个主按钮且不提交声音',async()=>{
+  const f=await setup();Object.assign(f.props.unit.variants.scene,{template:'scene-v2',backgroundPresence:'clear'});
+  nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+  let tree=f.render(),footer=tree.props.footer;
+  assert.match(text(tree),/新结果尚未确认，可能已计费/);assert.ok(button(tree,'查看这次记录'));
+  assert.match(text(footer),/明确再次提交 1 次请求，可能再次计费/);assert.match(text(footer),/当前旧模板不支持“清楚”/);
+  assert.equal(nodes(footer).find(node=>node.props.className==='task-request-summary').props.children.join(''),'整段 2 句 · 带背景声 · 本次发送 1 次请求');
+  assert.equal(button(tree,'查看并切换到 v4'),undefined);assert.equal([...nodes(tree),...nodes(footer)].filter(node=>node.type==='button'&&text(node)==='查看并切换到 v4').length,1);
+  const actionRow=nodes(footer).find(node=>node.props.className==='unit-submit-actions');
+  assert.equal(nodes(actionRow).find(node=>node.props.className==='unit-presence-required'),undefined,'原因显示在按钮行之前，两按钮直接同层');
+  assert.match(text(footer),/切换免费，不会生成声音/);
+  const submit=button(footer,'再次提交 1 次请求');assert.equal(submit.props.disabled,true);assert.match(submit.props.className,/button secondary/);assert.match(button(footer,'查看并切换到 v4').props.className,/button primary/);
+  const field=nodes(tree).find(node=>node.type==='Field'&&node.props.label==='下一次生成的背景存在感');assert.equal(field.props.hint,undefined);
+  assert.doesNotMatch(text(tree),/核对与启用免费|检查通过只记录人工听评|这里记录请求是否成功/);
+  tree.props.headerActions.props.onClick();tree=f.render();nodes(tree).find(node=>node.type==='Dialog'&&node.props.title==='声音背景 · 操作说明').props.onClose();tree=f.render();
+  assert.equal(check(tree.props.footer,'明确再次提交').props.checked,false);check(tree.props.footer,'明确再次提交').props.onChange({target:{checked:true}});
+  button(f.render().props.footer,'再次提交 1 次请求').props.onClick();await tick();assert.equal(f.sent.length,0);assert.equal(f.actions.length,0);assert.equal(f.reads.length,0);assert.match(text(f.render().props.footer),/当前旧模板不支持“清楚”/);
+});
+
+test('明确切换后模板选项同步v4；候选未应用时说明状态，保存后使用同一免费预览流程',async()=>{
+  const reads=[],f=await setup(async(path,payload)=>{reads.push([path,payload]);return {before:'旧要求',after:'新要求',to:payload.template};},undefined,undefined,async(name,payload)=>{
+    if(name==='unit.template') { f.props.unit.variants.scene.template=payload.template; f.props.unit.revision++; }
+  });
+  Object.assign(f.props.unit.variants.scene,{template:'scene-v1',backgroundPresence:'clear',latest:'success'});
+  f.props.state.enhancementTemplates=[{id:'scene-v1',name:'场景 v1',mode:'scene',scope:'unit'},{id:'scene-v4-presence-1',name:'场景 v4 · 背景存在感（试验）',mode:'scene',scope:'unit'}];
+  let tree=f.render();
+  const choice=()=>nodes(f.render()).find(node=>node.type==='Select'&&node.props.label==='提示模板');
+  assert.equal(choice().props.value,'scene-v1','真实旧设置仍保留');
+  assert.match(choice().props.options.find(option=>option.value==='scene-v4-presence-1').label,/默认/);
+  choice().props.onChange('scene-v4-presence-1');tree=f.render();
+  assert.match(nodes(tree).find(node=>node.type==='Field'&&node.props.label==='下一次生成的提示模板').props.hint,/尚未应用/);
+  const controller=nodes(tree).find(node=>node.type==='ObjectDraftTools').props.controller;
+  let flushes=0;controller.flush=async()=>{flushes++;};
+  button(tree,'查看模板差异').props.onClick();await tick();
+  assert.equal(flushes,1);assert.equal(reads.length,1);assert.equal(reads[0][0],'/enhancement-preview');assert.equal(f.actions.length,0);assert.equal(f.sent.length,0);
+  assert.match(text(f.render()),/不发送声音请求/);
+  button(f.render(),'使用这个模板').props.onClick();await tick();
+  assert.equal(choice().props.value,'scene-v4-presence-1');assert.equal(f.props.unit.variants.scene.template,'scene-v4-presence-1');
+  assert.equal(nodes(f.render()).find(node=>node.type==='Field'&&node.props.label==='下一次生成的提示模板').props.hint,undefined);
+  assert.equal(button(f.render().props.footer,'查看并切换到 v4'),undefined);assert.equal(f.sent.length,0);
+});
 
 test('旧v2及表面v4但历史编译仍旧时，存在感禁生成；免费核对后明确采用才切模板',async()=>{
   for(const [presence,label,template,resolvedCompilerId] of [['subtle','轻','scene-v2'],['natural','自然','scene-v2'],['clear','清楚','scene-v2'],['clear','清楚','scene-v4-presence-1','native3-paragraph-k']]){
@@ -38,9 +104,9 @@ test('旧v2及表面v4但历史编译仍旧时，存在感禁生成；免费核�
     Object.assign(f.props.unit.variants.scene,{template,resolvedCompilerId,latest:'success',backgroundPresence:presence});
     nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
     let tree=f.render(),submit=button(tree.props.footer,'再做一版');
-    assert.equal(submit.props.disabled,true);assert.match(text(tree.props.footer),new RegExp('所选“'+label+'”尚未生效'));
+    assert.equal(submit.props.disabled,true);assert.match(text(tree.props.footer),new RegExp('当前旧模板不支持“'+label+'”'));
     submit.props.onClick();await tick();assert.equal(f.sent.length,0,'回调保护也不能发送付费请求');
-    const preview=button(f.render().props.footer,'核对并启用背景存在感');assert.equal(preview.props.disabled,false);assert.match(preview.props.className,/button secondary/);
+    const preview=button(f.render().props.footer,'查看并切换到 v4');assert.equal(preview.props.disabled,false);assert.match(preview.props.className,/button primary/);
     preview.props.onClick();await tick();
     assert.equal(reads.length,1);assert.equal(reads[0][0],'/enhancement-preview');assert.equal(reads[0][1].template,'scene-v4-presence-1');assert.equal(f.actions.length,0);assert.equal(f.sent.length,0);
     tree=f.render();assert.equal(tree.props.title,'切换提示模板');button(tree,'使用这个模板').props.onClick();await tick();
@@ -59,7 +125,7 @@ test('选择仍在保存时可核对；预览等flush并使用新章与单元版
   f.runtime.persistSave=async()=>saved;
   const pendingSave=controller.options.persist(controller.draft,1,{chapterRevision:1,operationId:'save-presence',replay:false});
   controller.flush=async()=>{order.push('flush');const receipt=await pendingSave;controller.draft=receipt.value;controller.dirty=false;controller.saving=false;order.push('saved');};
-  const preview=button(f.render(),'核对并启用背景存在感');assert.equal(preview.props.disabled,false);
+  const preview=button(f.render().props.footer,'查看并切换到 v4');assert.equal(preview.props.disabled,false);
   preview.props.onClick();await tick();assert.deepEqual(order,['flush']);assert.equal(reads.length,0);assert.equal(f.sent.length,0);
   finishSave({revision:3,chapterRevision:5,variants:{scene:{guidance:'保留要求',backgroundPresence:'clear'}}});await tick();await tick();
   assert.deepEqual(order,['flush','saved','preview']);assert.equal(reads[0][1].revision,5);assert.equal(reads[0][1].entityRevision,3);assert.equal(reads[0][1].id,'group');assert.equal(reads[0][1].mode,'scene');
@@ -72,7 +138,7 @@ test('v4存在感和旧模板未指定仍走正常明确生成，旧模板免费
     nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
     const tree=f.render(),submit=button(tree.props.footer,'再做一版');assert.equal(submit.props.disabled,false);
     assert.doesNotMatch(text(tree.props.footer),/尚未生效/);submit.props.onClick();await tick();assert.equal(f.sent.length,1);assert.equal(f.sent[0][1].kind,'sceneAndGenerate');
-    if(template==='scene-v2')assert.ok(button(tree,'核对并启用背景存在感'));
+    if(template==='scene-v2')assert.ok(button(tree,'查看并切换到 v4'));
   }
 });
 
@@ -218,8 +284,8 @@ test('实际选用的背景声和纯人声显示正在使用；听评明确为�
   const f=await setup();f.props.unit.mode='scene';f.props.unit.variants.scene.current='current-scene';f.props.unit.variants.scene.latest='success';
   f.props.chapter.playbackItems=[{id:'group',unitId:'group',mode:'scene',audioId:'current-scene',validity:'matched'}];
   let tree=f.render(),selected=button(tree,'正在使用带背景声');
-  assert.equal(selected.props.disabled,true);assert.match(text(tree),/这份声音已经选用，无需再次点击/);assert.match(text(tree),/人工听评通过/);
-  assert.ok(nodes(tree).some(node=>node.type==='p'&&node.props.id===selected.props['aria-describedby']));
+  assert.equal(selected.props.disabled,true);assert.doesNotMatch(text(tree),/这份声音已经选用，无需再次点击/);assert.match(text(tree),/人工听评通过/);
+  assert.equal(selected.props['aria-describedby'],undefined);
   assert.equal(button(tree,'使用这份带背景声'),undefined);
   f.props.mode='dry';f.props.unit.mode='dry';f.props.chapter.playbackItems=[{id:'group',mode:'dry',audioId:'old-dry',validity:'matched'}];
   tree=f.render();assert.equal(button(tree,'正在使用纯人声').props.disabled,true);
@@ -229,7 +295,7 @@ test('实际选用的背景声和纯人声显示正在使用；听评明确为�
 test('选用另一份匹配声音只切换一次；刷新后改为正在使用，未进入编排不冒充已使用',async()=>{
   const f=await setup();f.props.unit.variants.scene.current='scene';f.props.unit.variants.scene.latest='success';
   f.props.chapter.playbackItems=[{id:'group',unitId:'group',mode:'dry',audioId:'old-dry',validity:'matched'}];
-  let tree=f.render();assert.equal(button(tree,'使用这份带背景声').props.disabled,false);assert.match(text(tree),/不会重新生成或产生费用/);
+  let tree=f.render();assert.equal(button(tree,'使用这份带背景声').props.disabled,false);assert.doesNotMatch(text(tree),/不会重新生成或产生费用/);
   button(tree,'使用这份带背景声').props.onClick();await tick();
   assert.equal(f.actions.length,1);assert.equal(f.actions[0][0],'unit.switch');assert.equal(f.actions[0][1].mode,'scene');assert.equal(f.sent.length,0);
   f.props.unit.mode='scene';tree=f.render();assert.equal(button(tree,'使用这份带背景声').props.disabled,true);assert.equal(button(tree,'正在使用带背景声'),undefined);assert.match(text(tree),/未进入当前整章编排/);
@@ -262,7 +328,7 @@ test('声音面板先试听再历史与下一版编辑，请求记录不冒充�
   assert.ok(position('unit-edit-settings')<position('unit-submit-authorization'));
   assert.ok(!all.some(node=>node.props.className==='task-outcome'));assert.equal(button(tree,'试听这次结果'),undefined);
   for(const label of ['人工听评已通过','标记需要重做','恢复上一版','恢复最近通过版'])assert.match(button(tree,label).props.className,/button secondary/);
-  assert.match(text(tree),/修改背景设置不会改变已生成的音频/);
+  assert.doesNotMatch(text(tree),/修改背景设置不会改变已生成的音频/);
 });
 
 test('任意旧设置历史先免费核对，预览具体背景，明确恢复才改变当前声音',async()=>{
@@ -306,4 +372,30 @@ test('底部恢复草稿和停止请求的失败都在原按钮附近显示，�
   f.props.state.jobs=[{id:'job',unitId:'group',status:'queued',done:0,total:1}];
   button(f.render().props.footer,'停止后续请求').props.onClick();await tick();
   assert.match(text(f.render().props.footer),/停止请求失败/);assert.equal(f.sent.length,0);
+});
+
+
+test('存在感独立位于历史下方且默认清楚，编辑区有显式SVG展开标记；打开不写设置',async()=>{
+  const f=await setup();delete f.props.unit.variants.scene.backgroundPresence;f.props.unit.variants.scene.latest='success';
+  const tree=f.render(),all=nodes(tree),presence=all.find(node=>node.props.className?.includes('unit-background-presence'));
+  const history=all.find(node=>node.props.className?.includes('unit-history'));
+  const members=all.find(node=>node.props.className?.includes('unit-member-context'));
+  const editor=all.find(node=>node.props.className==='unit-edit-settings');
+  assert.ok(presence);assert.ok(all.indexOf(history)<all.indexOf(presence));assert.ok(all.indexOf(presence)<all.indexOf(members));
+  assert.ok(!nodes(editor).some(node=>node.type==='Select'&&node.props.label==='背景存在感'));
+  const select=nodes(presence).find(node=>node.type==='Select');assert.equal(select.props.value,'clear');assert.equal(select.props.options[0].value,'clear');
+  assert.ok(nodes(editor).some(node=>node.type==='ChevronRight'&&node.props['aria-hidden']==='true'));
+  assert.equal(f.actions.length+f.reads.length+f.sent.length,0);
+  assert.equal(f.props.unit.variants.scene.backgroundPresence,undefined);
+  for(const value of ['subtle','natural','unspecified']){const old=await setup();old.props.unit.variants.scene.backgroundPresence=value;assert.equal(nodes(old.render()).find(node=>node.type==='Select'&&node.props.label==='背景存在感').props.value,value);}
+});
+
+test('缺省清楚在明确分析操作前保存，用返回版本而非旧版本，已有音频不删',async()=>{
+  const f=await setup();delete f.props.unit.variants.scene.backgroundPresence;
+  const saved=[];f.runtime.persistSave=async(kind,payload)=>{saved.push([kind,payload]);return {...f.props.unit,revision:2,chapterRevision:3,variants:{...f.props.unit.variants,scene:{...f.props.unit.variants.scene,backgroundPresence:'clear'}}};};
+  let tree=f.render();assert.equal(saved.length,0);
+  const analysis=nodes(tree).find(node=>node.type==='SceneSuggestions');
+  assert.deepEqual(await analysis.props.savedBase(),{revision:3,entityRevision:2});assert.equal(saved.length,1);assert.equal(saved[0][0],'unit.update');assert.equal(saved[0][1].backgroundPresence,'clear');
+  assert.deepEqual(await analysis.props.savedBase(),{revision:3,entityRevision:2});assert.equal(saved.length,1,'同一已确认设置不再次写');
+  assert.equal(f.sent.length,0);assert.equal(f.actions.length,0);assert.equal(f.props.unit.variants.scene.current,null);
 });

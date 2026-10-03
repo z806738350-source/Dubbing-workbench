@@ -262,6 +262,8 @@ export async function startServer({
         return send(res, 200, await analysis.start(await body(req)));
       if (req.method === "POST" && path === "/api/analysis/apply")
         return send(res, 200, analysis.apply(await body(req)));
+      if (req.method === "POST" && path === "/api/analysis/reuse")
+        return send(res, 200, analysis.reuse(await body(req)));
       if (req.method === "POST" && path === "/api/analysis/edit")
         return send(res, 200, analysis.edit(await body(req)));
       if (req.method === "POST" && path === "/api/analysis/resume")

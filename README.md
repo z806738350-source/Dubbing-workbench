@@ -8,6 +8,8 @@
 
 仓库包含源码、设计文档与验收摘要。密钥、小说测试素材、逐句听评表、生成音频、运行数据及备份仅保存在本地；验收文档中的这些本地证据链接在 GitHub 上不可用。
 
+当前改版分支的总体复审范围、最新测试与已知待修问题见 [2026-10-03 云端复审交接](doc/ux-hardening/cloud-review-handoff-2026-10-03.md)。
+
 声音创建、多人干声对戏及场景版本已接入工作台。操作和限制见 [增强阶段使用说明](doc/enhancement/release-notes.md)，交付记录见 [增强阶段状态](doc/enhancement/execution-status.md)，逐项证据见 [增强验收矩阵](doc/enhancement/acceptance-matrix.md)。对戏与场景保持实验标识；工程通过和声音听评分别记录。
 
 `e37b7bf` 独立审核后的三项补修及回归范围见 [2026-10-02 审核补修记录](doc/enhancement/audit-fix-2026-10-02.md)。

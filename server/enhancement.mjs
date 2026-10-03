@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fail, same, text, uid } from './store.mjs';
-import { compile, templateOf, resolveCompiler, sceneContract, validEventDescription, assertQuoteAnchor, sceneIntentConflicts } from './templates.mjs';
+import { compile, templateOf, resolveCompiler, sceneContract, validEventDescription, assertQuoteAnchor, sceneIntentConflicts, scenePresenceConflicts } from './templates.mjs';
 import { storedAudioUnavailable } from './audio.mjs';
 import { configurationDecided } from './experience.mjs';
 
@@ -27,7 +27,7 @@ export function createEnhancement(store, d) {
   const enabled = key => { if (!features()[key]) fail('此增强功能已关闭，已有资源仍可查看和处理'); };
   function syncLegacySegment(s) {
     let u = store.maybe('units', s.id);
-    if (!u) u = { id: s.id, chapterId: s.chapterId, kind: 'single', members: [s.id], state: 'active', revision: 1, membershipRevision: 1, mode: 'dry', guidance: '', variants: { dry: variant(), scene: {...variant(),template:'scene-v2'} }, createdAt: stamp() };
+    if (!u) u = { id: s.id, chapterId: s.chapterId, kind: 'single', members: [s.id], state: 'active', revision: 1, membershipRevision: 1, mode: 'dry', guidance: '', variants: { dry: variant(), scene: {...variant(),template:'scene-v4-presence-1',backgroundPresence:'clear'} }, createdAt: stamp() };
     u.state = s.retired ? 'retired' : 'active';
     const before = u.variants.dry;
     const dry = { ...before, current: s.current || null, previous: s.previous || null, approved: s.approved || null, review: s.review || null, latest: s.latest || 'none' };
@@ -100,11 +100,17 @@ export function createEnhancement(store, d) {
     if (validatePrompt && selected.some(e => e.validity !== 'valid')) fail('场景事件已失效，请重新确认或明确移除后再生成', 409);
     const v = u.variants[mode];
     const guidance = v.guidance ?? (mode === 'dry' ? u.guidance || '' : '');
-    const template = v.template || (mode === 'scene' ? 'scene-v1' : u.kind === 'single' ? first.template : 'dialogue-dry-v1');
+    let sceneTemplate = 'scene-v1';
+    if (mode === 'scene' && !v.template && !v.resolvedCompilerId && !v.current && !v.previous && !v.approved && !store.unitHistory(u,'scene',[]).length) {
+      const pending = store.all('jobs',u.chapterId).filter(j=>active(j) || j.status==='unknown').flatMap(j=>store.all('attempts',j.id)).find(a=>a.targetKind==='unit' && (a.unitId || a.targetId || a.input?.unitId)===u.id && (a.mode || a.input?.mode)==='scene' && ['queued','sending','unknown'].includes(a.status));
+      sceneTemplate = pending?.input?.template || (pending ? 'scene-v1' : 'scene-v4-presence-1');
+    }
+    const template = v.template || (mode === 'scene' ? sceneTemplate : u.kind === 'single' ? first.template : 'dialogue-dry-v1');
     if (forGeneration && mode === 'scene' && v.backgroundPresence && v.backgroundPresence !== 'unspecified' && (v.resolvedCompilerId || template) !== 'scene-v4-presence-1') fail('所选背景存在感尚未生效，请先核对并使用存在感模板；本次未发送');
     const input = { targetKind: 'unit', unitId: u.id, mode, model: model || first.model || 'seed-audio-1.0', template, config: first.config, members: rows.map(s => ({ id: s.id, roleId: s.roleId, type: s.type, text: s.text, voiceId: s.voiceId, performance: s.performance })), slots, referenceVoiceIds, guidance, events: selected.map(eventInput), ...(mode==='scene' && v.backgroundPresence ? {backgroundPresence:v.backgroundPresence} : {}), ...(v.resolvedCompilerId ? {compilerId:v.resolvedCompilerId} : {}) };
     if (template==='scene-v4-presence-1') input.constraintSources={guidance:v.guidanceSource || {kind:guidance?'inherited_user':'system_default'},backgroundPresence:v.backgroundPresenceSource || {kind:'system_default'},events:selected.map(e=>({id:e.id,source:e.source || {kind:e.evidence?.suggestionId?'adopted_ai':'inherited_user'}}))};
     if (u.kind === 'single' && mode === 'dry') Object.assign(input, d.inputOf(first), v.template ? {template:v.template} : {});
+    if (forGeneration && mode === 'scene') { const conflicts=scenePresenceConflicts(input); if (conflicts.length) fail(conflicts.join('；')+'；请修改背景描述或共同要求后再生成，本次未发送',409); }
     if (!validatePrompt) return input;
     const prompt = compile(input);
     if (Array.from(prompt).length > sceneContract.promptMax) fail('完整提示超过 3000 字符，请缩减指导或拆小范围；未发送');
@@ -182,7 +188,7 @@ export function createEnhancement(store, d) {
     chapter ||= store.maybe('chapters',u.chapterId);
     const diagnostics = []; try { members(u); } catch (error) { diagnostics.push(error.message); }
     const states = Object.fromEntries(['dry','scene'].map(mode=>[mode,status(u,mode,chapter)]));
-    let sceneConflicts=[];try { sceneConflicts=sceneIntentConflicts(states.scene.input || buildInput(u,'scene',undefined,false,false,chapter)); } catch { /* Structural diagnostics above retain the root reason. */ }
+    let sceneConflicts=[];try { const input=states.scene.input || buildInput(u,'scene',undefined,false,false,chapter);sceneConflicts=[...sceneIntentConflicts(input),...scenePresenceConflicts(input)]; } catch { /* Structural diagnostics above retain the root reason. */ }
     return { ...u, diagnostics, sceneConflicts, guidance: u.variants[u.mode].guidance ?? (u.mode === 'dry' ? u.guidance || '' : ''), variants: Object.fromEntries(['dry', 'scene'].map(mode => [mode, { ...u.variants[mode], status: states[mode], history:history(u,mode,chapter,states[mode]) }])), status: states[u.mode], events: events(u) };
   }
   function resolve(chapterId, chapter) {
@@ -242,7 +248,7 @@ export function createEnhancement(store, d) {
     const rows = d.list(c.id), start = rows.findIndex(s => s.id === p.ids[0]);
     if (!same(rows.slice(start, start + p.ids.length).map(s => s.id), p.ids) || rows.slice(start, start + p.ids.length).some(s => s.excluded)) fail('只能选择同章按真实顺序连续的有效台词');
     if (store.all('units', c.id).some(u => u.kind === 'group' && ['active', 'pending'].includes(u.state) && u.members.some(id => p.ids.includes(id)))) fail('成员已属于活动或待生成组，请先解除', 409);
-    const u = { id: uid(), chapterId: c.id, kind: 'group', members: p.ids, state: 'pending', revision: 1, membershipRevision: 1, mode: 'dry', guidance: p.guidance || '', variants: { dry: variant(), scene: {...variant(),template:'scene-v2'} }, createdAt: stamp() };
+    const u = { id: uid(), chapterId: c.id, kind: 'group', members: p.ids, state: 'pending', revision: 1, membershipRevision: 1, mode: 'dry', guidance: p.guidance || '', variants: { dry: variant(), scene: {...variant(),template:'scene-v4-presence-1',backgroundPresence:'clear'} }, createdAt: stamp() };
     if (typeof u.guidance !== 'string' || u.guidance.length > 2000) fail('组指导最多 2000 字');
     u.variants.dry.guidance = u.guidance;
     const input = buildInput(u, 'dry', undefined, true);
@@ -358,6 +364,7 @@ export function createEnhancement(store, d) {
     const history = store.all('attempts'), later = history.slice(history.findIndex(v => v.id === a.id) + 1).some(v => v.targetKind === 'unit' && (v.unitId || v.targetId) === u.id && v.mode === a.mode);
     if (!active(job) || ['dissolved','retired'].includes(u.state) || later || c.revision !== job.revision || u.revision !== a.unitRevision || !same(basis(u, a.mode), a.basis)) return false;
     const v = u.variants[a.mode], old = v.current;
+    if (a.mode === 'scene' && !v.template && !v.resolvedCompilerId && a.input.template === 'scene-v4-presence-1') v.template = a.input.template;
     if (old !== audio.id) v.previous = old;
     v.current = audio.id; v.review = null; v.latest = 'success';
     const changed = u.mode !== a.mode || u.state === 'pending' || old !== audio.id;
@@ -514,5 +521,5 @@ export function createEnhancement(store, d) {
   function compilerCompatibility() {
     return store.all('audios').filter(a=>a.input?.template==='scene-v3-native').map(a=>({audioId:a.id,unitId:a.input.unitId,oldTemplateId:a.input.template,promptSha256:createHash('sha256').update(a.prompt || '').digest('hex'),resolvedCompilerId:resolveCompiler(a.input,a.prompt),affectedModes:[a.input.mode || 'scene'],readOnly:true}));
   }
-  return { invalidateEvents, history, compilerCompatibility, restorePlan, assertLegacyGeneration, syncLegacy, syncLegacySegment, features, getUnit, members, input: buildInput, basis, status, view, resolve, inspectArrangement, events, eventBasis, assertEventRange, addEvents, snapshot, prepare, prepareRender, validateDispatch, register, setAttemptStatus, preview, dissolvePlan, mutate, assertStructural };
+  return { invalidateEvents, history, compilerCompatibility, restorePlan, assertLegacyGeneration, syncLegacy, syncLegacySegment, features, getUnit, members, input: buildInput, basis, status, view, resolve, inspectArrangement, events, eventBasis, assertEventRange, validateEvent, addEvents, snapshot, prepare, prepareRender, validateDispatch, register, setAttemptStatus, preview, dissolvePlan, mutate, assertStructural };
 }

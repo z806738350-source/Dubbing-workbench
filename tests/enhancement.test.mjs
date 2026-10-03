@@ -71,6 +71,7 @@ test('F05放弃A只更新列表，排队B和在途B内容基准继续有效',t=>
 
 test('N01同ID旧C/D语法逐字分类并恢复matched，原input和prompt不重写',t=>{
   const {store,d,c,e,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id;
+  mutateUnit('unit.update',store.get('units',id),{mode:'scene',backgroundPresence:'unspecified'});
   mutateUnit('unit.template',store.get('units',id),{mode:'scene',template:'scene-v3-native',confirm:true});
   const old=complete(id,'scene'),audio=store.get('audios',old.audio.id);
   // A literal frozen old prompt is independent of today's compiler. This is
@@ -341,12 +342,42 @@ test('待生成对戏的匹配历史产物明确恢复后才启用整段编排',
   assert.equal(restored.state,'active');assert.equal(restored.status.validity,'matched');assert.equal(restored.status.review,'pending');assert.equal(e.resolve(c.id)[0].s.id,group.id);assert.equal(e.resolve(c.id)[0].a.id,audio.id);assert.equal(store.all('jobs').length,0);
 });
 
-test('场景模板 v2 仅初始化新单元；旧缺省声音保持匹配，明确切换和恢复保留历史',t=>{
+test('无场景历史的缺省模板使用v4，预备与派发一致且成功采用后仍匹配',t=>{
+  const {store,d,c,e,complete}=setup(t),id=d.list(c.id)[0].id,unit=store.get('units',id);
+  unit.variants.scene.template=null;store.put('units',unit,c.id);
+  const before=store.all('units'),input=e.input(unit,'scene');assert.equal(input.template,'scene-v4-presence-1');assert.equal(input.backgroundPresence,'clear');assert.match(compile(input),/明确存在感/);
+  const prepared=e.prepare({kind:'unit-generate',chapterId:c.id,revision:store.get('chapters',c.id).revision,unitId:id,mode:'scene'},{model:'seed-audio-1.0'}),attempt=prepared.attempts[0];
+  assert.equal(attempt.input.template,'scene-v4-presence-1');assert.doesNotThrow(()=>e.validateDispatch(prepared.job,attempt));assert.deepEqual(store.all('units'),before);
+  const result=complete(id,'scene'),current=store.get('units',id);assert.equal(result.adopted,true);assert.equal(current.variants.scene.template,'scene-v4-presence-1');assert.equal(e.status(current,'scene').validity,'matched');assert.equal(e.history(current,'scene').find(a=>a.id===result.audio.id).matched,true);
+});
+
+test('缺省模板保留无current的场景历史、明确旧模板与旧编译器',t=>{
+  const {store,d,c,e,complete}=setup(t),id=d.list(c.id)[0].id,unit=store.get('units',id);
+  unit.variants.scene.template='scene-v1';delete unit.variants.scene.backgroundPresence;store.put('units',unit,c.id);
+  assert.equal(e.input(unit,'scene').template,'scene-v1');
+  const old=complete(id,'scene'),saved=store.get('audios',old.audio.id),current=store.get('units',id);delete current.variants.scene.template;current.variants.scene.current=null;current.variants.scene.previous=null;current.variants.scene.approved=null;store.put('units',current,c.id);
+  assert.equal(e.input(current,'scene').template,'scene-v1');assert.equal(e.history(current,'scene').find(a=>a.id===old.audio.id).matched,true);assert.deepEqual(store.get('audios',old.audio.id),saved);
+  const other=store.get('units',d.list(c.id)[1].id);other.variants.scene.template=null;other.variants.scene.resolvedCompilerId='native3-paragraph-k';store.put('units',other,c.id);
+  assert.equal(e.input(other,'scene',undefined,false,false).template,'scene-v1');assert.equal(e.input(other,'scene',undefined,false,false).compilerId,'native3-paragraph-k');
+});
+
+test('缺省模板保留在途和unknown场景冻结请求，旧失败请求不阻止新默认',async t=>{
+  for (const [jobStatus,status] of [['queued','queued'],['running','sending'],['unknown','unknown'],['failed','failed']]) await t.test(status,t=>{
+    const {store,d,c,e}=setup(t),id=d.list(c.id)[0].id,unit=store.get('units',id);unit.variants.scene.template=null;delete unit.variants.scene.backgroundPresence;store.put('units',unit,c.id);
+    const input={...e.input(unit,'scene',undefined,false,false),template:'scene-v1'},job={id:uid(),kind:'unit-generate',chapterId:c.id,revision:store.get('chapters',c.id).revision,status:jobStatus},attempt={id:uid(),jobId:job.id,targetKind:'unit',targetId:id,unitId:id,mode:'scene',unitRevision:unit.revision,membershipRevision:unit.membershipRevision,basis:e.basis(unit,'scene'),input,prompt:compile(input),status};store.put('jobs',job,c.id);store.put('attempts',attempt,job.id);
+    const before=['units','jobs','attempts','audios'].map(kind=>store.all(kind));assert.equal(e.input(unit,'scene').template,status==='failed'?'scene-v4-presence-1':'scene-v1');
+    if(status!=='failed') assert.doesNotThrow(()=>e.validateDispatch(job,attempt));
+    assert.deepEqual(['units','jobs','attempts','audios'].map(kind=>store.all(kind)),before);
+  });
+});
+
+test('场景模板 v4 与清楚初始化新单元；旧缺省声音保持匹配，明确切换和恢复保留历史',t=>{
   const {store,d,c,e,edit,complete,mutateUnit}=setup(t),ids=d.list(c.id).map(s=>s.id),group=edit('unit.create',{ids:ids.slice(0,2)});
   for(const id of [ids[2],group.id]){
-    const initial=store.get('units',id);assert.equal(initial.variants.scene.template,'scene-v2');assert.equal(e.input(initial,'scene').template,'scene-v2');
-    delete initial.variants.scene.template;store.put('units',initial,c.id);
+    const initial=store.get('units',id);assert.equal(initial.variants.scene.template,'scene-v4-presence-1');assert.equal(initial.variants.scene.backgroundPresence,'clear');assert.equal(e.input(initial,'scene').template,'scene-v4-presence-1');
+    delete initial.variants.scene.backgroundPresence;initial.variants.scene.template='scene-v1';store.put('units',initial,c.id);
     const old=complete(id,'scene');assert.equal(old.audio.input.template,'scene-v1');
+    const implicit=store.get('units',id);delete implicit.variants.scene.template;store.put('units',implicit,c.id);
     mutateUnit('unit.review',store.get('units',id),{mode:'scene',audioId:old.audio.id,basis:old.a.basis,state:'passed'});
     let current=store.get('units',id);const savedAudio=store.get('audios',old.audio.id);
     const reopened=createDomain(store).enhancement;
@@ -367,6 +398,7 @@ test('场景模板 v2 仅初始化新单元；旧缺省声音保持匹配，明�
 
 test('存在感模板切换预览清除旧编译器，before和历史仍按原版本',t=>{
   const {store,d,c,e,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id;
+  mutateUnit('unit.update',store.get('units',id),{mode:'scene',backgroundPresence:'unspecified'});
   mutateUnit('unit.template',store.get('units',id),{mode:'scene',template:'scene-v3-native',confirm:true});
   const old=complete(id,'scene');mutateUnit('unit.restore',store.get('units',id),{mode:'scene',audioId:old.audio.id,restoreSettings:true});
   mutateUnit('unit.update',store.get('units',id),{mode:'scene',backgroundPresence:'clear'});
@@ -381,7 +413,9 @@ test('存在感模板切换预览清除旧编译器，before和历史仍按原�
 
 test('存在感生成资格不阻断旧声音历史、模板预览与设置恢复',async t=>{
   for(const presence of ['clear','natural','subtle']) await t.test(presence,t=>{
-    const {store,d,c,e,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id,old=complete(id,'scene'),saved=store.get('audios',old.audio.id);
+    const {store,d,c,e,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id;
+    const legacy=store.get('units',id);legacy.variants.scene.template='scene-v2';delete legacy.variants.scene.backgroundPresence;store.put('units',legacy,c.id);
+    const old=complete(id,'scene'),saved=store.get('audios',old.audio.id);
     mutateUnit('unit.update',store.get('units',id),{mode:'scene',backgroundPresence:presence});
     const u=store.get('units',id),base={chapterId:c.id,revision:store.get('chapters',c.id).revision,id,entityRevision:u.revision,mode:'scene'};
     assert.equal(e.status(u,'scene').validity,'matched');
@@ -551,4 +585,22 @@ test('RG05 group与scene审核仍严格匹配完整成员model，不套旧single
     delete current.variants[mode].review.basis.members[0].model;store.put('units',current,c.id);
     assert.equal(e.status(current,mode).validity,'matched');assert.equal(e.status(current,mode).review,'pending');
   }
+});
+
+
+test('存在感矛盾阻断提交与最终派发，历史声音仍可读取匹配恢复',t=>{
+  const {store,d,c,e,edit,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id;
+  edit('event.create',{unitId:id,entityRevision:store.get('units',id).revision,kind:'environment',description:'清楚可辨的山洞水滴',memberId:id,position:'during',state:'adopted'});
+  const old=complete(id,'scene'),event=store.all('events',id)[0];
+  edit('event.update',{unitId:id,eventId:event.id,entityRevision:store.get('units',id).revision,eventRevision:event.revision,description:'山洞水滴极微弱、几乎不可闻'});
+  const u=store.get('units',id),before=JSON.stringify(store.all('audios'));
+  assert.throws(()=>e.prepare({kind:'unit-generate',chapterId:c.id,revision:store.get('chapters',c.id).revision,unitId:id,mode:'scene'},{model:'seed-audio-1.0'}),/背景.*矛盾|存在感/);
+  // A queued request accepted by an older build has matching revisions, but must now fail before dispatch.
+  const legacyJob={...old.job,revision:store.get('chapters',c.id).revision},legacyAttempt={...old.a,unitRevision:u.revision,basis:e.basis(u,'scene')};
+  assert.throws(()=>e.validateDispatch(legacyJob,legacyAttempt),/背景.*矛盾|存在感/);
+  assert.equal(JSON.stringify(store.all('audios')),before);
+  assert.ok(e.view(u).sceneConflicts.some(message=>message.includes('存在感')));
+  const restored=mutateUnit('unit.restore',u,{mode:'scene',audioId:old.audio.id,restoreSettings:true});
+  assert.equal(restored.variants.scene.status.validity,'matched');assert.equal(restored.variants.scene.backgroundPresence,'clear');
+  assert.equal(store.get('events',event.id).description,'清楚可辨的山洞水滴');assert.equal(JSON.stringify(store.all('audios')),before);
 });

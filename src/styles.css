@@ -2140,7 +2140,7 @@ input[type="range"]::-moz-range-thumb {
 .dialog-footer:has(.unit-submit-scope) { display: block; }
 .unit-submit { display: grid; gap: 12px; width: 100%; }
 .unit-submit-scope { margin: 0; font-size: 13px; line-height: 1.6; color: var(--color-muted); }
-.unit-submit-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.unit-submit-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .selected-task { background: var(--color-selected); border-radius: var(--radius-md); }
 @media (max-width: 1100px) { .chapter-heading .production-steps { flex-basis: 100%; order: 3; } }
 @media (max-width: 760px) { .chapter-heading { padding-inline: 16px; } .chapter-heading .production-steps { gap: 4px 10px; } .chapter-heading p progress { display: none; } .group-strip { padding: 8px; } .group-actions { gap: 4px 12px; } }
@@ -2205,3 +2205,73 @@ input[type="range"]::-moz-range-thumb {
 .chapter-heading .task-banner span { display: inline; overflow-wrap: anywhere; }
 .chapter-heading .task-banner button { min-height: 32px; }
 @media (max-width: 760px) { .chapter-heading { padding-inline: var(--space-md); } .chapter-heading .chapter-actions > .primary { margin-left: 0; } }
+
+/* Hallmark · component: sound-panel help · preserve Workbench tokens and actions
+ * pre-emit critique: P4 H5 E4 S5 R5 V3 */
+.dialog-head:has(.unit-help-trigger) { gap: var(--space-xs); }
+.dialog-head:has(.unit-help-trigger) h2 { flex: 1; min-width: 0; }
+.unit-help-trigger { width: 44px; height: 44px; border: var(--rule-width) solid var(--color-rule); background: var(--color-paper); }
+.dialog:has(.unit-help-trigger) .dialog-head > .icon, .dialog:has(.unit-help-content) .dialog-head > .icon { width: 44px; height: 44px; }
+@media (hover: hover) { .unit-help-trigger:hover { background: var(--color-hover); color: var(--color-ink); } }
+.unit-help-trigger[aria-expanded="true"] { background: var(--color-selected); color: var(--color-accent); }
+.unit-help-content { display: grid; gap: var(--space-lg); }
+.unit-help-content section { min-width: 0; }
+.unit-help-content h3 { margin: 0 0 var(--space-xs); }
+.unit-help-content p { margin: 0; color: var(--color-secondary); line-height: 1.75; overflow-wrap: anywhere; }
+.unit-help-content p + p { margin-top: var(--space-xs); }
+.unit-current-action, .unit-review-actions, .unit-history-actions { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-block: var(--space-sm); }
+.unit-review-actions { padding-top: var(--space-sm); border-top: var(--rule-width) solid var(--color-rule); }
+.unit-history, .unit-member-context { margin-top: var(--space-sm); padding-top: var(--space-sm); }
+.unit-history > summary { margin-bottom: 0; }
+.unit-presence-required { margin: var(--space-xs) 0 0; color: var(--color-warning); }
+@media (max-width: 480px) {
+  .unit-current-action, .unit-review-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .unit-current-action .button, .unit-review-actions .button, .unit-submit-actions .button, .unit-presence-required .button { min-height: 44px; max-width: 100%; }
+}
+
+/* Hallmark · component: scene suggestions · existing Workbench tokens
+ * states: default, hover, focus, active, disabled, loading, error, success
+ * pre-emit critique: P4 H5 E4 S5 R5 V3 */
+.scene-suggestions { min-width: 0; }
+.scene-suggestions > summary { min-height: 44px; cursor: pointer; font-weight: 600; }
+.scene-analysis-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-sm); }
+.scene-suggestions .button, .scene-analysis-permission > summary, .scene-suggestions .select-trigger { min-height: 44px; }
+.scene-analysis-permission { margin-block: var(--space-xs) var(--space-md); }
+.scene-analysis-permission > summary { display: flex; align-items: center; width: fit-content; gap: var(--space-xs); padding: var(--space-xs) var(--space-sm); border: var(--rule-width) solid var(--color-rule); border-radius: var(--radius-sm); color: var(--color-secondary); background: var(--color-paper); cursor: pointer; font-size: var(--text-sm); white-space: nowrap; }
+.scene-analysis-permission > summary::after { content: "+"; font-weight: 600; }
+.scene-analysis-permission[open] > summary::after { content: "−"; }
+.scene-analysis-permission .task-authorization { margin-block: var(--space-xs); }
+.scene-analysis-permission > .hint { margin-top: var(--space-xs); }
+.scene-analysis-views { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: var(--space-2xs); gap: var(--space-2xs); background: var(--color-input); border-radius: var(--radius-sm); margin-block: var(--space-md); }
+.scene-analysis-views button { min-width: 0; min-height: 44px; padding: var(--space-xs); border: var(--rule-width) solid transparent; border-radius: var(--radius-xs); color: var(--color-secondary); white-space: nowrap; }
+.scene-analysis-views button[aria-pressed="true"] { background: var(--color-paper); color: var(--color-ink); border-color: var(--color-rule); font-weight: 600; }
+.scene-analysis-results, .scene-analysis-history { min-width: 0; }
+.scene-analysis-history > .scene-analysis-results { margin-top: var(--space-sm); }
+.scene-analysis-result-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-xs); margin-bottom: var(--space-2xs); }
+.scene-analysis-result-head h3 { margin: 0; }
+.scene-analysis-count { color: var(--color-secondary); font-size: var(--text-xs); }
+.scene-analysis-meta { color: var(--color-muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.scene-analysis-status, .scene-analysis-results > .warning, .scene-analysis-results > .error-inline { margin-top: var(--space-sm); line-height: 1.65; overflow-wrap: anywhere; }
+.scene-analysis-status { color: var(--color-secondary); }
+.scene-analysis-list { display: grid; gap: var(--space-sm); margin-top: var(--space-sm); }
+.scene-analysis-list:empty { display: none; }
+.scene-suggestions .task-event-card { margin: 0; padding: var(--space-sm); min-width: 0; }
+.scene-suggestions .task-event-card .check-label { margin: 0 0 var(--space-xs); min-height: 44px; align-items: start; color: var(--color-ink); font-weight: 500; overflow-wrap: anywhere; }
+.scene-suggestions .task-event-card input { margin-top: var(--space-2xs); }
+.scene-suggestions .task-event-card summary { margin: 0; min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--color-secondary); font-size: var(--text-sm); }
+.scene-suggestions .task-event-card summary::before { content: "▸"; margin-right: var(--space-xs); }
+.scene-suggestions .task-event-card details[open] summary::before { content: "▾"; }
+.scene-analysis-apply { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-xs); margin-top: var(--space-md); padding-top: var(--space-sm); border-top: var(--rule-width) solid var(--color-rule); }
+.scene-analysis-apply > .error-inline { flex-basis: 100%; margin: 0; }
+.scene-analysis-apply > .success-text { flex-basis: 100%; margin: 0; }
+@media (hover: hover) { .scene-analysis-views button:hover, .scene-analysis-permission > summary:hover, .scene-suggestions .button.secondary:hover { background: var(--color-hover); color: var(--color-ink); } }
+@media (max-width: 480px) { .scene-analysis-toolbar, .scene-analysis-apply { display: grid; grid-template-columns: minmax(0, 1fr); } .scene-analysis-apply .button { width: 100%; } }
+
+/* Background presence is a primary setting, separate from manual scene editing. */
+.unit-background-presence .field { margin-bottom: 0; }
+.unit-background-presence [role="combobox"] { min-height: 44px; }
+.unit-background-presence .warning { margin-top: var(--space-md); }
+.unit-edit-settings > summary { gap: 8px; list-style: none; }
+.unit-edit-settings > summary::-webkit-details-marker { display: none; }
+.unit-edit-settings > summary .unit-disclosure-icon { flex: 0 0 auto; }
+.unit-edit-settings[open] > summary .unit-disclosure-icon { transform: rotate(90deg); }
