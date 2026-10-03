@@ -81,7 +81,11 @@ test('director 拆长段继承人工角色、本句声音和参数；重复准�
   const parent=f.store.get('segments',f.parent.id),neighbors=f.rows().filter(s=>s.id!==parent.id);f.mock();
   const op=await f.prepare({ids:[parent.id]}),children=f.rows().filter(s=>!neighbors.some(n=>n.id===s.id));
   assert.ok(children.length>=2);assert.equal(children.map(s=>s.text).join(''),parent.text);
-  for(const child of children)for(const key of ['roleId','type','voiceId','voiceSource','performance','config','template','model','protectedFields','decisions'])assert.deepEqual(child[key],parent[key],key);
+  for(const child of children){
+    for(const key of ['roleId','type','voiceId','voiceSource','performance','config','template','model','protectedFields'])assert.deepEqual(child[key],parent[key],key);
+    for(const field of ['role','identity','performance']){assert.deepEqual(child.decisions[field].values,parent.decisions[field].values);assert.equal(child.decisions[field].source,'structural');assert.deepEqual(child.decisions[field].parentIds,[parent.id]);assert.ok(child.decisions[field].operationId);}
+    assert.equal(child.decisions.role.state,'accepted');assert.equal(child.decisions.identity.state,'accepted');
+  }
   assert.equal(f.store.get('segments',parent.id).retired,true);assert.equal(coverage(f.store.get('chapters',f.c.id),f.rows()).valid,true);
   for(const neighbor of neighbors){const after=f.store.get('segments',neighbor.id);assert.equal(after.text,neighbor.text);assert.equal(after.performance,neighbor.performance);assert.equal(after.voiceId,neighbor.voiceId);}
   assert.ok(op.result.analysis.splitResults?.some(s=>s.segmentId===parent.id));
@@ -95,7 +99,7 @@ test('人工明确清空表演后，智能拆分与再次准备保留受保护�
   assert.ok(parent.protectedFields.includes('performance'));assert.equal(parent.decisions.performance.source,'human');
   f.mock();const op=await f.prepare({ids:[parent.id]}),split=op.result.analysis.splitResults.find(row=>row.segmentId===parent.id);
   assert.ok(split.childIds.length>1);
-  for(const id of split.childIds){const child=f.store.get('segments',id);assert.equal(child.performance,'');assert.deepEqual(child.decisions.performance,parent.decisions.performance);assert.ok(child.protectedFields.includes('performance'));}
+  for(const id of split.childIds){const child=f.store.get('segments',id);assert.equal(child.performance,'');assert.equal(child.decisions.performance.values,parent.decisions.performance.values);assert.equal(child.decisions.performance.source,'structural');assert.deepEqual(child.decisions.performance.parentIds,[parent.id]);assert.ok(child.protectedFields.includes('performance'));}
   await f.prepare({ids:split.childIds});
   assert.ok(split.childIds.every(id=>f.store.get('segments',id).performance===''));assert.equal(f.store.all('jobs').length,0);
 });

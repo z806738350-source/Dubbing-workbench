@@ -37,14 +37,14 @@ import {
   ArrowDown,
 } from "lucide-react";
 import { api, action } from "./api";
-import { readDraft, writeDraft, clearDraft, hasDraft, listDrafts, recoverDraft, discardDraft, finishDraftSave } from "./drafts";
+import { bindDraftWorkspace, draftWorkspace, readDraft, writeDraft, clearDraft, hasDraft, listDrafts, recoverDraft, discardDraft, finishDraftSave } from "./drafts";
 import type { DraftRecord } from "./drafts";
 import AnalysisDialog from "./AnalysisDialog";
 import SegmentSplitDialog from "./SegmentSplitDialog";
 import { ObjectDraftTools, useObjectDraft } from "./ObjectDraft";
 import { saveAction, speechDraftProblem, withSavedDrafts, draftScopeRevision } from "./autosave";
 import { useDraftSaveStatus } from "./ObjectDraft";
-import { chapterIssues, IssueCenter, ProjectOverview, VoicePicker, RecoveryCenter, QuickHelp, GeneratePlan, type RecoveryTarget } from "./WorkspaceExperience";
+import { chapterIssues, chapterMemberState, configurationDecided, playbackIdentity, IssueCenter, ProjectOverview, VoicePicker, RecoveryCenter, QuickHelp, GeneratePlan, type RecoveryTarget } from "./WorkspaceExperience";
 import TaskAuthorization from "./TaskAuthorization";
 import { submitOperation } from "./taskOperations";
 import VoiceCreation from "./VoiceCreation";
@@ -124,6 +124,7 @@ type Modal =
   | null;
 
 export default function App() {
+  const [deleteTarget,setDeleteTarget]=useState<Project|null>(null);
   const [rebindOpen, setRebindOpen] = useState(false);
   const [unitPanelId, setUnitPanelId] = useState<string|null>(null);
   const [currentMembers, setCurrentMembers] = useState<string[]>([]);
@@ -147,8 +148,9 @@ export default function App() {
   const onDraftChange = useCallback((id:string,dirty:boolean)=>setDraftIds(prev=>dirty ? (prev.includes(id) ? prev : [...prev,id]) : prev.filter(x=>x!==id)),[]);
 
   const bookmarks = useRef<Record<string, string>>({});
+  const playIntent = useRef(0);
   const pendingPlay = useRef<string | null>(null);
-  const pendingPlaySnapshot = useRef<{arrangement:number;items:ChapterDetail["playbackItems"]}|null>(null);
+  const pendingPlaySnapshot = useRef<{intent:number;arrangement:number;items:ChapterDetail["playbackItems"]}|null>(null);
   const [oldPreview, setOldPreview] = useState<Segment | null>(null);
   useEffect(() => {
     const close = () => {
@@ -184,6 +186,7 @@ export default function App() {
       playbackItems?: ChapterDetail["playbackItems"];
       master?: Master;
       resumeAt?: number;
+      intent?: number;
       unitSession?: UnitPlayback;
     } | null>(null),
     [playing, setPlaying] = useState(false),
@@ -209,6 +212,9 @@ export default function App() {
     const request=(async()=>{
     try {
     const s = await api<State>("/state");
+    const identity=s.settings.workspaceIdentity||s.settings.workspaceDirectory,changedWorkspace=!!draftWorkspace()&&draftWorkspace()!==identity;
+    bindDraftWorkspace(identity);
+    if(changedWorkspace){playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;generationIntent.current++;setGenerationPlan(null);setGrantId(null);setDeleteTarget(null);setUnitPanelId(null);setVoiceTarget(null);setOldPreview(null);setModal(null);setChapter(null);setDraftSignal(value=>value+1);bookmarks.current={};audio.current?.pause();setPlayer(null);}
     setState(s);
     let id = chapterRef.current;
     if (!s.chapters.some((c) => c.id === id))
@@ -230,11 +236,11 @@ export default function App() {
         if (master) {
           pendingPlay.current = null;
           const intent=pendingPlaySnapshot.current;pendingPlaySnapshot.current=null;
-          if(intent&&intent.arrangement===c.arrangement&&JSON.stringify(intent.items)===JSON.stringify(c.playbackItems)&&document.visibilityState==='visible'&&!s.jobs.some(j=>j.chapterId===id&&active(j.status))){
+          if(intent&&intent.intent===playIntent.current&&intent.arrangement===c.arrangement&&playbackIdentity(intent.items)===playbackIdentity(c.playbackItems)&&document.visibilityState==='visible'&&!s.jobs.some(j=>j.chapterId===id&&active(j.status))){
             const bookmark=bookmarks.current[id],point=master.mapping.find(x=>x.segmentId===bookmark||x.unitId===bookmark||x.members?.includes(bookmark));
             if(bookmark&&!point){delete bookmarks.current[id];setNotice('断点已变化，试听已准备好，请重新选择播放位置。');}
-            else setPlayer({kind:'masters',id:master.id,title:c.title,chapterId:id,arrangement:c.arrangement,playbackItems:c.playbackItems,master,resumeAt:(point?.startFrame||0)/master.sampleRate});
-          }else setNotice('整章试听已准备好；播放意图或版本已变化，请点击播放继续。');
+            else setPlayer({kind:'masters',id:master.id,title:c.title,chapterId:id,arrangement:c.arrangement,playbackItems:c.playbackItems,master,intent:intent.intent,resumeAt:(point?.startFrame||0)/master.sampleRate});
+          }else if(intent?.intent===playIntent.current)setNotice('整章试听已准备好；版本已变化，请点击播放继续。');
         } else if (
           !s.jobs.some(
             (j) =>
@@ -247,7 +253,8 @@ export default function App() {
       const p = playerRef.current;
       const selectedUnit = p?.unitSession && c.units?.find(u=>u.id === p.unitSession!.id);
       const unitChanged = p?.unitSession && (!selectedUnit || selectedUnit.state !== p.unitSession.state || selectedUnit.variants[p.unitSession.mode].current !== p.unitSession.audioId || JSON.stringify(selectedUnit.variants[p.unitSession.mode].status.basis) !== JSON.stringify(p.unitSession.basis));
-      if (p?.chapterId === id && (p.arrangement !== c.arrangement || JSON.stringify(p.playbackItems) !== JSON.stringify(c.playbackItems) || unitChanged || s.jobs.some(j => j.chapterId === id && active(j.status)))) {
+      if (p?.chapterId === id && (p.arrangement !== c.arrangement || playbackIdentity(p.playbackItems) !== playbackIdentity(c.playbackItems) || unitChanged || s.jobs.some(j => j.chapterId === id && active(j.status)))) {
+        playIntent.current++;
         audio.current?.pause();
         setPlayer(null);
         setCurrentSegment("");
@@ -262,11 +269,12 @@ export default function App() {
     setLoading(false);
     setConnectionReady(true);
     setError(previous => previous === connectionMessage ? "" : previous);
-    } catch {
+    } catch (failure) {
       audio.current?.pause();
       setConnectionReady(false);
-      setError(connectionMessage);
-      throw new Error(connectionMessage);
+      const message=(failure as {storageFailure?:boolean}).storageFailure?(failure as Error).message:connectionMessage;
+      setError(message);
+      throw new Error(message);
     }
     })();
     refreshPending.current=request.finally(()=>{refreshPending.current=null;});
@@ -278,9 +286,9 @@ export default function App() {
       setLoading(false);
     });
     const timer = setInterval(() => void refresh().catch(() => {}), 2500);
-    const onFocus = () => { audio.current?.pause(); setConnectionReady(false); void refresh().catch((e) => setError(e.message)); };
+    const onFocus = () => { playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;audio.current?.pause(); setConnectionReady(false); void refresh().catch((e) => setError(e.message)); };
     const onStorage = (e: StorageEvent) => { if (e.key?.startsWith("draft-")) setDraftSignal(n=>n+1); if (e.key === "workbench-change") void refresh().catch(e => setError(e.message)); };
-    const onOffline = () => { audio.current?.pause(); setConnectionReady(false); setError(connectionMessage); };
+    const onOffline = () => { playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;audio.current?.pause(); setConnectionReady(false); setError(connectionMessage); };
     window.addEventListener("focus", onFocus);
     window.addEventListener("online", onFocus);
     window.addEventListener("offline", onOffline);
@@ -295,6 +303,7 @@ export default function App() {
   }, [refresh,onDraftChange]);
   useEffect(() => {
     localStorage.setItem("chapter", chapterId);
+    playIntent.current++;
     setNotice("");
     audio.current?.pause();
     setPlayer(null);
@@ -354,16 +363,16 @@ export default function App() {
   const openVoice = (roleId?:string,segmentId?:string) => {setModal(null);setInspectorOpen(false);setVoiceTarget({roleId,segmentId});};
   const openUnit = (id:string,mode?:"dry"|"scene",eventId?:string)=>{setInspectorOpen(false);setModal(null);setUnitInitialMode(mode);setUnitInitialEvent(eventId);setUnitPanelId(id);};
   const locate = (id:string)=>{setModal(null);setSelected(id);setFilter("all");setSearch("");setPanelMode("settings");if(window.innerWidth<1216)setInspectorOpen(true);setTimeout(()=>document.getElementById("segment-"+id)?.scrollIntoView({block:"center"}),0);};
-  const effectiveStatus = (s:Segment) => chapter?.playbackItems.find(item=>item.id === s.id || item.members?.includes(s.id)) || s;
+  const effectiveStatus = (s:Segment) => chapter ? chapterMemberState(chapter,s) : s;
   const visible = segments.filter((s) => {
     if (
       search &&
       !`${s.text}${roles.find((r) => r.id === s.roleId)?.name}`.includes(search)
     )
       return false;
-    if (filter === "confirm") return !s.roleConfirmed || !s.identityConfirmed;
+    if (filter === "confirm") return !s.excluded && !configurationDecided(s);
     if (filter === "generate") return !s.excluded && effectiveStatus(s).validity !== "matched";
-    if (filter === "failed") return ["failed", "unknown"].includes(s.latest);
+    if (filter === "failed") return !s.excluded && (chapter ? chapterMemberState(chapter,s).requestIssues.length > 0 : ["failed", "unknown"].includes(s.latest));
     if (filter === "pending")
       return effectiveStatus(s).validity === "matched" && effectiveStatus(s).review === "pending";
     if (filter === "rework") return effectiveStatus(s).review === "rework";
@@ -374,10 +383,12 @@ export default function App() {
       (s) => !s.excluded && s.validity === "matched",
     ).length,
     total = segments.filter((s) => !s.excluded).length,
-    passed = chapter?.playbackItems ? chapter.playbackItems.filter(item=>item.review === "passed").flatMap(item=>item.members || [item.id]).length : segments.filter(
+    passed = chapter?.playbackItems ? chapter.playbackItems.filter(item=>item.validity==='matched'&&item.review === "passed").flatMap(item=>item.members || [item.id]).length : segments.filter(
       (s) => !s.excluded && s.review === "passed",
     ).length;
   const pickChapter = (id: string) => {
+    setDeleteTarget(null);
+    playIntent.current++;
     chapterRef.current=id;
     pendingPlay.current=null;pendingPlaySnapshot.current=null;
     closeGeneration();setGrantId(null);setVoiceTarget(null);setUnitPanelId(null);setUnitInitialMode(undefined);
@@ -395,8 +406,8 @@ export default function App() {
     setModal(null);setTaskRecord(null);setUnitInitialEvent(undefined);
     recoveryTarget.current=null;setDraftIds([]);
   };
-  const deleteProject = async (id: string) => {
-    const result = await action<{cleanupPending?:boolean}>("project.delete", {id});
+  const deleteProject = async (id: string, scope:Record<string,unknown>) => {
+    const result = await action<{cleanupPending?:boolean}>("project.delete", {id,scope});
     if(result?.cleanupPending)setNotice("项目已删除；部分文件暂存待清理，下次启动会继续清理。");
     if(projectRef.current===id)audio.current?.pause();
     // Finish a pre-delete read before selecting the remaining project.
@@ -413,6 +424,7 @@ export default function App() {
     const target=recoveryTarget.current;if(!target)return;
     if(target.chapterId&&chapter?.id!==target.chapterId)return;
     recoveryTarget.current=null;
+    if(target.kind==='import'){setModal('chapter');return;}
     if(target.kind==='segment'&&target.segmentId){locate(target.segmentId);return;}
     if((target.kind==='unit'||target.kind==='event')&&target.unitId){openUnit(target.unitId,target.mode,target.kind==='event'?target.eventId||'new':undefined);return;}
     if(target.kind==='new-group'){setChecked(target.ids||[]);openUnit('create');return;}
@@ -435,7 +447,7 @@ export default function App() {
       if(!current())return;
       if(members.some(id=>hasDraft(id))||units.some(u=>unitHasDraft(u,context.events||[],u.mode)))throw new Error('相关台词或声音背景有其他页面/遗留编辑，请先在本机暂存中处理。');
       const revision=draftScopeRevision("chapter:"+context.id,context.revision);
-      const plan=await api<GenerationPlan>("/operations/plan",{kind:"generateSelection",chapterId:context.id,revision,ids,regenerate:options.regenerate===true});
+      const plan=await api<GenerationPlan>("/operations/plan",{kind:"generateSelection",chapterId:context.id,revision,ids,regenerate:options.regenerate===true,actionKind:options.actionKind||(options.regenerate===true?'forceRegenerate':'updateSelected')});
       if(!current())return;
       if(!plan.audioRequests){setGenerationPlan(null);setNotice("所选范围已有匹配声音，已复用；无需发送新的配音请求。");return;}
       setGrantId(null);
@@ -444,7 +456,7 @@ export default function App() {
     });}catch(error){if(current())throw error;}
   };
   const planIntent=generationIntent.current;
-  const generationUnknown = generationPlan?.plan.units.some(planned=>chapter?.units?.find(u=>u.id===planned.unitId)?.variants[planned.mode].latest === "unknown" || segments.some(s=>planned.members.includes(s.id)&&s.latest==="unknown")) || false;
+  const generationUnknown = !!generationPlan?.plan.outstandingAttemptIds?.length || generationPlan?.plan.units.some(planned=>!!chapter?.units?.find(u=>u.id===planned.unitId)?.variants[planned.mode].outstandingAttemptIds?.length || chapter?.units?.find(u=>u.id===planned.unitId)?.variants[planned.mode].latest === "unknown") || false;
   const submitGeneration = async () => {
     if(!generationPlan||!chapter||!grantId)return;
     const request=generationPlan;
@@ -455,8 +467,8 @@ export default function App() {
       if(chapterRef.current!==request.plan.chapterId)throw new Error("章节已切换，本次未发送。");
       if(request.plan.memberIds.some(id=>hasDraft(id))||request.plan.units.some(p=>{const u=chapter.units?.find(u=>u.id===p.unitId);return u&&unitHasDraft(u,chapter.events||[],p.mode);}))throw new Error("相关其他页面的草稿仍需处理，本次未发送。");
       if(draftScopeRevision("chapter:"+chapter.id,request.plan.revision)!==request.plan.revision)throw Object.assign(new Error("生成范围在核对后已变化，请重新核对生成范围。"),{status:409});
-      audio.current?.pause();setPlayer(null);
-      const receipt=await submitOperation("generate:"+chapter.id,{kind:"generateSelection",chapterId:chapter.id,revision:request.plan.revision,arrangement:request.plan.arrangement,ids:request.ids,regenerate:request.regenerate,grantId,...(request.retryUnknown?{retryUnknown:true}:{}),...(request.resumeRoute?{resumeRoute:true}:{})},state?.jobs||[]);
+      playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;audio.current?.pause();setPlayer(null);
+      const receipt=await submitOperation("generate:"+chapter.id,{kind:"generateSelection",chapterId:chapter.id,revision:request.plan.revision,arrangement:request.plan.arrangement,ids:request.ids,regenerate:request.regenerate,actionKind:request.plan.actionKind,grantId,...(request.retryUnknown?{retryUnknown:true,acknowledgedAttemptIds:request.plan.outstandingAttemptIds}:{}),...(request.resumeRoute?{resumeRoute:true}:{})},state?.jobs||[]);
       if(generationIntent.current!==intent||chapterRef.current!==request.plan.chapterId){await refresh();return;}
       if(receipt.error)throw Object.assign(new Error(receipt.error),{status:receipt.errorStatus});
       if(chapterRef.current!==request.plan.chapterId)return;
@@ -470,25 +482,30 @@ export default function App() {
     master?: Master,
     standalone = false,
     unitSession?: UnitPlayback,
+    preparedIntent?: number,
   ) => {
+    const intent=preparedIntent??++playIntent.current;
+    const current=()=>intent===playIntent.current;
     pendingPlay.current=null;pendingPlaySnapshot.current=null;
+    if(!master&&playerRef.current?.kind===kind&&playerRef.current?.id===id&&audio.current&&!audio.current.paused){audio.current.pause();setPlaying(false);return;}
     if (!connectionReady) { setError(connectionMessage); return; }
     if (kind !== "voices" && !standalone && chapter) {
       try {
         const fresh = await api<ChapterDetail>("/chapters/" + chapter.id);
-        if(chapterRef.current!==chapter.id)return;
+        if(!current()||chapterRef.current!==chapter.id)return;
         const now = await api<State>("/state");
-        if(chapterRef.current!==chapter.id)return;
+        if(!current()||chapterRef.current!==chapter.id)return;
         const existing = playerRef.current;
         const expected = existing?.chapterId === chapter.id && existing.kind === kind && existing.id === id ? existing.playbackItems : chapter.playbackItems;
         const target = unitSession && fresh.units?.find(u=>u.id === unitSession.id);
         const unitChanged = unitSession && (!target || target.state !== unitSession.state || target.variants[unitSession.mode].current !== unitSession.audioId || JSON.stringify(target.variants[unitSession.mode].status.basis) !== JSON.stringify(unitSession.basis));
-        if (fresh.arrangement !== chapter.arrangement || JSON.stringify(fresh.playbackItems) !== JSON.stringify(expected) || unitChanged || now.jobs.some(j => j.chapterId === chapter.id && active(j.status))) {
+        if (fresh.arrangement !== chapter.arrangement || playbackIdentity(fresh.playbackItems) !== playbackIdentity(expected) || unitChanged || now.jobs.some(j => j.chapterId === chapter.id && active(j.status))) {
           await refresh();
+          if(!current())return;
           setError("章节版本或任务状态已变化，请核对后重新选择试听。");
           return;
         }
-      } catch { if(chapterRef.current===chapter.id)setError("无法核对播放版本，请恢复连接后重试。"); return; }
+      } catch { if(current()&&chapterRef.current===chapter.id)setError("无法核对播放版本，请恢复连接后重试。"); return; }
     }
     if (
       !master &&
@@ -497,7 +514,7 @@ export default function App() {
       audio.current
     ) {
       if (audio.current.paused)
-        void audio.current.play().catch(() => setPlaying(false));
+        setPlayer({...playerRef.current,intent,resumeAt:audio.current.currentTime});
       else audio.current.pause();
       return;
     }
@@ -515,6 +532,7 @@ export default function App() {
       kind,
       id,
       title,
+      intent,
       unitSession,
       chapterId: kind === "voices" || standalone ? undefined : chapterId,
       arrangement: chapter?.arrangement,
@@ -541,23 +559,33 @@ export default function App() {
     const el = audio.current!;
     el.src = player.kind === "demo" ? "/demo.mp3" : `/api/media/${player.kind}/${player.id}`;
     el.load();
-    void el.play().catch(() => setPlaying(false));
+    const intent=player.intent;
+    void el.play().then(()=>{if(intent!==playIntent.current&&playerRef.current===player)el.pause();}).catch(() => {if(intent===playIntent.current){setPlaying(false);setError("浏览器未能开始播放，请再次点击播放。");}});
   }, [player]);
-  const playChapter = () => run(async()=>{
+  const playChapter = () => {
+    const intent=++playIntent.current,current=()=>intent===playIntent.current&&chapterRef.current===chapter?.id;
+    pendingPlay.current=null;pendingPlaySnapshot.current=null;
+    return run(async()=>{
     if(!chapter)return;
+    try{
     await withSavedDrafts('chapter:'+chapter.id,undefined,async()=>{
+      if(!current())return;
       const fresh=await api<ChapterDetail>('/chapters/'+chapter.id);
+      if(!current())return;
       if(fresh.playbackItems.some(item=>item.validity!=='matched'))throw new Error('有效修改已保存。请先生成待更新的声音，再整章试听。');
       const master=fresh.masters.find(m=>m.arrangement===fresh.arrangement);
-      if(master){await startPlay('masters',master.id,fresh.title,master);return;}
+      if(master){await startPlay('masters',master.id,fresh.title,master,false,undefined,intent);return;}
       await api('/jobs',{kind:'master',chapterId:chapter.id,revision:fresh.revision,commandId:crypto.randomUUID()});
-      pendingPlay.current=chapter.id;pendingPlaySnapshot.current={arrangement:fresh.arrangement,items:fresh.playbackItems};
+      if(!current())return;
+      pendingPlay.current=chapter.id;pendingPlaySnapshot.current={intent,arrangement:fresh.arrangement,items:fresh.playbackItems};
       setNotice('正在本机准备整章试听，完成后继续播放；不调用配音模型。');
     });
-  });
-  useEffect(()=>{const visibility=()=>{if(document.visibilityState!=='visible'&&pendingPlay.current){pendingPlay.current=null;pendingPlaySnapshot.current=null;}};document.addEventListener('visibilitychange',visibility);return()=>document.removeEventListener('visibilitychange',visibility);},[]);
+    }catch(failure){if(current())throw failure;}
+  });};
+  useEffect(()=>{const visibility=()=>{if(document.visibilityState!=='visible'){playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;audio.current?.pause();}};document.addEventListener('visibilitychange',visibility);return()=>document.removeEventListener('visibilitychange',visibility);},[]);
   const playDemo = () => {setModal(null);void startPlay("demo","welcome","免费演示 · 本机语音",undefined,true);};
   const closeOldPreview = () => {
+    playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;
     audio.current?.pause();
     setPlayer(null);
     setCurrentSegment("");
@@ -593,7 +621,7 @@ export default function App() {
             state?.projects.map((p) => ({ value: p.id, label: p.name })) || []
           }
           onChange={pickProject}
-          onDelete={id => { void run(()=>deleteProject(id)); }}
+          onDelete={id => {const target=state?.projects.find(project=>project.id===id);if(target)setDeleteTarget(target);}}
           disabled={busy || !connectionReady}
         />
         <button
@@ -680,7 +708,7 @@ export default function App() {
     <div className="panel-content" hidden={panelMode !== "settings"}>
       {selectedSegment ? (
                     <Editor
-                      key={selectedSegment.id+":"+draftSignal}
+                      key={(state?.settings.workspaceIdentity||state?.settings.workspaceDirectory)+":"+selectedSegment.id+":"+draftSignal}
                       segment={selectedSegment}
                       onDraftChange={onDraftChange}
                       templates={state?.templates || []}
@@ -797,16 +825,17 @@ export default function App() {
           ) : (
             <>
               <section className="chapter-heading">
-                <div><button className="title-button" title={chapter.title} onClick={()=>setModal("rename")} disabled={locked}><h1>{chapter.title}</h1><MoreHorizontal size={18}/></button><p>{total} 条台词 · {ready} 条声音就绪 · {passed} 条听评通过 <progress max={total||1} value={ready} aria-label="声音准备进度"/></p></div>
+                <div><button className="title-button" title={chapter.title} onClick={()=>setModal("rename")} disabled={locked}><h1>{chapter.title}</h1><MoreHorizontal size={18}/></button><p>{total} 句台词 · {chapter.playbackItems.length} 个声音单元 · {ready} 句声音就绪 · {passed} 句听评通过 <progress max={total||1} value={ready} aria-label="声音准备进度"/></p></div>
                 <div className="chapter-actions">
-                  <button className="button" onClick={()=>setModal("issues")}>{issues.length?`查看问题 · ${issues.length}`:"查看问题"}</button>
+                  <button className="button" onClick={()=>setModal("issues")}>{issues.length?`查看问题 · ${issues.length} 项`:"查看问题"}</button>
                   {!locked&&<button className="button primary" disabled={busy||!connectionReady} onClick={()=>{
                     if(saveStatus==='conflict'||saveStatus==='unreliable'){setModal('recovery');return;}
                     if(!segments.length||criticalIssues.length){if(!segments.length){setPanelMode('analysis');if(window.innerWidth<1216)setInspectorOpen(true);}else setModal('issues');return;}
                     if(ready<total){void run(()=>generate(segments.filter(s=>!s.excluded&&effectiveStatus(s).validity!=='matched').map(s=>s.id),true));return;}
+                    if(chapter.playbackItems.some(item=>item.review==='rework')){void run(()=>generate(chapter.playbackItems.filter(item=>item.review==='rework').flatMap(item=>item.members||[item.id]),false,{actionKind:'redoRejected'}));return;}
                     if(passed<total){void playChapter();return;}
                     setModal('export');
-                  }}>{saveStatus==='conflict'?'处理保存冲突':!segments.length?'AI准备剧本':criticalIssues.length?`需要你处理 · ${issues.length}`:ready<total?'生成待办':passed<total?'整章试听':'导出成品'}</button>}
+                  }}>{saveStatus==='conflict'?'处理保存冲突':!segments.length?'AI准备剧本':criticalIssues.length?`需要你处理 · ${criticalIssues.length} 项`:ready<total?'生成待办':chapter.playbackItems.some(item=>item.review==='rework')?'重做否决项':passed<total?'整章试听':'导出成品'}</button>}
                 </div>
               <nav className="production-steps" aria-label="章节制作步骤">
                 <button onClick={()=>setModal('chapter')}><span>1</span>导入文字</button>
@@ -831,7 +860,7 @@ export default function App() {
                       · 本章暂时只读，可前往其他章节
                     </span>
                   </div>
-                  {job.kind === "master" && pendingPlay.current && <button className="text-button" onClick={()=>{pendingPlay.current=null;pendingPlaySnapshot.current=null;setNotice("已取消准备完成后自动播放，试听文件仍会保留。");}}>取消自动播放</button>}
+                  {job.kind === "master" && pendingPlay.current && <button className="text-button" onClick={()=>{playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;setNotice("已取消准备完成后自动播放，试听文件仍会保留。");}}>取消自动播放</button>}
                   <button
                     className="button small"
                     disabled={job.stop || !["generate","unit-generate"].includes(job.kind)}
@@ -879,7 +908,7 @@ export default function App() {
                   <div className="creation-tools" role="group" aria-label="创作与显示">
                     <button className="button small" disabled={locked||state?.settings.features?.groups===false} onClick={()=>{if(checked.length<2){setNotice("勾选两条或更多连续对白，再点一起演绎。");return;}openUnit("create");}}><Users size={15}/>一起演绎</button>
                     <button className="button small" disabled={locked||!selectedUnit||state?.settings.features?.scenes===false} onClick={()=>selectedUnit&&openUnit(selectedUnit.id,"scene")}><AudioLines size={15}/>声音背景</button>
-                    <button className="text-button" onClick={()=>openUnit("list")}>历史与版本</button>
+                    <button className="button secondary small" onClick={()=>openUnit("list")}>历史与版本</button>
                     <details className="workspace-more"><summary>更多</summary><div><button onClick={()=>setModal("source")}>查看原文</button><button onClick={()=>setModal("manual")}>添加台词</button><button onClick={()=>setModal("roles")}>角色资料</button><button onClick={()=>{const value=density==="compact"?"comfortable":"compact";setDensity(value);localStorage.setItem("reading-density",value);}}>切换{density==="compact"?"舒适":"紧凑"}密度</button><label>正文字号<input aria-label="正文字号" type="range" min="17" max="34" value={readingSize} onChange={e=>{setReadingSize(Number(e.target.value));localStorage.setItem("reading-size",e.target.value);}}/></label></div></details>
                   </div>
                   {checked.length > 0 && (
@@ -1013,7 +1042,7 @@ export default function App() {
                                   ? " · 本条指定"
                                   : ""}
                               </span>
-                              {!s.roleConfirmed && (
+                              {!configurationDecided(s) && (
                                 <span className="needs-confirm">待确认</span>
                               )}
                             </span>
@@ -1050,7 +1079,7 @@ export default function App() {
                                   "unknown",
                                   "running",
                                   "queued",
-                                ].includes(s.latest) ? names[s.latest] : ""}</span>
+                                ].includes(rowStatus.latest) ? names[rowStatus.latest] : ""}</span>
                                 <div className="row-actions">
                                   <button className="icon" aria-label={`为第 ${s.order+1} 条选声音`} onClick={()=>openVoice(s.roleId,s.id)}><Users size={15}/></button>
                                   {!grouped&&<><button
@@ -1187,7 +1216,7 @@ export default function App() {
                 onClick={() =>
                   player
                     ? playing
-                      ? audio.current?.pause()
+                      ? (()=>{playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;audio.current?.pause();})()
                       : void startPlay(player.kind, player.id, player.title, undefined, !player.chapterId)
                     : void playChapter()
                 }
@@ -1265,23 +1294,18 @@ export default function App() {
       </div>
       <audio
         ref={audio}
-        onPlay={() => setPlaying(true)}
+        onPlay={() => {if(player?.intent===playIntent.current)setPlaying(true);}}
         onPause={() => setPlaying(false)}
         onEnded={() => { setPlaying(false); setTransitioning(false); }}
         onError={() => {
-          setPlaying(false);
-          if (player?.master && player.chapterId === chapterId && chapter) {
-            setPlayer(null);
-            setNotice("整章缓存无法播放，正在本地重新准备；不会调用配音模型。");
-            void run(async () => {
-              await api("/jobs", {kind: "master", chapterId, revision: chapter.revision, commandId: crypto.randomUUID()});
-              pendingPlay.current = chapterId;
-              pendingPlaySnapshot.current = {arrangement:chapter.arrangement,items:chapter.playbackItems};
-              await refresh();
-            });
-          } else setError("音频无法播放，文件可能缺失或格式不受支持。请恢复文件或重新生成本条。");
+          if(player?.intent!==playIntent.current)return;
+          playIntent.current++;
+          pendingPlay.current=null;pendingPlaySnapshot.current=null;
+          setPlaying(false);setPlayer(null);
+          setError(player?.master ? "整章试听文件无法播放，请检查已有音频后点击“准备试听”重建本机母版。" : "音频无法播放，文件可能缺失或格式不受支持。请检查文件后再次试听。");
         }}
         onLoadedMetadata={() => {
+          if(player?.intent!==playIntent.current)return;
           if (player?.resumeAt) audio.current!.currentTime = player.resumeAt;
           setDuration(
             Number.isFinite(audio.current!.duration)
@@ -1290,7 +1314,7 @@ export default function App() {
           );
         }}
         onTimeUpdate={() => {
-          if (!player) return;
+          if (!player||player.intent!==playIntent.current) return;
           const t = audio.current!.currentTime;
           setPosition(t);
           if (player?.master) {
@@ -1324,6 +1348,7 @@ export default function App() {
         </button>)}
       </Dialog>}
       {unitPanelId && chapter && state && chapter.units?.find(u=>u.id === unitPanelId) && <UnitPanel key={unitPanelId} unit={chapter.units.find(u=>u.id === unitPanelId)!}
+        playingId={playing&&player?.kind==='audios'?player.id:undefined}
         initialMode={unitInitialMode} initialEventId={unitInitialEvent} chapter={chapter} roles={roles} state={state} locked={locked} connected={connectionReady} refresh={refresh} close={()=>setUnitPanelId(null)} open={openMember}
         onTask={async(jobId,attemptId)=>{
           const expectedChapter=chapter.id,expectedUnit=unitPanelId;
@@ -1346,7 +1371,7 @@ export default function App() {
           if(!current())return;
           setChapter(fresh);await refresh();
           if(!current())return;
-          await generate(request.ids,false,{regenerate:request.regenerate},fresh,intent);
+          await generate(request.ids,false,{regenerate:request.regenerate,actionKind:request.plan.actionKind},fresh,intent);
           }catch(error){if(current())throw error;}
         }}/>}
       {navOpen && (
@@ -1400,6 +1425,7 @@ export default function App() {
           projectId={projectId}
           onClose={() => setModal(null)}
           onCreated={async (id,prepare) => {
+            if(projectRef.current!==projectId)return;
             pickChapter(id);
             setModal(null);
             setPanelMode(prepare ? "analysis" : "settings");
@@ -1602,6 +1628,7 @@ export default function App() {
             </p>
           )}
           <WorkspaceLocation directory={state.settings.workspaceDirectory} projectCount={state.projects.length} projectName={state.projects.find(p => p.id === projectId)?.name} projectFolders={state.settings.projectFolders} onMoved={async () => {
+            playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;
             audio.current?.pause();
             setPlayer(null);
             setPlaying(false);
@@ -1743,12 +1770,30 @@ export default function App() {
           total={total}
           passed={passed}
           connectionReady={connectionReady}
+          jobs={state?.jobs||[]}
           onClose={() => setModal(null)}
           onRefresh={refresh}
         />
       )}
+      {deleteTarget&&<ProjectDeleteDialog project={deleteTarget} onClose={()=>setDeleteTarget(null)} onDelete={async scope=>{await deleteProject(deleteTarget.id,scope);await refresh();}}/>}
     </ErrorContext.Provider>
   );
+}
+
+type ProjectDeletionPlan={projectId:string;name:string;scope:Record<string,unknown>;counts:{chapters:number;audios:number;masters:number;exports:number};chapters:{id:string;title:string;revision:number;arrangement:number}[];blockers?:{code:string;message:string}[]};
+function ProjectDeleteDialog({project,onClose,onDelete}:{project:Project;onClose:()=>void;onDelete:(scope:Record<string,unknown>)=>Promise<void>}){
+  const [plan,setPlan]=useState<ProjectDeletionPlan|null>(null),[pending,setPending]=useState(false),[error,setError]=useState(''),[needsReview,setNeedsReview]=useState(false);
+  const live=useRef(true);
+  const load=async()=>{setPending(true);setError('');try{const value=await api<ProjectDeletionPlan>('/projects/'+project.id+'/deletion-plan');if(live.current){setPlan(value);setNeedsReview(false);}}catch(failure){if(live.current)setError((failure as Error).message);}finally{if(live.current)setPending(false);}};
+  useEffect(()=>{void load();return()=>{live.current=false;};},[project.id]);
+  const remove=async()=>{if(!plan||pending||needsReview||plan.blockers?.length)return;setPending(true);setError('');try{await onDelete(plan.scope);if(live.current)onClose();}catch(failure){if(live.current){setError((failure as Error).message);if((failure as {status?:number}).status===409)setNeedsReview(true);}}finally{if(live.current)setPending(false);}};
+  return <Dialog title={'删除项目 · '+project.name} onClose={onClose} footer={needsReview||!plan?<button className="button secondary" disabled={pending} onClick={()=>void load()}>{pending?'正在读取…':'重新核对删除范围'}</button>:<button className="button warning" disabled={pending||!!plan.blockers?.length} onClick={()=>void remove()}>{pending?'正在删除…':'删除上面列出的项目资料'}</button>}>
+    {!plan&&pending&&<p className="hint" role="status">正在核对这个项目的资料…</p>}
+    {plan&&<><p>将删除“{plan.name}”的 {plan.counts.chapters} 章、{plan.counts.audios} 份原始音频、{plan.counts.masters} 份试听母版及 {plan.counts.exports} 份导出文件。</p><div className="task-member-list">{plan.chapters.map(chapter=><p key={chapter.id}>{chapter.title} · 编排 {chapter.arrangement}</p>)}</div><p className="warning">删除后不能在本工具中撤销。请先保留需要的项目备份。</p></>}
+    {needsReview&&<p className="warning">项目范围在核对后发生变化，本次未删除。重新查看范围后再决定。</p>}
+    {plan?.blockers?.map(blocker=><p className="warning" role="alert" key={blocker.code}>{blocker.message}</p>)}
+    {error&&<p className="error-inline" role="alert">{error}</p>}
+  </Dialog>;
 }
 
 /* Hallmark · component: workspace location · theme: existing Ardot tokens
@@ -1762,6 +1807,9 @@ function WorkspaceLocation({ directory, projectCount, projectName, projectFolder
   const [source, setSource] = useState(directory);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState('');
+  const [inventory,setInventory]=useState<{scope:string;counts:Record<string,number>;bytes:Record<string,number>;missing:{kind:string;id:string;path:string;repairable:boolean}[];primaryAvailable:boolean}|null>(null),[checking,setChecking]=useState(false);
+  const checkInventory=async()=>{setCopyError('');setInventory(null);setChecking(true);try{const result=await api<NonNullable<typeof inventory>>('/workspace/diagnostics');setInventory(result);return result;}finally{setChecking(false);}};
+  useEffect(()=>{setInventory(null);setSelected('');setSource(directory);},[directory]);
   return <section className="section-rule workspace-location">
     <div className="workspace-location-heading"><h3>项目保存位置</h3><span className="hint">{projectCount} 个项目</span></div>
     <p className="workspace-path">{directory || '请重启本地服务以读取实际路径'}</p>
@@ -1773,17 +1821,24 @@ function WorkspaceLocation({ directory, projectCount, projectName, projectFolder
         try { await navigator.clipboard.writeText(directory); setCopied(true); }
         catch { setCopyError('复制失败，请选中上方路径手动复制。'); }
       }}>{copied ? '路径已复制' : '复制路径'}</button>
-      <button className="button secondary" disabled={!directory || choosing || migrating} onClick={async () => {
+      <button className="button secondary" disabled={!directory || choosing || migrating || checking} onClick={async()=>{try{await checkInventory();}catch(error){setCopyError((error as Error).message);}}}>{checking?'正在核对资料…':'核对资料与空间'}</button>
+      <button className="button secondary" disabled={!directory || choosing || migrating || checking} onClick={async () => {
         setCopyError(''); setChoosing(true);
         try {
+          await checkInventory();
           const result = await api<{directory: string | null}>('/workspace/choose', {});
           if (result.directory) { setSource(directory); setSelected(result.directory); }
         } catch (error) { setCopyError((error as Error).message); }
         finally { setChoosing(false); }
       }}>{choosing ? '请在窗口中选择…' : selected ? '重新选择文件夹' : '更改位置'}</button>
     </div>
+    {inventory && <section className="inspector-section" aria-label="本工作区资料与空间"><h4>本工作区资料与空间</h4><p className="hint">按现有记录核对文件，不删除参考原件、历史声音或成品。</p>
+      <dl>{([['voices','参考录音原件'],['audios','生成声音原件'],['masters','整章试听母版'],['exports','导出成品']] as const).map(([kind,label])=><div key={kind}><dt>{label}</dt><dd>{inventory.counts[kind]||0} 份 · {(inventory.bytes[kind]||0)>=1048576?((inventory.bytes[kind]||0)/1048576).toFixed(1)+' MB':Math.ceil((inventory.bytes[kind]||0)/1024)+' KB'}</dd></div>)}</dl>
+      {inventory.missing.length ? <><p className={inventory.primaryAvailable?'hint':'warning'}>{inventory.primaryAvailable?'仅有可免费重建的整章试听母版缺失，原始声音仍在。':'有原件或成品缺失，暂不能迁移；请先找回文件或恢复完整备份，再重新核对。'}</p><ul>{inventory.missing.map(item=><li key={item.kind+'/'+item.id}><span className="workspace-path-inline">{item.path}</span> · {item.kind==='masters'&&item.repairable?'可免费重建整章试听母版':'原件缺失，需要找回文件或恢复备份'}</li>)}</ul></> : <p className="hint">已记录的参考原件、声音、母版和成品均可读取。</p>}
+    </section>}
     {copyError && <p className="error-inline" role="alert">{copyError}</p>}
-    {selected && <Form key={selected} label="迁移全部项目" busy={choosing || selected === directory} successMessage="迁移完成，已使用新位置。原目录保留，后续修改仅保存到新位置。" onSubmit={async () => {
+    {selected && <Form key={selected} label="迁移全部项目" busy={choosing || checking || migrating || selected === directory || source!==directory || !inventory?.primaryAvailable} successMessage="迁移完成，已使用新位置。原目录保留，后续修改仅保存到新位置。" onSubmit={async () => {
+      if(source!==directory||!inventory?.primaryAvailable)throw new Error('请先核对当前工作区资料与空间，并处理缺失的原件后再迁移。');
       setMigrating(true);
       try {
         const result = await api<{directory: string}>('/workspace/move', { source, directory: selected });
@@ -1811,91 +1866,62 @@ function RenameProject({ project, save, onClose }: { project: Project; save: (a:
   </Dialog>;
 }
 
-function ImportChapter({
-  projectId,
-  onClose,
-  onCreated,
-}: {
-  projectId: string;
-  onClose: () => void;
-  onCreated: (id: string, prepare?:boolean) => Promise<void>;
-}) {
-  const [prepare,setPrepare] = useState(true);
-  const [source, setSource] = useState(""),
-    [title, setTitle] = useState(""),
-    [error, setError] = useState(""),
-    [imported, setImported] = useState<{ text: string; name: string } | null>(
-      null,
-    );
-  return (
-    <Dialog title="导入章节" onClose={onClose} wide>
-      <Form
-        label={prepare ? "导入并进入AI准备" : "仅导入并本地分段"}
-        onSubmit={async () => {
-          if (!source.trim()) throw new Error("请先选择文件或粘贴原文");
-          const c = await action<{ id: string }>("chapter.create", {
-            projectId,
-            title: title.trim() || "新章节",
-            source,
-            importedSource: imported?.text || source,
-            sourceFilename: imported?.name,
-            segment: !prepare,
-          });
-          await onCreated(c.id,prepare);
-        }}
-      >
-        <label className="upload-zone">
-          <Upload size={22} />
-          <strong>选择 TXT / Markdown 文件</strong>
-          <span>UTF-8 编码 · Markdown 按纯文本保留</span>
-          <input
-            type="file"
-            accept=".txt,.md"
-            onChange={async (e) => {
-              const f = e.target.files?.[0];
-              if (!f) return;
-              try {
-                const t = new TextDecoder("utf-8", { fatal: true }).decode(
-                  await f.arrayBuffer(),
-                );
-                setImported({ text: t, name: f.name });
-                setSource(t.replace(/\r\n?/g, "\n"));
-                setTitle(f.name.replace(/\.(txt|md)$/i, ""));
-                setError("");
-              } catch {
-                setError("文件不是 UTF-8 编码，请转换编码后重试");
-              }
-            }}
-          />
-        </label>
-        <Field label="章节名称">
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="例如：第一章"
-          />
-        </Field>
-        <Field
-          label="原文预览"
-          hint="原文完整保留，不润色正文。AI准备会识别分段和角色。"
-        >
-          <textarea
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-            rows={9}
-            placeholder="在这里粘贴本章原文"
-          />
-        </Field>
-        <label className="check-label"><input type="checkbox" checked={prepare} onChange={e=>setPrepare(e.target.checked)}/>导入后进入AI准备</label>
-        <p className="hint">取消时仅做本地分段，所有新台词等待角色与声音核对，不产生API费用。</p>
-        {error && <p className="error-inline">{error}</p>}
-        <div className="source-summary">
-          <span>{Array.from(source).length.toLocaleString()} 字符</span>
-          <span>只统一换行，不润色正文</span>
-        </div>
-      </Form>
-    </Dialog>
-  );
+type ImportDraft = {source:string;title:string;prepare:boolean;imported:{text:string;name:string}|null;command?:{operationId:string;payload:Record<string,unknown>;chapterId?:string}};
+function ImportChapter({projectId,onClose,onCreated}:{projectId:string;onClose:()=>void;onCreated:(id:string,prepare?:boolean)=>Promise<void>}) {
+  const draftId="import-chapter/"+projectId;
+  const workspaceIdentity=useRef(draftWorkspace()).current;
+  const [draft,setDraft]=useState<ImportDraft>(()=>readDraft<ImportDraft>(draftId)?.draft||{source:"",title:"",prepare:true,imported:null});
+  const [error,setError]=useState(""),[pending,setPending]=useState(false),[reading,setReading]=useState(false),[saved,setSaved]=useState(true);
+  const live=useRef(true),fileIntent=useRef(0),draftRef=useRef(draft);draftRef.current=draft;
+  useEffect(()=>()=>{live.current=false;fileIntent.current++;},[]);
+  const persist=(value:ImportDraft)=>{
+    if(live.current){draftRef.current=value;setDraft(value);}
+    try{if(value.source||value.title||value.command)writeDraft(draftId,value,0,workspaceIdentity);else clearDraft(draftId,undefined,false,workspaceIdentity);if(live.current)setSaved(true);}
+    catch{if(live.current){setSaved(false);setError("未能可靠暂存到浏览器。请复制原文保存；恢复存储后再导入，本次尚未创建章节。");}throw new Error("未能可靠保存导入草稿，请复制原文并恢复浏览器存储后重试。");}
+  };
+  const edit=(change:Partial<ImportDraft>)=>{if(change.source!==undefined){fileIntent.current++;setReading(false);}try{persist({...draftRef.current,...change});setError("");}catch{/* The full editable text remains in this page for copying. */}};
+  const close=()=>{fileIntent.current++;onClose();};
+  const submit=async()=>{
+    if(!draftRef.current.source.trim())throw new Error("请先选择文件或粘贴原文");
+    fileIntent.current++;setPending(true);
+    try{
+      let next=draftRef.current;
+      if(!next.command){next={...next,command:{operationId:crypto.randomUUID(),payload:{projectId,title:next.title.trim()||"新章节",source:next.source,importedSource:next.imported?.text||next.source,sourceFilename:next.imported?.name,segment:!next.prepare}}};persist(next);}
+      if(!next.command!.chapterId){const chapter=await action<{id:string}>("chapter.create",{...next.command!.payload,operationId:next.command!.operationId});next={...next,command:{...next.command!,chapterId:chapter.id}};persist(next);}
+      if(!live.current||draftWorkspace()!==workspaceIdentity)return;
+      await onCreated(next.command!.chapterId!,next.prepare);
+      clearDraft(draftId,undefined,false,workspaceIdentity);
+    }finally{if(live.current)setPending(false);}
+  };
+  const readFile=async(file:File)=>{
+    const intent=++fileIntent.current,current=()=>live.current&&fileIntent.current===intent;
+    setError("");setReading(false);
+    if(file.size>4*1024*1024){setError("文件超过4 MB，请按章节拆成较小文件后导入。");return;}
+    setReading(true);
+    try{
+      let bytes:ArrayBuffer;
+      try{bytes=await file.arrayBuffer();}catch{if(current())setError("文件读取失败，请重新选择文件或粘贴原文。");return;}
+      if(!current())return;
+      let text:string;
+      try{text=new TextDecoder("utf-8",{fatal:true}).decode(bytes);}catch{setError("文件不是 UTF-8 编码，请转换编码后重试。");return;}
+      if(text.length>1000000){setError("单章文字超过100万字符，请按章拆分后导入。");return;}
+      persist({...draftRef.current,imported:{text,name:file.name},source:text.replace(/\r\n?/g,"\n"),title:file.name.replace(/\.(txt|md)$/i,"")});
+    }catch(failure){if(current())setError((failure as Error).message);}finally{if(current())setReading(false);}
+  };
+  return <Dialog title="导入章节" onClose={close} wide>
+    <Form label={draft.command?.chapterId?"打开已导入章节":draft.command?"恢复这次导入回执":draft.prepare?"导入并进入AI准备":"仅导入并本地分段"} busy={reading||pending} onSubmit={submit}>
+      <label className="upload-zone"><Upload size={22}/><strong>{reading?"正在读取文件…":"选择 TXT / Markdown 文件"}</strong><span>UTF-8 编码 · 最多4 MB · Markdown 按纯文本保留</span><input type="file" accept=".txt,.md" disabled={pending||!!draft.command} onChange={event=>{const file=event.target.files?.[0];if(file)void readFile(file);}}/></label>
+      <Field label="章节名称"><input value={draft.title} disabled={pending||!!draft.command} onChange={event=>edit({title:event.target.value})} placeholder="例如：第一章"/></Field>
+      <Field label="原文预览" hint="原文完整保留；编辑预览不会改写导入文件来源。"><textarea value={draft.source} disabled={pending||!!draft.command} onChange={event=>edit({source:event.target.value})} rows={9} placeholder="在这里粘贴本章原文"/></Field>
+      <label className="check-label"><input type="checkbox" checked={draft.prepare} disabled={pending||!!draft.command} onChange={event=>edit({prepare:event.target.checked})}/>导入后进入AI准备</label>
+      <p className="hint">非空草稿关闭后仍可找回。仅本地分段不产生 API 费用。</p>
+      {draft.command&&<p className="hint">{draft.command.chapterId?"章节已经创建。继续只打开原章节，不会再次创建或发起AI请求。":"本次导入命令已保存。重试只核对同一次命令，不会创建第二章。"}</p>}
+      <p className={saved?"hint":"warning"} role="status">{saved?"导入草稿已暂存在本机":"草稿尚未可靠暂存，请先复制原文"}</p>
+      {error&&<p className="error-inline" role="alert">{error}</p>}
+      <div className="source-summary"><span>{Array.from(draft.source).length.toLocaleString()} 字符</span><span>只统一换行，不润色正文</span></div>
+    </Form>
+    {!!draft.source&&!draft.command&&<button className="text-button" disabled={pending||reading} onClick={()=>{clearDraft(draftId);setDraft({source:"",title:"",prepare:true,imported:null});setError("");}}>放弃这份导入草稿</button>}
+  </Dialog>;
 }
 
 function VoiceLibrary({
@@ -3048,6 +3074,7 @@ function ExportDialog({
   total,
   passed,
   connectionReady,
+  jobs,
   onClose,
   onRefresh,
 }: {
@@ -3056,6 +3083,7 @@ function ExportDialog({
   total: number;
   passed: number;
   connectionReady: boolean;
+  jobs: Job[];
   onClose: () => void;
   onRefresh: () => Promise<void>;
 }) {
@@ -3063,6 +3091,8 @@ function ExportDialog({
     [gap, setGap] = useState(c.gap);
   const [gapRevision, setGapRevision] = useState(c.revision);
   const [confirmation, setConfirmation] = useState(c);
+  const [submitted,setSubmitted]=useState(false);
+  const live=useRef(true);useEffect(()=>()=>{live.current=false;},[]);
   return (
     <Dialog title="检查与导出" onClose={onClose}>
       <div className="export-overview">
@@ -3070,7 +3100,7 @@ function ExportDialog({
         <div>
           <h3>{c.title}</h3>
           <p>
-            {ready} / {total} 音频就绪 · {passed} 条检查通过 · {c.segments.filter(s => !s.excluded && s.review === "pending").length} 条待检查
+            {ready} / {total} 句音频就绪 · {passed} 句检查通过 · {c.playbackItems.filter(item=>item.validity==='matched'&&item.review==='pending').length} 个声音单元待检查
           </p>
         </div>
       </div>
@@ -3127,11 +3157,11 @@ function ExportDialog({
             reviewItems: confirmation.reviewItems || confirmation.segments
               .filter((s) => !s.excluded)
               .map((s) => ({ id: s.id, audioId: s.current, basis: basis(s) })),
-          });
+          },jobs);
           if(receipt.error)throw new Error(receipt.error);
+          if(live.current)setSubmitted(true);
           });
           await onRefresh();
-          onClose();
         }}
       >
         {!!c.arrangementIssues?.length && <p className="error-inline" role="alert">当前编排需修复：{c.arrangementIssues.join("；")}。请先明确解除无效分组并核对单条。</p>}
@@ -3140,9 +3170,11 @@ function ExportDialog({
           将当前匹配音频的待检查项统一确认为通过。需返工、身份未确认、缺漏或过期音频必须先处理。
         </p>
       </Form>
+      {submitted&&<p className="hint" role="status">导出任务已提交，在本机继续处理。成品完成后会显示在下方；关闭此面板不影响任务。</p>}
       {c.exports.length > 0 && (
         <div className="section-rule">
           <h3>已导出的文件</h3>
+          {c.exports.some(e=>e.current&&e.fileExists)&&<p className="success-text" role="status">成品已就绪。点击对应格式即可直接下载；下方标明实际编排和完成时间。</p>}
           {c.exports.some(e => !e.fileExists) && <p className="hint">缺失文件不能下载。源音频完整时，可在上方重新导出当前版本，不产生配音费用；历史版本请从备份恢复。</p>}
           {c.exports.slice().reverse().map((e) => (
             <a

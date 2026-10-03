@@ -23,7 +23,7 @@ function fixture(mode='dry'){
   const segments=['one','two','three','outside'].map((id,order)=>({id,order,roleId:'role',voiceId:'voice',text:'自拟台词'+order,roleConfirmed:true,identityConfirmed:true,current:'single-'+id,validity:'matched',latest:'success'}));
   const group={id:'group',kind:'group',state:'active',members:['one','two','three'],mode,variants:{dry:{current:'group-dry',status:{basis:{version:'dry'}}},scene:{current:'group-scene',status:{basis:{version:'scene'}}}}};
   const env={React,visible:segments,segments,roles:[{id:'role',name:'角色'}],voices:[{id:'voice',name:'声音'}],chapter:{id:'chapter',units:[group]},
-    effectiveStatus:()=>({validity:'matched',review:'passed'}),currentMembers:[],currentSegment:'',selected:'',checked:[],connectionReady:true,locked:false,busy:false,
+    configurationDecided:()=>true,effectiveStatus:()=>({validity:'matched',review:'passed'}),currentMembers:[],currentSegment:'',selected:'',checked:[],connectionReady:true,locked:false,busy:false,
     setCurrentMembers:value=>calls.members.push(value),setCurrentSegment(){},startPlay:(...args)=>calls.play.push(args),openUnit:(...args)=>calls.open.push(args),
     run:fn=>fn(),generate:async(...args)=>calls.generate.push(args),setChecked(){},setSelected(){},setPanelMode(){},setInspectorOpen(){},
     openVoice:(...args)=>calls.voice.push(args),bookmarks:{current:{}},chapterId:'chapter',setOldPreview(){},mutate:async()=>{},basis:()=>({}),names:{passed:'已检查',matched:'声音已更新'},
@@ -82,9 +82,9 @@ test('任务摘要仅按记录变化定位焦点，同一记录轮询不抢回�
 
 function headerFixture(){
   const calls={modals:[],panels:[],inspector:[],generate:[],play:0,mutations:[],notices:[]};
-  const env={React,chapter:{id:'chapter',title:'自拟长章名 · 保留角色与台词',coverage:{valid:true}},total:2,ready:0,passed:0,issues:[],criticalIssues:[],saveStatus:'saved',locked:false,busy:false,connectionReady:true,panelMode:'settings',
+  const env={React,chapter:{id:'chapter',title:'自拟长章名 · 保留角色与台词',coverage:{valid:true},playbackItems:[]},total:2,ready:0,passed:0,issues:[],criticalIssues:[],saveStatus:'saved',locked:false,busy:false,connectionReady:true,panelMode:'settings',
     segments:[{id:'one',order:0,excluded:false},{id:'two',order:1,excluded:false},{id:'excluded',order:2,excluded:true}],effectiveStatus:s=>({validity:s.id==='one'?'matched':'missing'}),window:{innerWidth:960},
-    job:{id:'job',kind:'generate',done:6,total:95,failed:1,elapsedSeconds:333,currentSegmentId:'two',stop:false},pendingPlay:{current:{chapterId:'chapter'}},pendingPlaySnapshot:{current:{version:1}},time:()=> '05:33',
+    job:{id:'job',kind:'generate',done:6,total:95,failed:1,elapsedSeconds:333,currentSegmentId:'two',stop:false},playIntent:{current:0},pendingPlay:{current:{chapterId:'chapter'}},pendingPlaySnapshot:{current:{version:1}},time:()=> '05:33',
     setModal:value=>calls.modals.push(value),setPanelMode:value=>calls.panels.push(value),setInspectorOpen:value=>calls.inspector.push(value),run:fn=>fn(),generate:async(...args)=>calls.generate.push(args),playChapter:async()=>{calls.play++;},mutate:async(...args)=>calls.mutations.push(args),setNotice:value=>calls.notices.push(value),
     MoreHorizontal:'MoreHorizontal',AudioLines:'AudioLines'};
   return {env,calls,render:()=>project(heading,env)};
@@ -95,7 +95,7 @@ test('紧凑章节生成区保留问题入口与真实停止条件，母版仍�
     const f=headerFixture();f.env.locked=true;f.env.criticalIssues=[{id:'issue'}];f.env.issues=[{id:'issue'}];f.env.job={...f.env.job,kind,stop:stopping};
     const tree=f.render(),task=nodes(tree).find(node=>node.props.className==='task-banner');assert.ok(task,'The running status belongs to the same chapter heading');assert.equal(task.props.role,'status');
     assert.equal(button(tree,'正在制作…'),undefined,'A disabled duplicate primary action should not consume the running header');
-    const issue=button(tree,'查看问题 · 1');assert.ok(issue);assert.ok(!issue.props.disabled);issue.props.onClick();assert.deepEqual(f.calls.modals,['issues']);
+    const issue=button(tree,'查看问题 · 1 项');assert.ok(issue);assert.ok(!issue.props.disabled);issue.props.onClick();assert.deepEqual(f.calls.modals,['issues']);
     assert.match(text(task),/6\s*\/\s*95/);assert.match(text(task),/05:33/);assert.match(text(task),/只读/);
     const stop=button(task,stopping?'正在停止后续':'停止后续');assert.ok(stop);assert.equal(!!stop.props.disabled,disabled);
     if(!disabled){await stop.props.onClick();assert.deepEqual(f.calls.mutations,[['job.stop',{id:'job'}]]);}else assert.deepEqual(f.calls.mutations,[]);
@@ -109,7 +109,7 @@ test('空闲章节六种主动作仍按保存、准备、问题、生成、试�
   const cases=[
     {label:'处理保存冲突',setup:f=>{f.env.saveStatus='conflict';},check:f=>assert.deepEqual(f.calls.modals,['recovery'])},
     {label:'AI准备剧本',setup:f=>{f.env.segments=[];f.env.total=0;},check:f=>{assert.deepEqual(f.calls.panels,['analysis']);assert.deepEqual(f.calls.inspector,[true]);}},
-    {label:'需要你处理 · 1',setup:f=>{f.env.criticalIssues=[{id:'issue'}];f.env.issues=[{id:'issue'}];},check:f=>assert.deepEqual(f.calls.modals,['issues'])},
+    {label:'需要你处理 · 1 项',setup:f=>{f.env.criticalIssues=[{id:'issue'}];f.env.issues=[{id:'issue'}];},check:f=>assert.deepEqual(f.calls.modals,['issues'])},
     {label:'生成待办',setup(){},check:f=>assert.deepEqual(f.calls.generate,[[['two'],true]])},
     {label:'整章试听',setup:f=>{f.env.ready=2;f.env.passed=1;},check:f=>assert.equal(f.calls.play,1)},
     {label:'导出成品',setup:f=>{f.env.ready=2;f.env.passed=2;},check:f=>assert.deepEqual(f.calls.modals,['export'])},

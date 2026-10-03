@@ -4,6 +4,8 @@
 
 普通用户从 [四步入门](doc/ux-redesign/quick-start.md) 开始：导入文字 → AI准备 → 试听与修改 → 导出成品。本轮变化及验收边界见 [体验升级说明](doc/ux-redesign/release-notes.md)。
 
+导入回执恢复、结果不明先核对、历史声音复用／恢复差异、试验背景存在感及保存位置操作，见 [工具使用说明](doc/工具使用说明.md)。
+
 仓库包含源码、设计文档与验收摘要。密钥、小说测试素材、逐句听评表、生成音频、运行数据及备份仅保存在本地；验收文档中的这些本地证据链接在 GitHub 上不可用。
 
 声音创建、多人干声对戏及场景版本已接入工作台。操作和限制见 [增强阶段使用说明](doc/enhancement/release-notes.md)，交付记录见 [增强阶段状态](doc/enhancement/execution-status.md)，逐项证据见 [增强验收矩阵](doc/enhancement/acceptance-matrix.md)。对戏与场景保持实验标识；工程通过和声音听评分别记录。

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -19,9 +19,9 @@ try{
   if(process.argv.slice(2).some(argument=>argument!=='--no-browser'))throw new Error('启动参数无效；端口和保存位置请使用 PORT / DATA_DIR。');
   if(!existsSync(join(root,'dist','index.html')))throw new Error('预构建界面缺失，请重新解压完整体验包。');
   const {startServer,settings}=await import('../server/index.mjs');
-  const {workspaceDirectory}=await import('../server/workspace.mjs');
+  const {workspaceDirectory,readRuntime}=await import('../server/workspace.mjs');
   const directory=workspaceDirectory(),runtime=join(directory,'runtime.json');
-  let running=existsSync(runtime)?JSON.parse(readFileSync(runtime,'utf8')):null;
+  let running=readRuntime(runtime);
   if(running){
     if(!Number.isSafeInteger(running.pid)||running.pid<1)throw new Error('工作区运行记录无效，请检查原启动窗口；原资料仍保留。');
     try{process.kill(running.pid,0);}catch(error){if(error.code==='ESRCH')running=null;else throw error;}
@@ -30,7 +30,7 @@ try{
     if(!Number.isInteger(running.port)||running.port<1||running.port>65535)throw new Error('现有服务的端口记录无效，请检查原启动窗口。');
     try{
       const response=await fetch(`http://127.0.0.1:${running.port}/api/state`,{signal:AbortSignal.timeout(5000)}),state=await response.json();
-      if(!response.ok||!Array.isArray(state.projects)||!Array.isArray(state.chapters)||resolve(state.settings?.workspaceDirectory||'')!==resolve(directory))throw new Error();
+      if(!response.ok||!Array.isArray(state.projects)||!Array.isArray(state.chapters)||realpathSync(state.settings?.workspaceDirectory||'')!==realpathSync(directory)||state.settings?.runtimePid!==running.pid)throw new Error();
     }catch{throw new Error('此工作区已有进程，但对应服务尚未就绪；请稍后重试或检查原运行窗口。');}
     console.log(`已复用正在运行的工作区：${directory}`);await browse(running.port);
   }else{

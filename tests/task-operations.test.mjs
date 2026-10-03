@@ -14,6 +14,19 @@ async function setup(call) {
 }
 const receipt = (body, extra = {}) => ({ operationId: body.operationId, kind: body.kind, outcome: 'processing', jobIds: ['job-one'], createdObjectIds: [], steps: {}, result: {}, ...extra });
 
+test('查找原回执期间换工作区，旧操作保留原归属且不继续发送到新库',async()=>{
+  let saved,release,sent=0;
+  const {submitOperation}=await setup(async(path,body)=>{
+    if(body){sent++;saved=receipt(body,{outcome:'needsInput',jobIds:[]});return saved;}
+    await new Promise(resolve=>release=resolve);return saved;
+  });
+  sessionStorage.setItem('workbench-workspace','/A');
+  const payload={kind:'generateSelection',chapterId:'same',revision:1};await submitOperation('same',payload);
+  const pending=submitOperation('same',{...payload,revision:2});await Promise.resolve();sessionStorage.setItem('workbench-workspace','/B');release();
+  await assert.rejects(pending,/工作区已变化/);assert.equal(sent,1);
+  assert.ok(localStorage.getItem('workbench-operation/%2FA/test-page/same'));assert.equal(localStorage.getItem('workbench-operation/%2FB/test-page/same'),null);
+});
+
 test('lost operation response queries the exact committed operation without sending again', async () => {
   const calls = []; let written;
   const { submitOperation } = await setup(async (path, body) => {
@@ -24,6 +37,11 @@ test('lost operation response queries the exact committed operation without send
   const result = await submitOperation('dialogue', { kind: 'groupAndGenerate', chapterId: 'chapter' });
   assert.equal(result.operationId, written.operationId); assert.equal(calls.length, 2);
   assert.equal(calls.filter(([, body]) => body).length, 1);
+});
+
+test('HTTP500需要核对原操作时查同ID已创建任务，不重复供应商入口',async()=>{
+  let written,sent=0,reads=0;const {submitOperation}=await setup(async(path,body)=>{if(body){sent++;written=receipt(body);throw Object.assign(new Error('服务中断'),{status:500,retryClass:'check-existing-operation'});}reads++;assert.equal(path,'/operations/'+written.operationId);return written;});
+  const result=await submitOperation('generate',{kind:'generateSelection',chapterId:'chapter'});assert.equal(result.operationId,written.operationId);assert.equal(sent,1);assert.equal(reads,1);
 });
 
 test('unresolved response and reload reuse the durable operation ID; no automatic paid retry', async () => {

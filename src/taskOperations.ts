@@ -11,13 +11,16 @@ export type TaskOperation<T = Record<string, unknown>> = {
   result: T;
   error?: string;
   errorStatus?: number;
+  code?:string;
+  scope?:Record<string,unknown>;
+  retryClass?:string;
 };
 
 // The current draft owner survives reloads and stays distinct in copied tabs.
-const storageKey = (key: string) => "workbench-operation/" + (sessionStorage.getItem("draft-owner") || "page") + "/" + key;
+const storageKey = (key: string) => "workbench-operation/" + encodeURIComponent(sessionStorage.getItem("workbench-workspace")||'') + "/" + (sessionStorage.getItem("draft-owner") || "page") + "/" + key;
 
 export async function submitOperation<T>(key: string, payload: Record<string, unknown>, jobs: Job[] = []): Promise<TaskOperation<T>> {
-  const recordKey = storageKey(key);
+  const workspaceIdentity=sessionStorage.getItem("workbench-workspace")||'',recordKey = storageKey(key);
   const raw = localStorage.getItem(recordKey);
   let record: { operationId: string; payload: Record<string, unknown>; receipt?: TaskOperation<T> } | null = raw ? JSON.parse(raw) : null;
   const changed = !!record && JSON.stringify(record.payload) !== JSON.stringify(payload);
@@ -37,6 +40,7 @@ export async function submitOperation<T>(key: string, payload: Record<string, un
   if (unknown && payload.retryUnknown !== true) throw new Error("上一次结果不明，可能已计费；请先明确决定是否再次发送请求。");
   if (changed && record?.receipt?.outcome === "processing" && !finished) throw new Error("上一次操作仍在处理中，请先查看结果，再发起新的制作。");
   if (changed && record?.payload.kind === "groupAndGenerate" && record.receipt?.createdObjectIds.length && !finished) return record.receipt;
+  if((sessionStorage.getItem("workbench-workspace")||'')!==workspaceIdentity)throw new Error("工作区已变化，原操作仍保留在原工作区；请重新打开目标后继续。");
   if (!record || changed || finished || (unknown && payload.retryUnknown === true)) {
     record = { operationId: crypto.randomUUID(), payload };
     localStorage.setItem(recordKey, JSON.stringify(record));
@@ -49,7 +53,7 @@ export async function submitOperation<T>(key: string, payload: Record<string, un
     return receipt;
   } catch (error) {
     // A lost response may follow a committed write. Query that operation before offering a retry.
-    if (!(error as { status?: number }).status) {
+    if (!(error as { status?: number }).status || (error as {retryClass?:string}).retryClass==='check-existing-operation') {
       try {
         const receipt = await api<TaskOperation<T>>("/operations/" + record.operationId);
         record.receipt = receipt;

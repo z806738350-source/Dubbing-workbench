@@ -16,7 +16,7 @@ import {
 } from "./audio.mjs";
 import { createAnalysis } from "./analysis.mjs";
 import { createExperience } from './experience.mjs';
-import { workspaceDirectory, workspaceConfig as defaultWorkspaceConfig, copyWorkspace, saveWorkspaceLocation, recoverProjectFolders, chooseWorkspaceDirectory } from './workspace.mjs';
+import { workspaceDirectory, workspaceIdentity, workspaceConfig as defaultWorkspaceConfig, copyWorkspace, saveWorkspaceLocation, recoverProjectFolders, chooseWorkspaceDirectory, readRuntime, workspaceDiagnostics } from './workspace.mjs';
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 if (existsSync(join(root, ".env.kunpo")))
@@ -46,7 +46,7 @@ export async function startServer({
   await mkdir(directory, { recursive: true });
   let runtime = join(directory, "runtime.json");
   if (existsSync(runtime)) {
-    const { pid } = JSON.parse(await readFile(runtime, "utf8"));
+    const { pid } = readRuntime(runtime);
     try {
       process.kill(pid, 0);
       throw new Error("此数据目录已有工作台服务，请使用现有服务");
@@ -69,7 +69,14 @@ export async function startServer({
     await worker.recover();
     analysis.recover();
     audioTools = await toolsAvailable();
-    if (audioTools) for (const a of store.all("audios")) await validateStoredAudio(store, a);
+    if (audioTools) {
+      const audios = store.all("audios");
+      if (audios.length > 20) console.log(`正在校验已有音频（${audios.length} 份），原文件与历史保留，请稍候…`);
+      for (const [i, a] of audios.entries()) {
+        await validateStoredAudio(store, a);
+        if (audios.length > 20 && (i + 1 === audios.length || (i + 1) % 25 === 0)) console.log(`音频校验：${i + 1} / ${audios.length}`);
+      }
+    }
   } catch (e) {
     if (analysis) await analysis.close();
     store?.close();
@@ -77,6 +84,16 @@ export async function startServer({
     throw e;
   }
   const send = (res, status, data) => {
+    if (status >= 400 || data?.error || data?.outcome === 'unknown') {
+      const errorStatus = status >= 400 ? status : data.errorStatus || 500;
+      const recovery = data.outcome === 'unknown' ? ['request-unknown', 'explicit-retry-unknown'] : {
+        400: ['invalid-request', 'edit-request'], 401: ['permission-denied', 'review-permission'], 403: ['permission-denied', 'review-permission'],
+        404: ['object-unavailable', 'review-target'], 409: ['state-conflict', 'refresh-and-review'], 413: ['request-too-large', 'edit-request'],
+        416: ['invalid-range', 'review-target'], 503: ['service-unavailable', 'wait-for-service'],
+      }[errorStatus] || ['operation-result-unconfirmed', 'check-existing-operation'];
+      data = { ...data, code: data.code || recovery[0], scope: { kind: data.operationId ? 'operation' : 'request', path: (res.req.url || '').split('?')[0], ...data.dependencies, ...data.scope, ...(data.operationId ? { operationId: data.operationId } : {}) }, retryClass: data.retryClass || recovery[1] };
+      if(status < 400 && data.retryClass === 'check-existing-operation') data.error = (data.error || '本次操作结果尚未确认。') + ' 请先查看现有记录并核对原操作，再决定下一步。';
+    }
     res.writeHead(status, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
@@ -202,14 +219,23 @@ export async function startServer({
             textModel: textModel(store),
             defaultGap: store.maybe("settings", "models")?.defaultGap ?? 0.5,
             workspaceDirectory: directory,
+            workspaceIdentity: workspaceIdentity(directory),
+            runtimePid: process.pid,
             projectFolders: !!store.maybe('settings', 'project-folders')?.enabled,
             features: domain.enhancement.features(),
-            schemaVersion: 2,
+            schemaVersion: store.get('settings', 'data-schema').version,
             audioUsage: (() => { const u = store.maybe("settings", `audio-usage:${config.usageScope || "audio-calls-v1"}`); return { limit: u?.limit ?? config.callLimit, reserved: u?.reserved || 0, used: u?.used || 0 }; })(),
           },
         });
       if (req.method === "GET" && /^\/api\/voices\/[^/]+\/usage$/.test(path))
         return send(res, 200, domain.voiceUsage(path.split("/")[3]));
+      if (req.method === 'GET' && path === '/api/workspace/diagnostics') return send(res,200,workspaceDiagnostics(store));
+      if (req.method === 'GET' && /^\/api\/projects\/[^/]+\/deletion-plan$/.test(path))
+        return send(res, 200, domain.deletionPlan({id:path.split('/')[3]}));
+      if (req.method === 'GET' && /^\/api\/chapters\/[^/]+\/structural-repair-plan$/.test(path))
+        return send(res, 200, domain.structuralRepairPlan({ chapterId: path.split('/')[3] }));
+      if (req.method === 'GET' && path === '/api/diagnostics/compiler-compatibility')
+        return send(res, 200, domain.enhancement.compilerCompatibility());
       if (req.method === "GET" && path.startsWith("/api/chapters/")) {
         const id = path.split("/").pop();
         if (audioTools) for (const row of domain.enhancement.inspectArrangement(id).rows) {
@@ -332,7 +358,8 @@ export async function startServer({
             ? e.message
             : e.code === "ENOENT"
               ? "音频文件缺失，请重新准备或恢复备份"
-              : "本地服务处理失败，请保留当前编辑并重试",
+              : "本地服务处理失败，请保留当前编辑",
+          ...(e.status && e.retryClass ? { code: e.code, scope: e.scope, retryClass: e.retryClass } : {}),
         });
       else res.destroy();
     } finally { if (counted) activeRequests--; }

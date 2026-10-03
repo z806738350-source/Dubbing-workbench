@@ -1,0 +1,1213 @@
+{
+  "observedAtUTC": "2026-10-03T10:45:25.083462+00:00",
+  "baselineSHA": "a291fe3e4ec220d6300ff7f36a935901002d2ce5",
+  "implementationSHA": null,
+  "implementationVersion": "uncommitted working tree; no final implementation commit claimed",
+  "scope": "F/N/S与本轮新增工程遗漏的证据登记；不是新执行计划",
+  "sourcePlan": "doc/配音工作台-a291fe3全链路复审与原生背景整改执行计划-v2.0-2026-10-03.md",
+  "countsAreNotAcceptanceSignatures": true,
+  "originalAuditAttachmentsMissing": true,
+  "issues": [
+    {
+      "id": "F01",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "A16",
+        "A17",
+        "A18",
+        "A19",
+        "A20",
+        "A21",
+        "A34"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "core",
+        "front",
+        "red-repair",
+        "repair"
+      ],
+      "actualBoundary": "结构转换重建最终实际决定/父操作来源，未确认不提权、双方保护并集；不同first/second方向及AI拆短覆盖。；有父证据/无父证据dry-run与scope/revision/eligible事务应用均已测；保留before快照，只改structural决定；音频/input/review/编排不变，反向与回滚通过。；实际unit/variant事实统一readiness与失败/问题/主动作；活动组抑制被替代成员失败，坏决定可见，停用参考不误拦本地成品。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        },
+        {
+          "id": "red-repair",
+          "path": "data/ux-hardening-20261003/automation/core-repair-apply-red.log",
+          "level": "新动作缺失最小红灯",
+          "result": "原路由无handler落入segmentget；已由repair最终日志覆盖",
+          "replayCommand": null,
+          "observedBytes": 1749
+        },
+        {
+          "id": "repair",
+          "path": "data/ux-hardening-20261003/automation/core-repair-apply-final.log",
+          "level": "已运行隔离A21事务应用 + 反向回滚",
+          "result": "9/9；chapter.repair-structural-decisions由scope/revision/eligible保护，保存before快照",
+          "replayCommand": "node --test --test-name-pattern='A21' tests/experience.test.mjs",
+          "observedBytes": 1586
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "F02",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "A37",
+        "A38",
+        "A39",
+        "A40"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "core",
+        "front"
+      ],
+      "actualBoundary": "matched+rework进入按单元重做计划，组一次请求，其他好结果复用；仅标返工0调用且正式导出阻断。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "F03",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "A04",
+        "A05",
+        "A06",
+        "A07",
+        "A08",
+        "A09",
+        "A31"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "candidate",
+        "core",
+        "native",
+        "unknown"
+      ],
+      "actualBoundary": "unknown由持久attempt账本判断，决定绑定实际目标/mode/已发送命令；停止排队不消费，新unknown重验；旧返回只归正确历史。；实际本地导出在参考停用/unknown且匹配通过时完成，额外provider调用为0；生成仍需决定。；实际Mock worker覆盖B排队/在途放弃A、入库A、放弃B、改描述/放弃会话和同会话unknown；输入不改写。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "candidate",
+          "path": "data/ux-hardening-20261003/automation/enhancement-worker-final.log",
+          "level": "已运行 Mock worker + 本地FFmpeg",
+          "result": "51/51；候选取舍/在途/同会话unknown",
+          "replayCommand": "node --test tests/enhancement-worker.test.mjs",
+          "observedBytes": 8519
+        },
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "native",
+          "path": "data/ux-hardening-20261003/automation/native-history-final.log",
+          "level": "已运行 Node 隔离夹具",
+          "result": "77/77；enhancement/native-scene/scene-analysis/history-query",
+          "replayCommand": "node --test tests/enhancement.test.mjs tests/native-scene.test.mjs tests/scene-analysis.test.mjs tests/native-history-query.test.mjs",
+          "observedBytes": 15777
+        },
+        {
+          "id": "unknown",
+          "path": "data/ux-hardening-20261003/automation/core-unknown-final.log",
+          "level": "已运行 Mock 请求与实际计划提交",
+          "result": "9/9；含单子范围、merge、双子计划集合去重",
+          "replayCommand": "node --test --test-name-pattern='F03' tests/worker.test.mjs tests/experience.test.mjs",
+          "observedBytes": 2118
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "F04",
+      "status": "已实现未验证",
+      "acceptanceIds": [
+        "A22",
+        "A23",
+        "A24",
+        "A25",
+        "A26",
+        "A27"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "browser-pause",
+        "browser-reference",
+        "front"
+      ],
+      "actualBoundary": "实际浏览器旧章节预检被hold后点参考B，60秒释放迟到A，媒体来源仍为B直至正常播放结束；Node覆盖候选等其余来源。；playIntent已覆盖各来源、准备/媒体Promise/母版与停止；Node/AST迟到和立即暂停通过，本机已有背景暂停图。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "边界仍待验",
+      "evidence": [
+        {
+          "id": "browser-pause",
+          "path": "data/ux-hardening-20261003/browser/background-local-pause.jpg",
+          "level": "本机浏览器截图；详细操作说明待补",
+          "result": "只支持已观察的背景试听/暂停画面，不扩为所有迟到、拒播或切章组合",
+          "replayCommand": null,
+          "observedBytes": 85780
+        },
+        {
+          "id": "browser-reference",
+          "path": "data/ux-hardening-20261003/browser/README.md",
+          "level": "主任务已执行真实浏览器10项操作并保留截图/DOM/媒体状态",
+          "result": "播放暂停、迟到参考优先、导入/下载/取消删除与960/1280/1440局部画面；第10项真实4318只读历史与恢复预览，未apply，未扩为全部长尾/IME",
+          "replayCommand": null,
+          "observedBytes": 3323
+        },
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "F05",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "A28",
+        "A29",
+        "A30",
+        "A31"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "candidate",
+        "core",
+        "native"
+      ],
+      "actualBoundary": "实际Mock worker覆盖B排队/在途放弃A、入库A、放弃B、改描述/放弃会话和同会话unknown；输入不改写。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "candidate",
+          "path": "data/ux-hardening-20261003/automation/enhancement-worker-final.log",
+          "level": "已运行 Mock worker + 本地FFmpeg",
+          "result": "51/51；候选取舍/在途/同会话unknown",
+          "replayCommand": "node --test tests/enhancement-worker.test.mjs",
+          "observedBytes": 8519
+        },
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "native",
+          "path": "data/ux-hardening-20261003/automation/native-history-final.log",
+          "level": "已运行 Node 隔离夹具",
+          "result": "77/77；enhancement/native-scene/scene-analysis/history-query",
+          "replayCommand": "node --test tests/enhancement.test.mjs tests/native-scene.test.mjs tests/scene-analysis.test.mjs tests/native-history-query.test.mjs",
+          "observedBytes": 15777
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "F06",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "A32",
+        "A33",
+        "A34",
+        "A35",
+        "A36"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "core",
+        "front"
+      ],
+      "actualBoundary": "实际unit/variant事实统一readiness与失败/问题/主动作；活动组抑制被替代成员失败，坏决定可见，停用参考不误拦本地成品。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "F07",
+      "status": "已实现未验证",
+      "acceptanceIds": [
+        "A10",
+        "A11",
+        "A12",
+        "A13",
+        "A14",
+        "A15",
+        "A45",
+        "A46",
+        "A47",
+        "A48"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "core",
+        "front"
+      ],
+      "actualBoundary": "持久导入operationId回原章，同ID异载荷拒绝；显式新ID允许同文新章；客户端存储失败0发送、DB回执失败全回滚。；组件真实回调夹具验证已创建但导航失败只恢复原导航，不重复POST。；等待关闭后保留原创建回执且不导航有AST实测；切项目过程中原返回ID不误导向新项目尚无实际浏览器记录。；导入非空草稿持久化和关页恢复、A慢B快、4MB预检、UTF8/读取错误区分、编辑保留原文件来源均有组件回调夹具。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "边界仍待验",
+      "evidence": [
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "N01",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "B01",
+        "B02",
+        "B03",
+        "B04"
+      ],
+      "preExisting": "N02/N03计划明确前存；N01有同ID历史证据，首次引入提交未推断",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "D",
+        "native",
+        "storage"
+      ],
+      "actualBoundary": "不可变compiler registry按原input/prompt精确分类；未知只读，恢复candidate逐字相同；原D unknown保留，schema3拒绝旧writer。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "D",
+          "path": "data/native-scene-20261003/D-workbench.json",
+          "level": "已有真实D原始快照 + 当前只读分类核对",
+          "result": "419 Unicode字符精确命中native3-frozen-cd；原unknown/input/prompt保留，未冒充成功恢复",
+          "replayCommand": null,
+          "observedBytes": 10726
+        },
+        {
+          "id": "native",
+          "path": "data/ux-hardening-20261003/automation/native-history-final.log",
+          "level": "已运行 Node 隔离夹具",
+          "result": "77/77；enhancement/native-scene/scene-analysis/history-query",
+          "replayCommand": "node --test tests/enhancement.test.mjs tests/native-scene.test.mjs tests/scene-analysis.test.mjs tests/native-history-query.test.mjs",
+          "observedBytes": 15777
+        },
+        {
+          "id": "storage",
+          "path": "data/ux-hardening-20261003/storage-final.log",
+          "level": "已运行隔离SQLite + FFmpeg",
+          "result": "4/4；旧writer、缺派生母版、坏runtime、升级回滚；history-query另见native 77/77",
+          "replayCommand": "node --test tests/storage-hardening.test.mjs",
+          "observedBytes": 1168
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "N02",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "B05",
+        "B06",
+        "B07",
+        "B08"
+      ],
+      "preExisting": "N02/N03计划明确前存；N01有同ID历史证据，首次引入提交未推断",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "front",
+        "native"
+      ],
+      "actualBoundary": "仅替换采用事件；draft/removed保持追踪；预览列草稿与事件差异，baseRevisions重验新增草稿，ID/来源冲突拒绝。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        },
+        {
+          "id": "native",
+          "path": "data/ux-hardening-20261003/automation/native-history-final.log",
+          "level": "已运行 Node 隔离夹具",
+          "result": "77/77；enhancement/native-scene/scene-analysis/history-query",
+          "replayCommand": "node --test tests/enhancement.test.mjs tests/native-scene.test.mjs tests/scene-analysis.test.mjs tests/native-history-query.test.mjs",
+          "observedBytes": 15777
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "N03",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "B09",
+        "B10",
+        "B11",
+        "B12"
+      ],
+      "preExisting": "N02/N03计划明确前存；N01有同ID历史证据，首次引入提交未推断",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "front",
+        "native"
+      ],
+      "actualBoundary": "不先编译当前坏指导；保护正文/参考/成员，历史候选合法且精确后原子写；中途SQL/持久后置条件失败全部回滚，rework保留。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        },
+        {
+          "id": "native",
+          "path": "data/ux-hardening-20261003/automation/native-history-final.log",
+          "level": "已运行 Node 隔离夹具",
+          "result": "77/77；enhancement/native-scene/scene-analysis/history-query",
+          "replayCommand": "node --test tests/enhancement.test.mjs tests/native-scene.test.mjs tests/scene-analysis.test.mjs tests/native-history-query.test.mjs",
+          "observedBytes": 15777
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "S01",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "A35"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "core",
+        "front"
+      ],
+      "actualBoundary": "实际unit/variant事实统一readiness与失败/问题/主动作；活动组抑制被替代成员失败，坏决定可见，停用参考不误拦本地成品。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "S02",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "A61",
+        "A62",
+        "A63",
+        "A64"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "core",
+        "location",
+        "schema-backup",
+        "storage"
+      ],
+      "actualBoundary": "完整配方缺派生母版可免费本地重建再迁移；缺原始素材列准确缺项、变化重新解码，历史导出/unknown原件不被清理。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "location",
+          "path": "data/ux-hardening-20261003/workspace-location-client.log",
+          "level": "已运行实际位置面板回调",
+          "result": "3/3；四类数量/引用字节、原件缺失禁迁移、可重建母版区分；不是长期真库测量",
+          "replayCommand": "node --test tests/workspace-location-client.test.mjs",
+          "observedBytes": 817
+        },
+        {
+          "id": "schema-backup",
+          "path": "data/ux-hardening-20261003/automation/native-schema-backup-tests.log",
+          "level": "早期运行的隔离候选/备份/清理回归",
+          "result": "26/26；属于较早阶段，不作最新全量替代",
+          "replayCommand": null,
+          "observedBytes": 6654
+        },
+        {
+          "id": "storage",
+          "path": "data/ux-hardening-20261003/storage-final.log",
+          "level": "已运行隔离SQLite + FFmpeg",
+          "result": "4/4；旧writer、缺派生母版、坏runtime、升级回滚；history-query另见native 77/77",
+          "replayCommand": "node --test tests/storage-hardening.test.mjs",
+          "observedBytes": 1168
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "S03",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "A41",
+        "A42",
+        "A43",
+        "A44",
+        "B13",
+        "B14"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "front",
+        "native",
+        "unicode"
+      ],
+      "actualBoundary": "共享sceneContract按Unicode代码点1500描述/3000提示；AI超限partial，1500合法、1501/2000拒绝，emoji及组合字符原文保留。；AI描述1501/2000不ready且不截断；编辑/采用/编译同1500代码点，整体3000预算拒绝；emoji/组合边界已执行。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        },
+        {
+          "id": "native",
+          "path": "data/ux-hardening-20261003/automation/native-history-final.log",
+          "level": "已运行 Node 隔离夹具",
+          "result": "77/77；enhancement/native-scene/scene-analysis/history-query",
+          "replayCommand": "node --test tests/enhancement.test.mjs tests/native-scene.test.mjs tests/scene-analysis.test.mjs tests/native-history-query.test.mjs",
+          "observedBytes": 15777
+        },
+        {
+          "id": "unicode",
+          "path": "data/ux-hardening-20261003/automation/unicode-contract-check.json",
+          "level": "已运行共享描述validator边界断言",
+          "result": "emoji/组合字符1500/1501四项通过；0请求；不作真实编辑器输入法证明",
+          "replayCommand": null,
+          "observedBytes": 962
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "S04",
+      "status": "已实现未验证",
+      "acceptanceIds": [
+        "A54",
+        "A55",
+        "A56",
+        "A57",
+        "A58",
+        "A59",
+        "A60",
+        "B15",
+        "B16",
+        "B17",
+        "B18",
+        "B19",
+        "B20",
+        "B21",
+        "B22",
+        "B23",
+        "B24"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "D",
+        "K-frozen",
+        "K-live",
+        "K-mock",
+        "K-preflight",
+        "core",
+        "front",
+        "native",
+        "old-GJ",
+        "old-K",
+        "old-native",
+        "unknown"
+      ],
+      "actualBoundary": "scene整体指导、修订、已采用/移除事件进入AI建议；旧建议在指导变化后不可采用，dry/extract保持原政策。；保留旧v1/v2/v3，新presence独立ID，来源记录及明确冲突聚合；普通编译/诊断0额外文本调用、0真实调用。；原A/B/C/D条件档案存在，D精确分类已只读复核；未本轮重跑全部历史样本，未取得外部审计ZIP完整比对。；旧343字78.4秒K只作为既往基准；新首对真实收到原始WAV和正常母版，背景与首中尾文字身份仍待听评。；显式clear/natural/subtle仅替换presence块，未设置原样；development与volumeChange分开，member+quote+occurrence保护，明确冲突聚合且正文词语不误扫。；首对真实K0/K1冻结仅presence不同，343字正文/参考/模型/参数/路由相同，全部实际请求及原文件有ledger。；无授权路径Mock/预检0真实调用；首对在当前用户明确授权后仅2请求，既往10次不作无限授权。；本次2次返回全部记录且首对后等待提交听评；unknown不自动重发、下一决定绑定实际attempt/目标范围有Mock正反。；新首对humanListening为pending；用户未提交首中尾/转折/正文/背景存在感评分，音量问题保持效果待验。；原始WAV/正常母版有不同声道与时长元数据；未形成相同音量/相同媒体来源的完整听评记录，不用RMS冒称背景响度。；正常worker掌握供应商响应和unknown账本，mock预检/回应原件记录不伪成功；D诊断采集unknown保持，0自动重发。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "边界仍待验",
+      "evidence": [
+        {
+          "id": "D",
+          "path": "data/native-scene-20261003/D-workbench.json",
+          "level": "已有真实D原始快照 + 当前只读分类核对",
+          "result": "419 Unicode字符精确命中native3-frozen-cd；原unknown/input/prompt保留，未冒充成功恢复",
+          "replayCommand": null,
+          "observedBytes": 10726
+        },
+        {
+          "id": "K-frozen",
+          "path": "data/ux-hardening-20261003/k-presence/live/frozen.json",
+          "level": "已保存本次授权首对请求条件",
+          "result": "仅presence块变化，343字正文/参考/模型/参数/路由保留；generic生产文案替代案例专用词已说明",
+          "replayCommand": null,
+          "observedBytes": 5117
+        },
+        {
+          "id": "K-live",
+          "path": "data/ux-hardening-20261003/k-presence/live/ledger.json",
+          "level": "真实供应商返回，未人工验声",
+          "result": "首对K0/K1各1次，HTTP200 received；89.8s/81.68s，humanListening pending；不追加请求",
+          "replayCommand": null,
+          "observedBytes": 3050
+        },
+        {
+          "id": "K-mock",
+          "path": "data/ux-hardening-20261003/k-presence/mock/ledger.json",
+          "level": "已运行正常worker Mock对照",
+          "result": "离线请求与母版流程，不能作为真实背景可闻性",
+          "replayCommand": null,
+          "observedBytes": 2989
+        },
+        {
+          "id": "K-preflight",
+          "path": "data/ux-hardening-20261003/k-presence/mock/preflight-error-ledger.json",
+          "level": "已运行Mock派发前错误对照",
+          "result": "未发送的预检错误不伪造provider调用/产物",
+          "replayCommand": null,
+          "observedBytes": 126
+        },
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        },
+        {
+          "id": "native",
+          "path": "data/ux-hardening-20261003/automation/native-history-final.log",
+          "level": "已运行 Node 隔离夹具",
+          "result": "77/77；enhancement/native-scene/scene-analysis/history-query",
+          "replayCommand": "node --test tests/enhancement.test.mjs tests/native-scene.test.mjs tests/scene-analysis.test.mjs tests/native-history-query.test.mjs",
+          "observedBytes": 15777
+        },
+        {
+          "id": "old-GJ",
+          "path": "data/native-scene-20261003/joint-capability-followup/human-listening-correction.json",
+          "level": "既往用户听评更正",
+          "result": "J优秀、G背景偏小是既往单例；不是当前K单变量对照",
+          "replayCommand": null,
+          "observedBytes": 641
+        },
+        {
+          "id": "old-K",
+          "path": "data/native-scene-20261003/original-long-followup/human-listening-assessment.json",
+          "level": "既往343字K记录",
+          "result": "旧78.4秒K仅基准；本轮首对听评另列",
+          "replayCommand": null,
+          "observedBytes": 1906
+        },
+        {
+          "id": "old-native",
+          "path": "data/native-scene-20261003/frozen-experiment.json",
+          "level": "已有历史条件档案，非本轮重跑",
+          "result": "A/B/C/D历史条件只核对已有归档；不推导当前全场景成功",
+          "replayCommand": null,
+          "observedBytes": 7883
+        },
+        {
+          "id": "unknown",
+          "path": "data/ux-hardening-20261003/automation/core-unknown-final.log",
+          "level": "已运行 Mock 请求与实际计划提交",
+          "result": "9/9；含单子范围、merge、双子计划集合去重",
+          "replayCommand": "node --test --test-name-pattern='F03' tests/worker.test.mjs tests/experience.test.mjs",
+          "observedBytes": 2118
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "S05",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "A45",
+        "A46",
+        "A47",
+        "A48"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "front"
+      ],
+      "actualBoundary": "导入非空草稿持久化和关页恢复、A慢B快、4MB预检、UTF8/读取错误区分、编辑保留原文件来源均有组件回调夹具。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "S06",
+      "status": "已实现并验证",
+      "acceptanceIds": [
+        "A74",
+        "A75",
+        "A76",
+        "A77"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "browser-reference",
+        "core",
+        "delivery",
+        "front"
+      ],
+      "actualBoundary": "Node夹具验证成品卡与关面板迟到回执不夺窗口；实际浏览器WAV/MP3卡与下载已完成，bytes/实际masterId核对。；本地FFmpeg母版映射/帧数及WAV/MP3路径测试通过；损坏源/过期编排拒绝，不把unknown当现有音频损坏。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "工程关闭",
+      "evidence": [
+        {
+          "id": "browser-reference",
+          "path": "data/ux-hardening-20261003/browser/README.md",
+          "level": "主任务已执行真实浏览器10项操作并保留截图/DOM/媒体状态",
+          "result": "播放暂停、迟到参考优先、导入/下载/取消删除与960/1280/1440局部画面；第10项真实4318只读历史与恢复预览，未apply，未扩为全部长尾/IME",
+          "replayCommand": null,
+          "observedBytes": 3323
+        },
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "delivery",
+          "path": "data/ux-hardening-20261003/delivery-verification.json",
+          "level": "已执行实际媒体下载与生产资料前后只读核对",
+          "result": "WAV下载等于母版、MP3同masterId；真库protected字段保留，135引用文件逐字节一致、audioUsage不新增；本轮真付费仅K首对2次",
+          "replayCommand": null,
+          "observedBytes": 2908
+        },
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "S07",
+      "status": "已实现未验证",
+      "acceptanceIds": [
+        "A70",
+        "A71",
+        "A72",
+        "A73"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "core",
+        "front",
+        "location",
+        "perf-before",
+        "perf-final",
+        "perf-index",
+        "profile-final",
+        "schema-backup",
+        "storage"
+      ],
+      "actualBoundary": "300/1000×5历史domain投影有机器/p50/内存；索引和本请求复用实测显著改进，未测浏览器输入/轮询及解码。；启动按已有音频逐个实际校验并输出计数，原件历史保留；很多真实音频首启时长/用户看到的健康状态未专项测量。；组筛选作用域、任务焦点及同记录轮询不抢焦点有AST；长列表真实滚动/焦点保持未完成。；只读库存及面板按四类列数量/引用字节、缺原件/可免费重建母版，清理保留历史；长期增长数据演练仍未跑。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "边界仍待验",
+      "evidence": [
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        },
+        {
+          "id": "location",
+          "path": "data/ux-hardening-20261003/workspace-location-client.log",
+          "level": "已运行实际位置面板回调",
+          "result": "3/3；四类数量/引用字节、原件缺失禁迁移、可重建母版区分；不是长期真库测量",
+          "replayCommand": "node --test tests/workspace-location-client.test.mjs",
+          "observedBytes": 817
+        },
+        {
+          "id": "perf-before",
+          "path": "data/ux-hardening-20261003/performance-before.json",
+          "level": "已运行实际domain投影测量，非浏览器/解码",
+          "result": "300/1000条、每条5历史；含机器/p50/内存；初始约4.9s/62.8s",
+          "replayCommand": null,
+          "observedBytes": 1597
+        },
+        {
+          "id": "perf-final",
+          "path": "data/ux-hardening-20261003/performance-final.json",
+          "level": "已运行300/1000条最终domain测量",
+          "result": "本机domain测量，浏览器/解码/输入轮询仍单独待验",
+          "replayCommand": "BENCH_SOURCE=. BENCH_OUT=/tmp/dubbing-performance-replay.json node data/ux-hardening-20261003/benchmark.mjs",
+          "observedBytes": 1580
+        },
+        {
+          "id": "perf-index",
+          "path": "data/ux-hardening-20261003/performance-after.json",
+          "level": "已运行实际domain投影中间测量",
+          "result": "索引初改约0.276s/2.644s；不是最终性能",
+          "replayCommand": null,
+          "observedBytes": 1582
+        },
+        {
+          "id": "profile-final",
+          "path": "data/ux-hardening-20261003/automation/native-history-profile-final.json",
+          "level": "已运行同规模隔离响应诊断",
+          "result": "总0.231s；chapters读取2次；历史56.3ms；17,334,525字节；单样本不是p95",
+          "replayCommand": "node data/ux-hardening-20261003/automation/native-history-profile.mjs",
+          "observedBytes": 1580
+        },
+        {
+          "id": "schema-backup",
+          "path": "data/ux-hardening-20261003/automation/native-schema-backup-tests.log",
+          "level": "早期运行的隔离候选/备份/清理回归",
+          "result": "26/26；属于较早阶段，不作最新全量替代",
+          "replayCommand": null,
+          "observedBytes": 6654
+        },
+        {
+          "id": "storage",
+          "path": "data/ux-hardening-20261003/storage-final.log",
+          "level": "已运行隔离SQLite + FFmpeg",
+          "result": "4/4；旧writer、缺派生母版、坏runtime、升级回滚；history-query另见native 77/77",
+          "replayCommand": "node --test tests/storage-hardening.test.mjs",
+          "observedBytes": 1168
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "S08",
+      "status": "按计划延期",
+      "acceptanceIds": [
+        "A91",
+        "A92",
+        "A93",
+        "A94"
+      ],
+      "preExisting": "计划登记的旧问题/收敛项；未推断由a291首次引入",
+      "baselineEvidence": "原外部38项附件缺失；本轮红灯仅以独立实际归档范围证明",
+      "repairEvidenceIds": [
+        "core",
+        "launch",
+        "native",
+        "saved-location",
+        "saved-location-build",
+        "saved-location-red",
+        "storage"
+      ],
+      "actualBoundary": "计划的外部新机验收尚未执行；开发机已有Node/FFmpeg不能代替新用户安装。；本机隔离启动脚本已有复用PID/工作区、端口保护、安全停止；Finder双击与全新机组合未签收。；schema3拒绝旧写入器、只读备份/升级回滚有实测；完整发行包更新和回退数据/音频保留还需复验。；已保存目录断开、原DB缺失/空文件拒绝且不建空库；隔离测试覆盖首次默认、显式DATA_DIR及有效目录别名仍可用，9/9与构建通过。",
+      "rollbackBoundary": "不改写原audio.input/prompt及unknown事实；资料保留。涉及schema3/新决定/不可变compiler语义时回退包须具备相应写入能力，不能用旧writer强写；真库事务修复只在明确预览范围执行。",
+      "phaseState": "边界仍待验",
+      "evidence": [
+        {
+          "id": "core",
+          "path": "data/ux-hardening-20261003/automation/core-storage-review-final4.log",
+          "level": "已运行 Node + Mock + 实际本地FFmpeg/HTTP",
+          "result": "230/230；experience/worker/semantic-split/project-delete/storage-hardening/enhancement-worker；含A21事务修复",
+          "replayCommand": "node --test tests/experience.test.mjs tests/worker.test.mjs tests/semantic-split.test.mjs tests/project-delete.test.mjs tests/storage-hardening.test.mjs tests/enhancement-worker.test.mjs",
+          "observedBytes": 43151
+        },
+        {
+          "id": "launch",
+          "path": "data/ux-hardening-20261003/storage-launch-clean.log",
+          "level": "已运行清洁独立启动回归",
+          "result": "旧混杂storage-launch-final.log不作最终证据",
+          "replayCommand": "node --test tests/storage-hardening.test.mjs tests/workspace.test.mjs tests/launch.test.mjs tests/experience-http.test.mjs tests/native-history-query.test.mjs",
+          "observedBytes": 3586
+        },
+        {
+          "id": "native",
+          "path": "data/ux-hardening-20261003/automation/native-history-final.log",
+          "level": "已运行 Node 隔离夹具",
+          "result": "77/77；enhancement/native-scene/scene-analysis/history-query",
+          "replayCommand": "node --test tests/enhancement.test.mjs tests/native-scene.test.mjs tests/scene-analysis.test.mjs tests/native-history-query.test.mjs",
+          "observedBytes": 15777
+        },
+        {
+          "id": "saved-location",
+          "path": "data/ux-hardening-20261003/automation/saved-workspace-location-final.log",
+          "level": "已运行隔离保存位置检查",
+          "result": "9/9；配置位置断开/原库缺失或为空均拒绝，不创建空库；首次默认、显式DATA_DIR及合法别名保留",
+          "replayCommand": "node --test tests/storage-hardening.test.mjs tests/workspace.test.mjs",
+          "observedBytes": 2519
+        },
+        {
+          "id": "saved-location-build",
+          "path": "data/ux-hardening-20261003/automation/saved-workspace-location-build.log",
+          "level": "已运行A94修后TypeScript + Vite",
+          "result": "构建成功；不是物理外接盘/新Mac实录",
+          "replayCommand": "npm run build",
+          "observedBytes": 3662
+        },
+        {
+          "id": "saved-location-red",
+          "path": "data/ux-hardening-20261003/automation/saved-workspace-location-red.log",
+          "level": "已运行A94最小红灯",
+          "result": "已保存目录断开未拒绝的Missing expected exception；由saved-location最终9/9覆盖",
+          "replayCommand": null,
+          "observedBytes": 1199
+        },
+        {
+          "id": "storage",
+          "path": "data/ux-hardening-20261003/storage-final.log",
+          "level": "已运行隔离SQLite + FFmpeg",
+          "result": "4/4；旧writer、缺派生母版、坏runtime、升级回滚；history-query另见native 77/77",
+          "replayCommand": "node --test tests/storage-hardening.test.mjs",
+          "observedBytes": 1168
+        }
+      ],
+      "realUserIncidentClaimed": false,
+      "classification": "R/S工程范围；S04附既往H与本轮效果待验；S07性能定量不等于浏览器体验；S08真人P边界"
+    },
+    {
+      "id": "G-A86",
+      "status": "已实现并验证",
+      "phaseState": "工程关闭",
+      "classification": "R隔离实际复现，不宣称生产用户已遭事故",
+      "preExisting": "本轮工程实现范围遗漏：path-only工作区身份不足以区分同路径备份分叉",
+      "acceptanceIds": [
+        "A86"
+      ],
+      "actualBoundary": "真实红灯后改为canonical path+原生DB dev/ino身份；独立probe实际共享helper证明同路径新备份不读旧稿、B保留、原A移回可找原稿；真实state HTTP出口及39/39/build通过。",
+      "repairEvidenceIds": [
+        "backup-fork-red",
+        "backup-fork-final",
+        "workspace-identity",
+        "workspace-identity-build",
+        "front"
+      ],
+      "evidence": [
+        {
+          "id": "backup-fork-red",
+          "path": "data/ux-hardening-20261003/automation/same-path-backup-red.json",
+          "level": "已运行实际SQLite + 原draft helper的同路径备份分叉探针",
+          "result": "同canonical路径/同primaryID/同revision2的不同正文分支，原path-only身份使旧稿覆盖B；修前原件保留，不能与修后green混淆",
+          "replayCommand": "旧path-only合同见same-path-backup-before.mjs及原red.log/red.json；当前源码请跑修后probe，不用旧身份构造假报当前红灯",
+          "observedBytes": 474
+        },
+        {
+          "id": "backup-fork-final",
+          "path": "data/ux-hardening-20261003/automation/same-path-backup-probe.json",
+          "level": "已独立运行实际共享身份helper + SQLite + draft helper",
+          "result": "exit0；新DB文件不读旧稿，B正文保留；原A移回原路径原稿可找回；重启与symlink别名稳定，0HTTP/供应商",
+          "replayCommand": "node data/ux-hardening-20261003/automation/same-path-backup-probe.mjs",
+          "observedBytes": 647
+        },
+        {
+          "id": "workspace-identity",
+          "path": "data/ux-hardening-20261003/automation/workspace-identity-final.log",
+          "level": "已运行SQLite/草稿与真实state HTTP出口",
+          "result": "39/39；实际startServer GET state.settings.workspaceIdentity等于共享helper，configured=false、0模型调用",
+          "replayCommand": "node --test tests/storage-hardening.test.mjs tests/workspace.test.mjs tests/drafts.test.mjs tests/task-operations.test.mjs",
+          "observedBytes": 9258
+        },
+        {
+          "id": "workspace-identity-build",
+          "path": "data/ux-hardening-20261003/automation/workspace-identity-build.log",
+          "level": "已运行A86修后构建",
+          "result": "TypeScript + Vite成功",
+          "replayCommand": "npm run build",
+          "observedBytes": 3662
+        },
+        {
+          "id": "front",
+          "path": "data/ux-hardening-20261003/frontend-regression.log",
+          "level": "已运行 Node/AST 真实组件回调夹具，非浏览器",
+          "result": "140/140；19文件，不能替代输入法/媒体Promise/真人浏览器",
+          "replayCommand": "node --test tests/audit-play-client.test.mjs tests/autosave.test.mjs tests/cancel-client.test.mjs tests/drafts.test.mjs tests/error-metadata-client.test.mjs tests/export-client.test.mjs tests/generation-plan-lifecycle.test.mjs tests/import-client.test.mjs tests/project-delete-panel.test.mjs tests/project-delete-ui.test.mjs tests/semantic-split-ui.test.mjs tests/task-operations.test.mjs tests/unit-panel.test.mjs tests/voice-creation.test.mjs tests/voice-library-ui.test.mjs tests/voice-picker.test.mjs tests/workspace-issues.test.mjs tests/workspace-layout.test.mjs tests/workspace-location-client.test.mjs",
+          "observedBytes": 32739
+        }
+      ],
+      "redEvidence": "data/ux-hardening-20261003/automation/same-path-backup-red.json",
+      "greenEvidence": "data/ux-hardening-20261003/automation/same-path-backup-probe.json",
+      "realUserIncidentClaimed": false,
+      "rollbackBoundary": "保留原数据库/配置/草稿，复用现有恢复和命名空间；不允许旧writer破坏schema3语义"
+    },
+    {
+      "id": "G-A94",
+      "status": "已实现并验证",
+      "phaseState": "工程关闭",
+      "classification": "R隔离实际复现，不宣称生产用户已遭事故",
+      "preExisting": "前存保存位置失联风险，在隔离缺目录测试实际复现",
+      "acceptanceIds": [
+        "A94"
+      ],
+      "actualBoundary": "已保存目录断开、原DB缺失/空文件拒绝且不建空库；隔离测试覆盖首次默认、显式DATA_DIR及有效目录别名仍可用，9/9与构建通过。",
+      "repairEvidenceIds": [
+        "saved-location-red",
+        "saved-location",
+        "saved-location-build"
+      ],
+      "evidence": [
+        {
+          "id": "saved-location-red",
+          "path": "data/ux-hardening-20261003/automation/saved-workspace-location-red.log",
+          "level": "已运行A94最小红灯",
+          "result": "已保存目录断开未拒绝的Missing expected exception；由saved-location最终9/9覆盖",
+          "replayCommand": null,
+          "observedBytes": 1199
+        },
+        {
+          "id": "saved-location",
+          "path": "data/ux-hardening-20261003/automation/saved-workspace-location-final.log",
+          "level": "已运行隔离保存位置检查",
+          "result": "9/9；配置位置断开/原库缺失或为空均拒绝，不创建空库；首次默认、显式DATA_DIR及合法别名保留",
+          "replayCommand": "node --test tests/storage-hardening.test.mjs tests/workspace.test.mjs",
+          "observedBytes": 2519
+        },
+        {
+          "id": "saved-location-build",
+          "path": "data/ux-hardening-20261003/automation/saved-workspace-location-build.log",
+          "level": "已运行A94修后TypeScript + Vite",
+          "result": "构建成功；不是物理外接盘/新Mac实录",
+          "replayCommand": "npm run build",
+          "observedBytes": 3662
+        }
+      ],
+      "redEvidence": "data/ux-hardening-20261003/automation/saved-workspace-location-red.log",
+      "greenEvidence": "data/ux-hardening-20261003/automation/saved-workspace-location-final.log",
+      "realUserIncidentClaimed": false,
+      "rollbackBoundary": "保留原数据库/配置/草稿，复用现有恢复和命名空间；不允许旧writer破坏schema3语义"
+    },
+    {
+      "id": "G-A100",
+      "status": "已实现并验证",
+      "phaseState": "工程关闭",
+      "classification": "R实际ZIP独立只读红灯与修后复验，不宣称用户已遭事故",
+      "preExisting": "本轮分发工程遗漏：入门文档移动后保留指向未附带完整说明的相对链接；旧14项只验源码一致，未验链接",
+      "acceptanceIds": [
+        "A100"
+      ],
+      "actualBoundary": "旧64文件ZIP一处真实断链保留；修后维持doc/ux-redesign相对目录、补附工具使用说明及README标题，65文件、61source/build/start/docs一致、7链接与anchor有效、14/14实际启动检查。",
+      "repairEvidenceIds": [
+        "package-links-red",
+        "package-links",
+        "distribution",
+        "package-scan"
+      ],
+      "redEvidence": "data/ux-hardening-20261003/automation/package-guide-links-red.json",
+      "greenEvidence": "data/ux-hardening-20261003/distribution/verification.json",
+      "realUserIncidentClaimed": false,
+      "rollbackBoundary": "旧ZIP和旧验证脚本/报告保留before-doc-link-fix；不改变生产源码或资料库",
+      "evidence": [
+        {
+          "id": "package-links-red",
+          "path": "data/ux-hardening-20261003/automation/package-guide-links-red.json",
+          "level": "独立实际旧ZIP相对链接红灯",
+          "result": "旧64文件包缺完整说明，quick-start搬移后断链；旧14项未覆盖本地链接，保留原包与报告",
+          "replayCommand": null,
+          "observedBytes": 423
+        },
+        {
+          "id": "package-links",
+          "path": "data/ux-hardening-20261003/automation/package-guide-links-final.json",
+          "level": "独立只读复核修后实际ZIP本地链接",
+          "result": "7/7实际路径和标题anchor通过；1,030,106bytes；0请求；不复跑启动",
+          "replayCommand": "python3 data/ux-hardening-20261003/automation/package-guide-links-probe.py",
+          "observedBytes": 2385
+        },
+        {
+          "id": "distribution",
+          "path": "data/ux-hardening-20261003/distribution/verification.json",
+          "level": "已执行修后实际本机发行包14项复验",
+          "result": "14/14；65文件、61份source/dist/start/docs逐字节一致，7/7本地链接+anchor有效，0供应商；不等于全新Mac安装验收",
+          "replayCommand": "node data/ux-hardening-20261003/distribution/verify-release.mjs",
+          "observedBytes": 8797
+        },
+        {
+          "id": "package-scan",
+          "path": "data/ux-hardening-20261003/distribution/package-content-scan.json",
+          "level": "已扫描修后实际ZIP独立解包文件集",
+          "result": "65文件，0symlink/禁入路径/密钥格式，3份用户文档；不读取本机key文件、不含执行计划",
+          "replayCommand": null,
+          "observedBytes": 3624
+        }
+      ]
+    }
+  ],
+  "K": {
+    "currentPairProviderSuccess": 2,
+    "humanListening": "pending",
+    "oldJ": "既往用户更正优秀",
+    "oldG": "既往背景偏小",
+    "oldK": "既往343字/78.4秒背景偏小",
+    "D": "原unknown保持，只读精确分类，不当成功恢复",
+    "publicPrivateSeparation": "原文/参考/完整请求/音频保留本机data，报告仅摘要与路径"
+  },
+  "implementationRevisionSource": "data/ux-hardening-20261003/release-revision.json"
+}

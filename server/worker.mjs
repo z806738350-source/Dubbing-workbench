@@ -18,7 +18,7 @@ import {
 import { buildMaster, exportMaster, inspect, validateStoredAudio } from "./audio.mjs";
 import { fail, same, uid } from "./store.mjs";
 import { templateCatalog, templateOf } from "./templates.mjs";
-import { configurationDecided, reserveGrant, settleGrant } from './experience.mjs';
+import { configurationDecided, attemptScope, relatedTarget, outstandingAttempts, reserveGrant, settleGrant } from './experience.mjs';
 
 export function createWorker(store, domain, config) {
   if (config.callLimit !== undefined && (!Number.isSafeInteger(config.callLimit) || config.callLimit < 1)) fail("本地调用额度应为正整数");
@@ -64,6 +64,15 @@ export function createWorker(store, domain, config) {
     usage.reserved += attempts.length;
     store.put("settings", usage);
     for (const a of attempts) a.quota = { scope: quotaScope, state: "reserved" };
+  }
+  function acknowledgeUnknown(job, attempts, p) {
+    const ids=outstandingAttempts(store,attempts,undefined,true).map(a=>a.id);
+    if (p.acknowledgedAttemptIds !== undefined && (!Array.isArray(p.acknowledgedAttemptIds) || !same([...p.acknowledgedAttemptIds].sort(),[...ids].sort()))) fail('结果不明的请求范围已变化，请重新核对后决定',409);
+    if (ids.length && p.retryUnknown !== true) fail('所选包含结果不明的请求，需明确确认可能重复计费');
+    job.acknowledgedAttemptIds=ids;
+    job.targetScopes=attempts.map(attemptScope);
+    job.requestCount=attempts.length;
+    for (const a of attempts) a.acknowledgedAttemptIds=ids.filter(id=>relatedTarget(store,store.get('attempts',id),a));
   }
   function moveQuota(a, state) {
     settleGrant(store,config,a,state);
@@ -136,6 +145,7 @@ export function createWorker(store, domain, config) {
           if (Array.from(a.prompt).length > 3000) fail("提示超过 3000 字符，请拆组或缩减说明");
           if (referenceIds(a).length > 3 || new Set(referenceIds(a)).size !== referenceIds(a).length) fail("参考声音最多三份且应去重");
         }
+        acknowledgeUnknown(job,attempts,p);
         reserve(attempts,p);
         setJob(job);
         for (const a of attempts) {
@@ -160,12 +170,6 @@ export function createWorker(store, domain, config) {
           fail("试音正文应为 1～300 字符");
         if (store.all("jobs").some((j) => j.voiceId === v.id && active(j)))
           fail("该音色已有试音任务");
-        const last = store
-          .all("jobs")
-          .filter((j) => j.voiceId === v.id)
-          .at(-1);
-        if (last?.status === "unknown" && !p.retryUnknown)
-          fail("上次试音结果不明，请核对可能重复计费后重试");
         setRouteBlocked(false);
         const input = {
           model: config.model,
@@ -191,7 +195,6 @@ export function createWorker(store, domain, config) {
           stop: false,
           createdAt: new Date().toISOString(),
         };
-        setJob(job);
         const attempt = {
           id: uid(),
           jobId: job.id,
@@ -201,7 +204,9 @@ export function createWorker(store, domain, config) {
           model: config.model,
           targetKind: "voice-test", targetId: v.id,
         };
+        acknowledgeUnknown(job,[attempt],p);
         reserve([attempt],p);
+        setJob(job);
         store.put("attempts", attempt, job.id);
         return job;
       }
@@ -219,8 +224,6 @@ export function createWorker(store, domain, config) {
         if (!Array.isArray(p.ids) || new Set(p.ids).size !== p.ids.length)
           fail("生成片段列表无效");
         selected = preflight(c, p.ids, p.whole);
-        if (selected.some((s) => s.latest === "unknown") && !p.retryUnknown)
-          fail("所选包含结果不明的请求，需明确确认可能重复计费");
         setRouteBlocked(false);
       } else if (domain.enhancement?.prepareRender) {
         preparedRender = domain.enhancement.prepareRender(p, c);
@@ -313,7 +316,9 @@ export function createWorker(store, domain, config) {
           attempt.path = projectFile(store, c.id, 'audio', `${attempt.id}.wav`);
           attempts.push(attempt);
         }
+        acknowledgeUnknown(job,attempts,p);
         reserve(attempts,p);
+        setJob(job);
         for (const a of attempts) store.put("attempts", a, job.id);
       }
       return job;
@@ -430,6 +435,8 @@ export function createWorker(store, domain, config) {
           if (!active(latest) || store.get("attempts", a.id).status !== "queued") return false;
           if (latest.stop || closing || routeBlocked())
             throw Object.assign(new Error("尚未提交的请求已停止"), { status: 400, stopped: true });
+          const unresolved=outstandingAttempts(store,[a],undefined,true).map(v=>v.id);
+          if (unresolved.some(id=>!(a.acknowledgedAttemptIds || []).includes(id))) fail('结果不明的请求范围已变化，本条未发送，请重新明确决定',409);
           if (["candidate", "unit"].includes(a.targetKind)) {
             domain.enhancement.validateDispatch(latest, a);
           } else if (s) {

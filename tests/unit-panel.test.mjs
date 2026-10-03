@@ -43,6 +43,12 @@ test('unknown 先试听保留纯人声，范围可见、全文与修改按需展
   const footer=tree.props.footer;assert.equal(nodes(footer).find(node=>node.type==='input'&&node.props.type==='checkbox').props.checked,false);
   assert.equal(button(footer,'再次提交 1 次请求').props.disabled,true);assert.ok(nodes(footer).some(node=>node.props.className==='unit-submit-scope'));assert.ok(nodes(footer).some(node=>node.props.className==='unit-submit-actions'));
 });
+test('背景与历史试听在原按钮显示暂停，使用同一播放回调，不需要关闭面板',async()=>{
+  const f=await setup();f.props.unit.variants.scene.current='scene-audio';f.props.unit.variants.scene.latest='success';f.props.playingId='scene-audio';
+  let tree=f.render();const current=button(tree,'暂停这份声音');assert.equal(current.props.disabled,false);current.props.onClick();assert.equal(f.played[0][0],'scene-audio');
+  f.props.unit.variants.scene.history=[{id:'old-audio',matched:true,selected:false,available:true}];f.props.playingId='old-audio';tree=f.render();const old=button(tree,'暂停声音 1');assert.equal(old.props.disabled,false);old.props.onClick();assert.equal(f.played[1][0],'old-audio');assert.equal(f.played[1][2],true);
+  f.props.unit.variants.scene.latest='unknown';f.props.playingId='scene-audio';tree=f.render();button(tree,'暂停已有声音').props.onClick();assert.equal(f.played[2][0],'scene-audio');assert.equal(f.sent.length,0);
+});
 
 test('查看这次记录按真实最新单元和版本定位，跳过混合任务其他模式/其他成员',async()=>{
   const looked=[];

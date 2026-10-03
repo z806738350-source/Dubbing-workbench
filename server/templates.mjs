@@ -1,5 +1,8 @@
 import { fail } from "./store.mjs";
 
+export const sceneContract = Object.freeze({ descriptionMax: 1500, promptMax: 3000, countUnit: 'Unicode code point' });
+export const validEventDescription = value => typeof value === 'string' && !!value.trim() && Array.from(value).length <= sceneContract.descriptionMax;
+
 // Keep each published implementation under its existing ID. Changing the
 // current version affects new units only; existing units keep their saved ID.
 export const templateCatalog = {
@@ -42,15 +45,81 @@ export const templateCatalog = {
       defaults: {speech_rate:0, loudness_rate:0, pitch_rate:0},
       compile: compileNativeScene,
     },
+    "native3-frozen-cd": {
+      name: "原生 v3 · C/D 历史编译", scope: "unit", mode: "scene", historical: true,
+      description: "冻结已保存的字段式原生声景语法；仅按原input与prompt逐字匹配识别。",
+      defaults: {speech_rate:0, loudness_rate:0, pitch_rate:0},
+      compile: s => compileNativeScene({...s, members:s.members.map(member=>({...member,type:'dialogue'}))}).replace('不增加已采用事件或整体场景指导之外的声音或角色。','不增加未采用的独立声音事件或角色。'),
+    },
+    "native3-paragraph-k": {
+      name: "原生 v3 · 自然段历史编译", scope: "unit", mode: "scene", historical: true,
+      description: "冻结 a291 的自然段与多人编译实现。",
+      defaults: {speech_rate:0, loudness_rate:0, pitch_rate:0},
+      compile: compileNativeScene,
+    },
+    "scene-v4-presence-1": {
+      name: "场景 v4 · 背景存在感（试验）", scope: "unit", mode: "scene",
+      description: "表达用户选定的轻、自然或清楚存在感；效果待听评，不自动替换已有模板。",
+      defaults: {speech_rate:0, loudness_rate:0, pitch_rate:0},
+      compile: compilePresenceScene,
+    },
   },
 };
 export function templateOf(id) {
   if (!Object.hasOwn(templateCatalog.versions, id)) fail(`模板 ${id} 的实现不可用；请恢复对应应用版本或明确切换模板，不能自动替换`);
   return templateCatalog.versions[id];
 }
-export const compile = s => templateOf(s.template).compile(s);
+export const compile = s => {
+  if ((s.events || []).some(event => !validEventDescription(event.description))) fail(`声音事件描述不能为空，且不能超过 ${sceneContract.descriptionMax} 个 Unicode 字符`);
+  return templateOf(s.compilerId || s.template).compile(s);
+};
 export const listTemplates = () => Object.entries(templateCatalog.versions).filter(([,t]) => !t.scope || t.scope === "single").map(([id,t]) => ({id,name:t.name,description:t.description,current:id===templateCatalog.current}));
-export const listUnitTemplates = () => Object.entries(templateCatalog.versions).filter(([,t]) => t.scope !== "candidate").map(([id,t]) => ({id,name:t.name,description:t.description,mode:t.mode,scope:t.scope || "single"}));
+export const listUnitTemplates = () => Object.entries(templateCatalog.versions).filter(([,t]) => t.scope !== "candidate" && !t.historical).map(([id,t]) => ({id,name:t.name,description:t.description,mode:t.mode,scope:t.scope || "single"}));
+
+export function resolveCompiler(input, prompt) {
+  const ids = input.template === 'scene-v3-native' ? ['native3-frozen-cd','native3-paragraph-k'] : [input.compilerId || input.template];
+  for (const id of ids) {
+    try { if (templateOf(id).compile(input) === prompt) return id; } catch { /* Unknown or invalid snapshots remain read-only. */ }
+  }
+  return null;
+}
+
+export function assertQuoteAnchor(members, anchor) {
+  const member = members.find(m => m.id === anchor.memberId);
+  if (!member || typeof anchor.quote !== 'string' || !anchor.quote.trim() || Array.from(anchor.quote).length > 200 || !Number.isInteger(anchor.occurrence) || anchor.occurrence < 1) fail('转折需指定本单元成员、真实短引文和出现序号');
+  let offset = 0, index = -1;
+  for (let i = 0; i < anchor.occurrence; i++) { index = member.text.indexOf(anchor.quote, offset); if (index < 0) fail('转折短引文或出现序号已失效，请核对正文'); offset = index + anchor.quote.length; }
+  return members.indexOf(member) + 1;
+}
+
+export function sceneIntentConflicts(s) {
+  // ponytail: recognise only explicit standalone prohibitions; uncertain prose
+  // stays unchanged for human review instead of guessing its meaning.
+  const clauses = (s.guidance || '').split(/[，,；;。\n]/u).map(value=>value.trim());
+  return [['music',['无音乐','不要音乐','不添加音乐']],['environment',['无环境声','不要环境声','不添加环境声']],['effect',['无音效','不要音效','不添加音效']]].filter(([kind,words])=>(s.events || []).some(e=>e.kind===kind) && clauses.some(clause=>words.includes(clause))).map(([kind])=>`整体场景指导明确禁止${({music:'音乐',environment:'环境声',effect:'音效'})[kind]}，但已采用同类事件，请一次核对这段的指导和事件`);
+}
+
+function compilePresenceScene(s) {
+  const conflicts = sceneIntentConflicts(s);
+  if (conflicts.length) throw Object.assign(new Error(conflicts.join('；')), {status:409,code:'scene-intent-conflict',conflicts});
+  const presence = s.backgroundPresence || 'unspecified';
+  if (!['clear','natural','subtle','unspecified'].includes(presence)) fail('背景存在感选项无效');
+  const wording = {
+    clear: '已采用声音按各自范围及发展要求组织。讲话期间，已采用的音乐在其范围内保持可辨识的旋律和明确存在感；环境声在其范围内可辨，每个间歇音效出现时，其声响与采用的回响都能够辨认。音乐转为宁静是情绪和织体的变化，不自动淡出到几乎听不到。讲话与这些声音共同呈现，字词保持清楚。',
+    natural: '已采用声音按各自范围及发展要求组织。讲话与背景自然共同呈现；音乐在采用范围内有可辨的旋律，环境及间歇音效自然可辨，字词保持清楚。音乐情绪或织体转为宁静，不自动表示音量淡出。',
+    subtle: '已采用声音按各自范围及发展要求组织。按用户选择保持轻柔背景，不抢讲话；音乐、环境声和间歇音效仅在各自采用范围内轻柔呈现，字词保持清楚。音乐情绪或织体变化与音量变化分开安排。',
+  };
+  let prompt = compileNativeScene(s);
+  if (presence !== 'unspecified') prompt = prompt.replace(/已采用声音按各自范围及发展要求组织；环境和音乐可与(?:旁白|说话)同期呈现。/u,wording[presence]);
+  const transitions = (s.events || []).filter(event=>event.transition).map(event=>{
+    const anchor = event.transition, index = assertQuoteAnchor(s.members,anchor);
+    if (typeof anchor.development !== 'string' || !anchor.development.trim() || Array.from(anchor.development).length > 500) fail('转折发展描述不能为空，且不能超过500个Unicode字符');
+    if (anchor.volumeChange !== undefined && (typeof anchor.volumeChange !== 'string' || Array.from(anchor.volumeChange).length > 200)) fail('转折音量描述无效');
+    return `声音事件发展：在第${index}条正文第${anchor.occurrence}次出现“${anchor.quote}”时，${anchor.development}；音量变化：${anchor.volumeChange || '未指定，不由情绪变化推断淡出'}。`;
+  });
+  if (transitions.length) prompt = prompt.replace(s.members.length===1 && s.members[0].type==='narration' ? '\n\n只将以下引号' : '\n\n[人物与参考]',`\n${transitions.join('\n')}${s.members.length===1 && s.members[0].type==='narration' ? '\n\n只将以下引号' : '\n\n[人物与参考]'}`);
+  return prompt;
+}
 
 export function compileNativeScene(s) {
   const anchor = (id, position) => {

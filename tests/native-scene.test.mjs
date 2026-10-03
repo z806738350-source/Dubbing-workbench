@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compile, compileNativeScene, listTemplates, listUnitTemplates, templateCatalog } from '../server/templates.mjs';
+import { compile, compileNativeScene, listTemplates, listUnitTemplates, templateCatalog, resolveCompiler } from '../server/templates.mjs';
 
 const single = () => ({
   template: 'scene-v3-native',
@@ -85,10 +85,34 @@ test('中文和 emoji 正文及长声景不截断、不增加第二份朗读正�
   s.guidance='按自然节奏组织山洞声景。';
   const description='水滴💧在远处回响。'.repeat(320)+'最后音乐自然转为宁静。';
   s.events[0].description=description;
-  const prompt=compile(s);
+  const prompt=compileNativeScene(s);
   assert.ok(prompt.endsWith(`\n“${s.members[0].text}”`));
   assert.equal(prompt.split(s.members[0].text).length,2);
   assert.ok(prompt.includes(description));assert.ok(Array.from(prompt).length>3000);
   assert.ok(prompt.length>Array.from(prompt).length);
   assert.doesNotMatch(prompt,/�/);
+  assert.throws(()=>compile(s),/1500/);
+});
+
+test('B15/B16 presence仅替换一个块，未选存在感原样，新模板不改正文或事件',()=>{
+  const s=single(),before=structuredClone(s),old=compile(s),block='已采用声音按各自范围及发展要求组织；环境和音乐可与旁白同期呈现。';
+  assert.equal(compile({...s,template:'scene-v4-presence-1'}),old);
+  assert.equal(compile({...s,template:'scene-v4-presence-1',backgroundPresence:'unspecified'}),old);
+  for(const presence of ['clear','natural','subtle']){
+    const prompt=compile({...s,template:'scene-v4-presence-1',backgroundPresence:presence}),prefix=old.slice(0,old.indexOf(block)),suffix=old.slice(old.indexOf(block)+block.length);
+    assert.ok(prompt.startsWith(prefix));assert.ok(prompt.endsWith(suffix));assert.equal(prompt.split(s.members[0].text).length,2);
+    assert.match(prompt,presence==='clear'?/明确存在感/:presence==='natural'?/自然共同呈现/:/轻柔背景/);assert.match(prompt,/音量|淡出/);
+    assert.doesNotMatch(prompt,/music_volume|降低背景声音|毫秒/);
+  }
+  assert.deepEqual(s,before);assert.equal(resolveCompiler(s,old),'native3-paragraph-k');assert.equal(resolveCompiler(s,old+'未知变化'),null);
+});
+
+test('B17/B18重复引文转折有真实出现序号，情绪和音量分开，明确冲突聚合一次',()=>{
+  const s=single();s.template='scene-v4-presence-1';s.members[0].text='她终于放松。她终于放松。';
+  s.events[1].transition={memberId:'s1',quote:'终于放松',occurrence:2,development:'旋律情绪和织体转为宁静'};
+  const prompt=compile(s);assert.match(prompt,/第1条正文第2次出现“终于放松”/);assert.match(prompt,/音量变化：未指定，不由情绪变化推断淡出/);assert.equal(prompt.split(s.members[0].text).length,2);assert.doesNotMatch(prompt,/毫秒|\d+秒/);
+  s.events[1].transition.occurrence=3;assert.throws(()=>compile(s),/出现序号已失效/);s.events[1].transition.occurrence=2;
+  s.events[1].transition.volumeChange='保持清楚可闻';assert.match(compile(s),/音量变化：保持清楚可闻/);
+  s.guidance='不要音乐；不要环境声';assert.throws(()=>compile(s),error=>error.code==='scene-intent-conflict' && error.conflicts.length===2);
+  s.guidance='人声干净；背景很轻';assert.doesNotThrow(()=>compile(s));
 });

@@ -75,14 +75,14 @@ test('普通Select继续使用combobox/listbox与原Enter选择；项目忙碌�
 
 function appFixture(){
   const calls={actions:[],updates:[],refresh:0,paused:0,errors:[]};
-  const state={projects:[{id:'one',name:'第一项目'},{id:'two',name:'第二项目'}],chapters:[{id:'old',projectId:'one'},{id:'next',projectId:'two'}]};
+  const state={settings:{workspaceDirectory:'/fixture'},projects:[{id:'one',name:'第一项目'},{id:'two',name:'第二项目'}],chapters:[{id:'old',projectId:'one'},{id:'next',projectId:'two'}]};
   const env={React,Select:'Select',state,projectId:'one',busy:false,connectionReady:true,
     stateRef:{current:state},projectRef:{current:'one'},chapterRef:{current:'old'},refreshPending:{current:null},bookmarks:{current:{old:'line-old',next:'line-next'}},
-    pendingPlay:{current:'old'},pendingPlaySnapshot:{current:{arrangement:1}},recoveryTarget:{current:{chapterId:'old'}},
-    generationIntent:{current:0},generationPlan:{id:'old-plan'},audio:{current:{pause(){calls.paused++;}}},
+    playIntent:{current:0},pendingPlay:{current:'old'},pendingPlaySnapshot:{current:{arrangement:1}},recoveryTarget:{current:{chapterId:'old'}},
+    bindDraftWorkspace(){},draftWorkspace:()=>'',playbackIdentity:items=>JSON.stringify(items),generationIntent:{current:0},generationPlan:{id:'old-plan'},audio:{current:{pause(){calls.paused++;}}},
     action:async(name,payload)=>calls.actions.push({name,payload}),refresh:async()=>{calls.refresh++;},
   };
-  for(const name of ['ProjectId','ChapterId','Chapter','Selected','Checked','Filter','Search','OldPreview','CurrentMembers','CurrentSegment','Modal','TaskRecord','UnitInitialEvent','DraftIds','GrantId','VoiceTarget','UnitPanelId','UnitInitialMode','Player','NavOpen','InspectorOpen','Busy'])env['set'+name]=value=>{calls.updates.push({name,value});env[name[0].toLowerCase()+name.slice(1)]=value;};
+  for(const name of ['ProjectId','ChapterId','Chapter','Selected','Checked','Filter','Search','OldPreview','CurrentMembers','CurrentSegment','Modal','TaskRecord','UnitInitialEvent','DraftIds','GrantId','VoiceTarget','UnitPanelId','UnitInitialMode','Player','NavOpen','InspectorOpen','Busy','DeleteTarget'])env['set'+name]=value=>{calls.updates.push({name,value});env[name[0].toLowerCase()+name.slice(1)]=value;};
   env.setGenerationPlan=value=>{env.generationPlan=value;calls.updates.push({name:'GenerationPlan',value});};
   env.setState=value=>{env.state=typeof value==='function'?value(env.state):value;calls.updates.push({name:'State',value:env.state});};
   env.setError=value=>calls.errors.push(value);
@@ -94,9 +94,11 @@ function appFixture(){
   return {env,calls,view:()=>project(select,env)};
 }
 
+test('下拉删除入口打开一份具体范围预览，不先发送删除',()=>{const f=appFixture();f.view().props.onDelete('two');assert.equal(f.env.deleteTarget.id,'two');assert.deepEqual(f.calls.actions,[]);assert.equal(f.env.projectRef.current,'one');});
+
 test('删除当前项目直接发action，切剩余项目并清旧章、播放和面板，不清其他项目断点',async()=>{
-  const f=appFixture();await f.env.deleteProject('one');
-  assert.deepEqual(f.calls.actions,[{name:'project.delete',payload:{id:'one'}}]);
+  const f=appFixture();await f.env.deleteProject('one',{project:1});
+  assert.deepEqual(f.calls.actions,[{name:'project.delete',payload:{id:'one',scope:{project:1}}}]);
   assert.equal(f.env.projectRef.current,'two');assert.equal(f.env.chapterRef.current,'next');assert.equal(f.env.chapter,null);
   assert.equal(f.env.player,null);assert.equal(f.env.generationPlan,null);assert.equal(f.env.modal,null);assert.equal(f.env.voiceTarget,null);assert.equal(f.env.unitPanelId,null);
   assert.deepEqual(f.env.checked,[]);assert.equal(f.env.search,'');assert.equal(f.env.oldPreview,null);assert.equal(f.env.recoveryTarget.current,null);
@@ -104,16 +106,16 @@ test('删除当前项目直接发action，切剩余项目并清旧章、播放�
 });
 
 test('删除最后项目回空状态；删除非当前项目不改当前编辑或播放',async()=>{
-  const last=appFixture();last.env.state.projects.splice(1);last.env.state.chapters.splice(1);await last.env.deleteProject('one');
+  const last=appFixture();last.env.state.projects.splice(1);last.env.state.chapters.splice(1);await last.env.deleteProject('one',{project:1});
   assert.equal(last.env.projectRef.current,'');assert.equal(last.env.chapterRef.current,'');assert.equal(last.env.chapter,null);assert.deepEqual(last.env.state.projects,[]);
-  const other=appFixture();await other.env.deleteProject('two');assert.equal(other.env.projectRef.current,'one');assert.equal(other.env.chapterRef.current,'old');
+  const other=appFixture();await other.env.deleteProject('two',{project:1});assert.equal(other.env.projectRef.current,'one');assert.equal(other.env.chapterRef.current,'old');
   assert.deepEqual(other.calls.updates.map(update=>update.name),['State']);assert.equal(other.calls.paused,0);assert.equal(other.env.generationPlan.id,'old-plan');
 });
 
-test('409保留项目与编辑，通过现有run显示错误，删除入口无confirm参数',async()=>{
+test('最终删除409保留项目与编辑，通过现有run显示错误，不自动重发',async()=>{
   const f=appFixture();f.env.action=async()=>{throw Object.assign(new Error('项目仍在处理，请稍后删除'),{status:409});};
   f.env.deleteProject=project(declaration('deleteProject'),f.env);f.env.run=project(declaration('run'),f.env);
-  f.view().props.onDelete('one');await new Promise(resolve=>setImmediate(resolve));
+  await f.env.run(()=>f.env.deleteProject('one',{project:1}));
   assert.equal(f.env.projectRef.current,'one');assert.equal(f.env.chapterRef.current,'old');assert.equal(f.env.generationPlan.id,'old-plan');
   assert.ok(f.calls.errors.includes('项目仍在处理，请稍后删除'));assert.equal(f.calls.paused,0);assert.equal(f.calls.refresh,0);
 });
@@ -121,7 +123,7 @@ test('409保留项目与编辑，通过现有run显示错误，删除入口无co
 test('成功删除等待已有刷新结束，迟到旧章读不能在切剩余项目后复活',async()=>{
   const f=appFixture();let release;
   f.env.refreshPending.current=new Promise(resolve=>release=resolve);
-  const pending=f.env.deleteProject('one');await new Promise(resolve=>setImmediate(resolve));
+  const pending=f.env.deleteProject('one',{project:1});await new Promise(resolve=>setImmediate(resolve));
   assert.equal(f.env.projectRef.current,'one');assert.equal(f.calls.updates.length,0);
   // Simulate the already-started pre-delete refresh finishing with its old snapshot.
   f.env.stateRef.current={...f.env.stateRef.current};release();await pending;

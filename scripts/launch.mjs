@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -20,12 +20,12 @@ try {
     throw new Error('请安装 Node.js 22.13 或更新版本。');
   // Import the existing entry point so environment and workspace rules stay identical.
   const { startServer } = await import('../server/index.mjs');
-  const { workspaceDirectory } = await import('../server/workspace.mjs');
+  const { workspaceDirectory, readRuntime } = await import('../server/workspace.mjs');
   const directory = workspaceDirectory();
   const runtime = join(directory, 'runtime.json');
   let running;
   if (existsSync(runtime)) {
-    running = JSON.parse(readFileSync(runtime, 'utf8'));
+    running = readRuntime(runtime);
     try { process.kill(running.pid, 0); }
     catch (e) { if (e.code === 'ESRCH') running = null; else throw e; }
   }
@@ -35,7 +35,7 @@ try {
     try {
       const response = await fetch(`http://127.0.0.1:${running.port}/api/state`, { signal: AbortSignal.timeout(5000) });
       const state = await response.json();
-      if (!response.ok || !Array.isArray(state.projects) || !Array.isArray(state.chapters)) throw new Error();
+      if (!response.ok || !Array.isArray(state.projects) || !Array.isArray(state.chapters) || realpathSync(state.settings?.workspaceDirectory || '') !== realpathSync(directory) || state.settings?.runtimePid !== running.pid) throw new Error();
     } catch { throw new Error('此工作区已有进程，但服务尚未就绪；请稍后重试或检查原运行窗口。'); }
     console.log('已打开正在运行的工作区，无需重复启动。');
     await browse(running.port);

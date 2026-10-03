@@ -32,6 +32,27 @@ async function page(storage,session,locks){
   }finally{for(const [key,descriptor]of originals)if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}
 }
 
+test('同origin换工作区和同ID备份不自动套用旧草稿，legacy保持可读',async()=>{
+  const storage=new Storage(),locks=new Locks(),session=new Storage(),a=await page(storage,session,locks);
+  a.writeDraft('same-id',{text:'旧版未归属'},1);a.bindDraftWorkspace('/workspace/A');
+  assert.equal(a.readDraft('same-id'),null);a.writeDraft('same-id',{text:'A正文'},2);
+  a.bindDraftWorkspace('/workspace/B');assert.equal(a.readDraft('same-id'),null);assert.equal(a.hasDraft('same-id'),false);
+  a.writeDraft('same-id',{text:'B正文'},3);const records=await a.listAllDrafts();
+  assert.equal(records.length,3);assert.equal(records.filter(r=>r.entry.compatible).length,1);
+  assert.equal(records.find(r=>r.entry.workspaceIdentity==='/workspace/A').entry.data.draft.text,'A正文');
+  a.bindDraftWorkspace('/workspace/A');assert.equal(a.readDraft('same-id').draft.text,'A正文');
+});
+
+test('切换工作区后旧保存回执和明确弃稿只处理捕获的原归属',async()=>{
+  const storage=new Storage(),session=new Storage(),a=await page(storage,session,new Locks());
+  a.bindDraftWorkspace('/A');a.writeDraft('same',{text:'已发送'},4);const submitted=JSON.stringify(a.readDraft('same'));
+  a.writeDraft('same',{text:'A续写'},4);const command='pending-save:workspace/%2FA/'+session.getItem('draft-owner')+':same';storage.setItem(command,'A未确认操作');
+  a.bindDraftWorkspace('/B');a.writeDraft('same',{text:'B编辑'},4);
+  assert.deepEqual(a.finishDraftSave('same',submitted,5,4,'/A'),{draft:{text:'A续写'},revision:5});
+  assert.deepEqual(a.readDraft('same'),{draft:{text:'B编辑'},revision:4});
+  a.clearDraft('same',undefined,true,'/A');assert.equal(storage.getItem(command),null);assert.equal(a.readDraft('same').draft.text,'B编辑');
+});
+
 test('两页草稿各自持久化；保存或放弃只清本页，所有页面仍阻断生成',async()=>{
   const storage=new Storage(),locks=new Locks(),aSession=new Storage(),bSession=new Storage();
   const a=await page(storage,aSession,locks),b=await page(storage,bSession,locks);
@@ -186,7 +207,7 @@ test('集中恢复和明确弃稿通知已挂载编辑器，取消旧暂存而�
   globalThis.window={dispatchEvent:event=>events.push(event)};globalThis.CustomEvent=class{constructor(type,{detail}){this.type=type;this.detail=detail;}};
   try{
     a.writeDraft('one',{text:'恢复'},3);locks.close(aSession);const [entry]=await b.listDrafts('one');await b.recoverDraft('one',entry);
-    assert.deepEqual(events.map(e=>[e.type,e.detail]),[['workbench-draft-restored',{id:'one',data:{draft:{text:'恢复'},revision:3}}]]);
+    assert.deepEqual(events.map(e=>[e.type,e.detail]),[['workbench-draft-restored',{id:'one',data:{draft:{text:'恢复'},revision:3},workspaceIdentity:''}]]);
     b.clearDraft('one',JSON.stringify(b.readDraft('one')),true);assert.equal(events.at(-1).type,'workbench-draft-discarded');assert.equal(events.at(-1).detail.id,'one');
     const count=events.length;b.writeDraft('one',{text:'正常保存'},3);b.finishDraftSave('one',JSON.stringify(b.readDraft('one')),4);assert.equal(events.length,count);
   }finally{if(originalWindow === undefined)delete globalThis.window;else globalThis.window=originalWindow;if(originalEvent === undefined)delete globalThis.CustomEvent;else globalThis.CustomEvent=originalEvent;}

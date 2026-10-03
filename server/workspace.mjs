@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, mkdirSync, renameSync, writeFileSync, readdirSync, rmSync, lstatSync, mkdtempSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, renameSync, writeFileSync, readdirSync, rmSync, lstatSync, statSync, mkdtempSync, realpathSync } from 'node:fs';
 import { cp, lstat, mkdir, realpath, rename, rm, writeFile, readdir, mkdtemp } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,14 +9,31 @@ import { fail, openStore } from './store.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 export const workspaceConfig = join(root, '.workspace-local.json');
+export function readRuntime(path) {
+  if (!existsSync(path)) return null;
+  let value;
+  try { value = JSON.parse(readFileSync(path, 'utf8')); }
+  catch { fail('工作区运行记录损坏，请检查原启动窗口；资料仍保留，未删除任何文件'); }
+  if (!value || !Number.isSafeInteger(value.pid) || value.pid < 1 || !Number.isInteger(value.port) || value.port < 0 || value.port > 65535)
+    fail('工作区运行记录无效，请检查原启动窗口；资料仍保留，未删除任何文件');
+  return value;
+}
 export function workspaceDirectory(config = workspaceConfig) {
   if (process.env.DATA_DIR) return resolve(process.env.DATA_DIR);
   if (existsSync(config)) {
     const { directory } = JSON.parse(readFileSync(config, 'utf8'));
     if (typeof directory !== 'string' || !isAbsolute(directory)) fail('保存位置配置无效，请检查 .workspace-local.json');
+    try {
+      const database=statSync(join(directory,'workbench.sqlite'));
+      if (!statSync(directory).isDirectory() || !database.isFile() || !database.size) throw Error('missing workspace');
+    } catch { fail('已保存位置不可用或原数据库缺失，请连接原位置或恢复整份备份；未初始化空工作区、未修改原配置'); }
     return directory;
   }
   return join(root, 'data');
+}
+export function workspaceIdentity(directory) {
+  const {dev,ino}=statSync(join(directory,'workbench.sqlite'),{bigint:true});
+  return JSON.stringify([realpathSync(directory),dev.toString(),ino.toString()]);
 }
 export async function chooseWorkspaceDirectory(run = promisify(execFile)) {
   if (process.platform !== 'darwin') fail('当前文件夹选择功能仅支持 macOS', 501);
@@ -34,6 +51,26 @@ export async function saveWorkspaceLocation(directory, config = workspaceConfig)
     await writeFile(temp, JSON.stringify({ directory }), { mode: 0o600, flag: 'wx' });
     await rename(temp, config);
   } finally { await rm(temp, { force: true }); }
+}
+
+// Read-only inventory: original recordings and historical exports are not caches.
+export function workspaceDiagnostics(store) {
+  const counts = {}, bytes = {}, missing = [], root = realpathSync(store.directory);
+  const available = item => {
+    if (!item?.path) return false;
+    const path = resolve(root, item.path), rel = relative(root, path);
+    return rel && !rel.startsWith('..') && !isAbsolute(rel) && existsSync(path) && lstatSync(path).isFile() && !lstatSync(path).isSymbolicLink();
+  };
+  for (const kind of ['voices','audios','masters','exports']) {
+    const rows = store.all(kind).filter(item => item.path && item.state !== 'deleted');
+    counts[kind] = rows.length; bytes[kind] = 0;
+    for (const item of rows) {
+      if (available(item)) { bytes[kind] += lstatSync(resolve(root,item.path)).size; continue; }
+      const repairable = kind === 'masters' && Array.isArray(item.mapping) && item.mapping.length > 0 && Number.isSafeInteger(item.frames) && Number.isSafeInteger(item.gapFrames) && item.gapFrames >= 0 && item.processing === 'pcm_s16le-48000-mono' && item.mapping.every(m => available(store.maybe('audios',m.audioId)));
+      missing.push({kind,id:item.id,path:item.path,repairable:!!repairable});
+    }
+  }
+  return {scope:'current-workspace',counts,bytes,missing,primaryAvailable:missing.every(item=>item.kind === 'masters' && item.repairable),totalReferencedBytes:Object.values(bytes).reduce((a,b)=>a+b,0)};
 }
 
 // Called only while the server has excluded concurrent requests and background jobs.
@@ -64,6 +101,7 @@ export async function copyWorkspace(store, requested) {
         },
       });
     }
+    const missingMasters = [];
     const db = new DatabaseSync(join(staging, 'workbench.sqlite'), { readOnly: true });
     try {
       if (Object.values(db.prepare('PRAGMA integrity_check').get())[0] !== 'ok') fail('新位置的数据库校验失败');
@@ -72,14 +110,35 @@ export async function copyWorkspace(store, requested) {
           const item = JSON.parse(data);
           if (!item.path || item.state === 'deleted') continue;
           const path = resolve(staging, item.path);
-          if (!inside(staging, path) || !existsSync(path)) fail('素材缺失或路径无效，请恢复缺失文件后再迁移');
+          if (!inside(staging, path)) fail(`素材路径无效：${item.path}，未切换保存位置`);
+          if (!existsSync(path)) {
+            if (table === 'masters') { missingMasters.push(item); continue; }
+            fail(`原始素材或历史导出缺失：${item.path}，请恢复文件后再迁移`);
+          }
           const a = await lstat(resolve(source, item.path)), b = await lstat(path);
           if (!a.isFile() || !b.isFile() || a.size !== b.size) fail('新位置的素材校验失败');
         }
       }
     } finally { db.close(); }
     const copy = openStore(staging);
-    try { organizeProjects(copy); } finally { copy.close(); }
+    try {
+      if (missingMasters.length) {
+        const { buildMaster } = await import('./audio.mjs');
+        for (const master of missingMasters) {
+          if (!Array.isArray(master.mapping) || !master.mapping.length || !Number.isSafeInteger(master.frames) || !Number.isSafeInteger(master.gapFrames) || master.gapFrames < 0 || master.processing !== 'pcm_s16le-48000-mono')
+            fail(`缺少母版 ${master.path} 且重建配方不完整，请在原工作区免费重新准备整章试听后迁移`);
+          const rows = master.mapping.map(m => {
+            const a = copy.maybe('audios', m.audioId);
+            if (!a || !a.path || !existsSync(join(staging, a.path))) fail(`母版 ${master.path} 的原始音频缺失：${m.audioId}，不能重新录制替代`);
+            return { a, s: { id: m.unitId || m.segmentId, chapterId: master.chapterId, unitId: m.unitId, members: m.memberIds, kind: m.memberIds?.length > 1 ? 'group' : 'single', mode: m.mode } };
+          });
+          const rebuilt = await buildMaster(copy, rows, master.gapFrames / 48000, master.id);
+          if (rebuilt.frames !== master.frames || JSON.stringify(rebuilt.mapping) !== JSON.stringify(master.mapping)) fail(`母版 ${master.path} 的重建配方与原始音频不一致，未切换保存位置`);
+          copy.put('masters', { ...master, ...rebuilt, invalid: false, rebuiltAt: new Date().toISOString() }, master.chapterId);
+        }
+      }
+      organizeProjects(copy);
+    } finally { copy.close(); }
     await rename(staging, target);
     return target;
   } catch (error) {

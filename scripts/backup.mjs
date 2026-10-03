@@ -38,8 +38,8 @@ async function verify(dir) {
     const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name));
     const records = table => tables.has(table) ? db.prepare(`SELECT data FROM ${table}`).all().map(r => JSON.parse(r.data)) : [];
     const schema = records('settings').find(v => v.id === 'data-schema');
-    if (schema?.version > 2) throw new Error('数据模式高于此维护版本，请使用匹配版本');
-    if (schema?.version === 2) {
+    if (schema?.version > 3) throw new Error('数据模式高于此维护版本，请使用匹配版本');
+    if (schema?.version >= 2) {
       for (const table of ['voiceSessions','units','events']) if (!tables.has(table)) throw new Error(`增强数据表缺失：${table}`);
       const segments = new Set(records('segments').map(v => v.id)), audios = new Set(records('audios').map(v => v.id)), sessions = new Set(records('voiceSessions').map(v => v.id)), units = new Set(records('units').map(v => v.id));
       for (const u of records('units')) {

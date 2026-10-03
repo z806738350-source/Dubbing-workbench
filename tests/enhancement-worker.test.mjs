@@ -31,6 +31,33 @@ function setup(t, options = {}) {
 }
 const trial = v => ({ kind: "voice-test", voiceId: v.id, entityRevision: 1, text: "清晨的风很轻。", commandId: uid() });
 
+test('F05真实Mock派发：兄弟候选取舍或入库不使B过期，自身放弃及unknown仍保护',async t=>{
+  for(const scenario of ['queued-discard','inflight-discard','inflight-save','self-discard','unknown']) await t.test(scenario,async t=>{
+    const {store,domain,worker}=setup(t),session=domain.mutate('voice-session.create',{description:'自然温和的声音'});
+    const enqueue=(extra={})=>worker.enqueue({kind:'voice-create',sessionId:session.id,entityRevision:store.get('voiceSessions',session.id).revision,commandId:uid(),...extra});
+    let calls=0,aId,bId;
+    const discard=id=>domain.mutate('voice-candidate.discard',{id,sessionId:session.id,entityRevision:store.get('voiceSessions',session.id).revision});
+    t.mock.method(globalThis,'fetch',async()=>{
+      calls++;
+      if(calls===2){
+        if(scenario==='inflight-discard')discard(aId);
+        if(scenario==='inflight-save')await saveCandidateVoice(store,{audioId:aId,name:'保留A'});
+        if(scenario==='self-discard')discard(bId);
+        if(scenario==='unknown')throw Error('mock connection dropped after sending');
+      }
+      return new Response(wav(),{headers:{'content-type':'audio/wav'}});
+    });
+    const a=enqueue();await worker.tick();aId=store.all('attempts',a.id)[0].id;
+    const b=enqueue();bId=store.all('attempts',b.id)[0].id;
+    if(scenario==='queued-discard'){discard(aId);domain.mutate('voice-session.update',{id:session.id,entityRevision:store.get('voiceSessions',session.id).revision,description:session.description});}
+    await worker.tick();const attempt=store.get('attempts',bId);
+    assert.equal(calls,2);assert.equal(attempt.input.description,session.description);
+    if(scenario==='unknown'){assert.equal(attempt.status,'unknown');discard(aId);assert.throws(()=>enqueue(),/结果不明/);assert.equal(calls,2);}
+    else {assert.equal(attempt.status,'success');assert.equal(attempt.adopted,scenario!=='self-discard');assert.equal(store.get('jobs',b.id).status,'success');assert.ok(store.get('audios',bId));}
+    if(scenario==='inflight-save')assert.equal(store.get('voices',aId).sourceAudioId,aId);
+  });
+});
+
 test("SC02 非连续真实引文可采用，保留明示与推断类别且拒绝伪造出处", async t => {
   const { store, domain } = setup(t);
   const project = domain.mutate("project.create", { name: "多出处" });

@@ -93,6 +93,84 @@ function setup(t) {
   return { store, d, c, project, v, worker, enqueue, dir };
 }
 
+test('F03 选用旧匹配声音不清未决请求；一次明确决定后不再追问旧unknown',async t=>{
+  const {store,d,c,worker,enqueue}=setup(t),id=d.list(c.id)[0].id;let calls=0;
+  t.mock.method(globalThis,'fetch',async()=>{calls++;if(calls===2)throw Error('lost receipt');return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
+  enqueue({ids:[id]});await worker.tick();const audioId=store.get('segments',id).current;
+  const unknown=enqueue({ids:[id]});await worker.tick();const attempt=store.all('attempts',unknown.id)[0];assert.equal(attempt.status,'unknown');
+  const unit=d.enhancement.getUnit(id);d.mutate('unit.select-result',{chapterId:c.id,revision:store.get('chapters',c.id).revision,unitId:id,entityRevision:unit.revision,audioId});
+  assert.equal(store.get('segments',id).latest,'success');
+  assert.throws(()=>enqueue({ids:[id]}),/结果不明/);assert.equal(calls,2);
+  const next=enqueue({ids:[id],retryUnknown:true});assert.deepEqual(next.acknowledgedAttemptIds,[attempt.id]);await worker.tick();assert.equal(calls,3);
+  enqueue({ids:[id]});await worker.tick();assert.equal(calls,4);assert.equal(store.get('attempts',attempt.id).status,'unknown');
+});
+
+test('F03 决定绑定未决集合；排队停止不消费决定，新unknown在发送事务阻断',async t=>{
+  const {store,d,c,worker,enqueue}=setup(t),id=d.list(c.id)[0].id,other=d.list(c.id)[1].id;let calls=0;
+  t.mock.method(globalThis,'fetch',async()=>{calls++;throw Error('lost receipt');});
+  const unknown=enqueue({ids:[id]});await worker.tick();const old=store.all('attempts',unknown.id)[0];
+  assert.throws(()=>enqueue({ids:[id],retryUnknown:true,acknowledgedAttemptIds:[]}),/范围已变化/);
+  const queued=enqueue({ids:[id],retryUnknown:true,acknowledgedAttemptIds:[old.id]});d.mutate('job.stop',{id:queued.id});await worker.tick();
+  assert.throws(()=>enqueue({ids:[id]}),/结果不明/);
+  const later=enqueue({ids:[id],retryUnknown:true,acknowledgedAttemptIds:[old.id]});
+  store.put('attempts',{...old,id:uid(),jobId:uid(),status:'unknown'});await worker.tick();assert.equal(store.get('jobs',later.id).status,'failed');assert.equal(calls,1);
+  enqueue({ids:[other]});await worker.tick();assert.equal(calls,2);
+});
+
+test('F03 unknown选旧再拆/合并或换scene仍须相关决定，兄弟拆分目标互不误拦',async t=>{
+  for(const action of ['split','merge','scene']) await t.test(action,async t=>{
+    const {store,d,c,worker,enqueue}=setup(t),[first,second]=d.list(c.id);let calls=0;
+    const fetchMock=t.mock.method(globalThis,'fetch',async()=>{calls++;if(calls===2)throw Error('lost receipt');return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
+    enqueue({ids:[first.id]});await worker.tick();const audioId=store.get('segments',first.id).current;
+    const unknown=enqueue({ids:[first.id]});await worker.tick();const unresolved=store.all('attempts',unknown.id)[0];
+    d.mutate('unit.select-result',{chapterId:c.id,revision:store.get('chapters',c.id).revision,unitId:first.id,entityRevision:d.enhancement.getUnit(first.id).revision,audioId});
+    const rev=()=>store.get('chapters',c.id).revision;let ids=[first.id],mode='dry';
+    if(action==='split')ids=d.mutate('segment.split',{chapterId:c.id,revision:rev(),id:first.id,offset:1}).map(s=>s.id);
+    if(action==='merge')ids=[d.mutate('segment.merge',{chapterId:c.id,revision:rev(),id:first.id}).id];
+    if(action==='scene'){const u=d.enhancement.getUnit(first.id);d.mutate('event.create',{chapterId:c.id,revision:rev(),unitId:first.id,entityRevision:u.revision,kind:'effect',description:'轻敲',memberId:first.id,position:'after',state:'adopted'});mode='scene';}
+    const payload={kind:'unit-generate',chapterId:c.id,revision:rev(),unitIds:ids,mode,commandId:uid()};
+    assert.throws(()=>worker.enqueue(payload),/结果不明/);assert.equal(calls,2);
+    const next=worker.enqueue({...payload,commandId:uid(),retryUnknown:true,acknowledgedAttemptIds:[unresolved.id]});await worker.tick();assert.equal(store.get('jobs',next.id).status,'success');assert.equal(calls,2+ids.length);
+    if(action!=='merge') { const other=worker.enqueue({kind:'unit-generate',chapterId:c.id,revision:rev(),unitIds:[second.id],commandId:uid()});await worker.tick();assert.equal(store.get('jobs',other.id).status,'success'); }
+    if(action==='split'){
+      fetchMock.mock.mockImplementation(async()=>{calls++;throw Error('new unknown');});
+      const failed=worker.enqueue({kind:'unit-generate',chapterId:c.id,revision:rev(),unitIds:[ids[0]],commandId:uid()});await worker.tick();assert.equal(store.get('jobs',failed.id).status,'unknown');
+      assert.doesNotThrow(()=>worker.enqueue({kind:'unit-generate',chapterId:c.id,revision:rev(),unitIds:[ids[1]],commandId:uid()}));
+    }
+  });
+});
+
+test('F03 父unknown的单一子目标决定不替兄弟或新mode决定，完整组覆盖可消费范围',async t=>{
+  const {store,d,c,worker,enqueue}=setup(t),first=d.list(c.id)[0];let calls=0;
+  const fetchMock=t.mock.method(globalThis,'fetch',async()=>{calls++;throw Error('unknown parent');});
+  const job=enqueue({ids:[first.id]});await worker.tick();const unknown=store.all('attempts',job.id)[0],rev=()=>store.get('chapters',c.id).revision;
+  const children=d.mutate('segment.split',{chapterId:c.id,revision:rev(),id:first.id,offset:1}),[left,right]=children.map(s=>s.id);
+  fetchMock.mock.mockImplementation(async()=>{calls++;return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
+  const submit=(ids,extra={})=>worker.enqueue({kind:'unit-generate',chapterId:c.id,revision:rev(),unitIds:ids,commandId:uid(),...extra});
+  submit([left],{retryUnknown:true,acknowledgedAttemptIds:[unknown.id]});await worker.tick();assert.equal(calls,2);
+  assert.throws(()=>submit([right]),/结果不明/);
+  const u=d.enhancement.getUnit(left);d.mutate('event.create',{chapterId:c.id,revision:rev(),unitId:left,entityRevision:u.revision,kind:'effect',description:'轻敲',memberId:left,position:'after',state:'adopted'});
+  assert.throws(()=>submit([left],{mode:'scene'}),/结果不明/);
+  const group=d.mutate('unit.create',{chapterId:c.id,revision:rev(),ids:[left,right]});
+  submit([group.id],{retryUnknown:true,acknowledgedAttemptIds:[unknown.id]});await worker.tick();assert.equal(calls,3);
+  assert.equal(d.enhancement.getUnit(group.id).state,'active');
+  const later=submit([group.id]);await worker.tick();assert.equal(store.get('jobs',later.id).status,'success');assert.equal(store.get('attempts',unknown.id).status,'unknown');
+});
+
+test('F03 合并须全部父范围已处理，单子决定不能授权合并整体',async t=>{
+  const {store,d,c,worker,enqueue}=setup(t),first=d.list(c.id)[0],rev=()=>store.get('chapters',c.id).revision;
+  const fetchMock=t.mock.method(globalThis,'fetch',async()=>{throw Error('unknown parent');});
+  const job=enqueue({ids:[first.id]});await worker.tick();const unknown=store.all('attempts',job.id)[0];
+  const [left,right]=d.mutate('segment.split',{chapterId:c.id,revision:rev(),id:first.id,offset:1});
+  fetchMock.mock.mockImplementation(async()=>new Response(wav(),{headers:{'Content-Type':'audio/wav'}}));
+  const submit=(unitId,extra={})=>worker.enqueue({kind:'unit-generate',chapterId:c.id,revision:rev(),unitIds:[unitId],commandId:uid(),...extra});
+  submit(left.id,{retryUnknown:true,acknowledgedAttemptIds:[unknown.id]});await worker.tick();
+  const merged=d.mutate('segment.merge',{chapterId:c.id,revision:rev(),id:left.id});assert.deepEqual(merged.source.parentIds,[left.id,right.id]);
+  assert.throws(()=>submit(merged.id),/结果不明/);
+  submit(merged.id,{retryUnknown:true,acknowledgedAttemptIds:[unknown.id]});await worker.tick();
+  const next=submit(merged.id);await worker.tick();assert.equal(store.get('jobs',next.id).status,'success');assert.equal(store.get('attempts',unknown.id).status,'unknown');
+});
+
 test("整批预检第二条损坏参考，零入队零付费且不改变状态", async t => {
   const {store,d,c,worker,dir} = setup(t);
   const broken={id:uid(),path:"broken.wav",state:"active"};
@@ -607,7 +685,7 @@ test("关闭服务会结束尚未发送的排队任务，停用素材不算已�
 test("音色新文本试音复用持久任务，不修改章节；未知结果不静默重试", async (t) => {
   const { store, c, v, worker } = setup(t);
   const before = store.get("chapters", c.id);
-  t.mock.method(
+  const fetchMock=t.mock.method(
     globalThis,
     "fetch",
     async () =>
@@ -629,9 +707,9 @@ test("音色新文本试音复用持久任务，不修改章节；未知结果�
     payload.text,
   );
   assert.deepEqual(store.get("chapters", c.id), before);
-  const saved = store.get("jobs", job.id);
-  saved.status = "unknown";
-  store.put("jobs", saved);
+  fetchMock.mock.mockImplementation(async()=>{throw Error('lost receipt');});
+  const next=worker.enqueue({...payload,commandId:uid()});await worker.tick();
+  assert.equal(store.get('jobs',next.id).status,'unknown');assert.equal(store.all('attempts',next.id)[0].status,'unknown');
   assert.throws(
     () => worker.enqueue({ ...payload, commandId: uid() }),
     /结果不明/,
@@ -948,7 +1026,7 @@ test("导演使用单条实际参考观察，素材改动拒绝旧建议且不�
   const analysis=createAnalysis(store,d,{key:'test',baseUrl:'https://example.invalid'});const draft=await analysis.start({chapterId:c.id,revision:chapter.revision,kind:'director',ids:[s.id]});await analysis.close();
   d.mutate('voice.update',{id:v.id,entityRevision:2,observations:{...observations,volume:'音量平稳'}});
   assert.throws(()=>analysis.apply({id:draft.id,draftVersion:store.get('suggestions',draft.id).draftVersion,revision:chapter.revision,selected:store.get('suggestions',draft.id).items.map(i=>i.id)}),/过期/);
-  assert.deepEqual(store.get('roles',role.id),role);assert.deepEqual(d.list(c.id),chapter.segments.map(({validity,review,audio,prompt,promptIssues,...rest})=>({...rest,review:store.get('segments',rest.id).review})));
+  assert.deepEqual(store.get('roles',role.id),role);assert.deepEqual(d.list(c.id),chapter.segments.map(({validity,review,audio,prompt,promptIssues,configurationDecided,...rest})=>({...rest,review:store.get('segments',rest.id).review})));
 });
 
 test("音色人工检查 HTTP 入口拒绝损坏参考和样音，恢复后才允许记录",async t=>{

@@ -86,6 +86,7 @@ export interface Chapter {
   sourceVersion?: number;
 }
 export interface Segment {
+  configurationDecided?: boolean;
   analysisOrigin?: {draftId:string;itemId:string};
   protectedFields?: string[];
   decisions?: Record<string, {source:"human"|"inherited"|"policy_ai"|"system";state?:"accepted"|"needsDecision";values:unknown;at:string;policyVersion?:number;draftId?:string}>;
@@ -157,12 +158,15 @@ export interface OperationResult<T = unknown> {
   dependencies?: {chapterId?:string;segmentIds:string[];unitIds:string[];roleIds:string[]};
 }
 export interface GenerationPlan {
+  actionKind?: "fillMissing"|"updateSelected"|"redoRejected"|"forceRegenerate";
+  outstandingAttemptIds?: string[];
+  rejectedUnits?: string[];
   chapterId:string;
   revision:number;
   arrangement:number;
   unitIds:string[];
   memberIds:string[];
-  units:{unitId:string;members:string[];mode:"dry"|"scene";reuse:boolean;audioId:string|null}[];
+  units:{unitId:string;members:string[];mode:"dry"|"scene";reuse:boolean;audioId:string|null;rejected?:boolean;outstandingAttemptIds?:string[]}[];
   textRequests:number;
   audioRequests:number;
 }
@@ -223,6 +227,7 @@ export interface Job {
   createdAt: string;
 }
 export interface SoundEvent {
+  transition?: {memberId:string;quote:string;occurrence:number;development:string;volumeChange?:string};
   diagnostics?: string[];
   unitRevision?: number;
   chapterRevision?: number;
@@ -242,6 +247,9 @@ export interface SoundEvent {
   evidence: {kind: string; quote?: string; quotes?: string[]; reason?: string};
 }
 export interface UnitVariant {
+  resolvedCompilerId?: string;
+  backgroundPresence?: "clear"|"natural"|"subtle"|"unspecified";
+  outstandingAttemptIds?: string[];
   history?: {id:string;prompt:string;matched:boolean;selected:boolean;available?:boolean;createdAt?:string;duration?:number}[];
   guidance?: string;
   current: string | null;
@@ -253,6 +261,9 @@ export interface UnitVariant {
   status: {validity: string; review: string; audio: AudioRecord | null; prompt: string; promptIssues: string[]; basis: Record<string, unknown>;input?:{template:string}|null};
 }
 export interface GenerationUnit {
+  sceneConflicts?: string[];
+  outstandingAttemptIds?: string[];
+  readiness?: {generate:ActionReadiness;play:ActionReadiness;export:ActionReadiness};
   diagnostics?: string[];
   chapterRevision?: number;
   id: string;
@@ -265,6 +276,7 @@ export interface GenerationUnit {
   guidance: string;
   variants: {dry: UnitVariant; scene: UnitVariant};
 }
+export interface ActionReadiness {allowed:boolean;blockers:{code:string;scope:{unitId?:string;memberIds?:string[];mode?:"dry"|"scene"};message:string;resolution:string;attemptIds?:string[]}[];warnings:{code:string;message:string}[]}
 export interface ChapterDetail extends Chapter {
   arrangementIssues?: string[];
   reviewItems?: {id:string;audioId:string|null;basis:Record<string,unknown>}[];
@@ -279,6 +291,7 @@ export interface ChapterDetail extends Chapter {
   suggestions: unknown[];
 }
 export interface State {
+  sceneContract?: {descriptionMax:number;countUnit:string;promptMax:number};
   enhancementTemplates?: {id:string;name:string;description?:string;mode:string;scope:string}[];
   templates: {id: string; name: string; description: string; current: boolean}[];
   projects: Project[];
@@ -288,6 +301,7 @@ export interface State {
   voiceSessions?: VoiceSession[];
   jobs: Job[];
   settings: {
+    workspaceIdentity?: string;
     workspaceDirectory: string;
     projectFolders: boolean;
     revision: number;

@@ -14,9 +14,11 @@ export type SaveContext = { operationId: string; chapterRevision?: number; repla
 type Receipt = { revision: number; changes: string[]; operationId?: string };
 type Chain = { tail: Promise<unknown>; receipts: { before: number; after: number; changes: string[]; operationId?: string }[] };
 const chains = new Map<string, Chain>();
+const workspaceScope=(scope:string)=>typeof sessionStorage==='undefined'?scope:(sessionStorage.getItem('workbench-workspace')||'')+'|'+scope;
 const inflight = new Map<string, Promise<unknown>>();
-export const activeDraftSave = (key: string) => inflight.get(key);
+export const activeDraftSave = (key: string) => inflight.get(workspaceScope(key));
 export function runDraftSave<T>(key: string, work: () => Promise<T>): Promise<T> {
+  key=workspaceScope(key);
   const existing=inflight.get(key);if(existing)return existing as Promise<T>;
   const result=Promise.resolve().then(work).finally(()=>{if(inflight.get(key) === result)inflight.delete(key);});
   inflight.set(key,result);return result;
@@ -25,12 +27,13 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const intersects = (a: string[], b: string[]) => a.includes("*") || b.includes("*") || a.some(id => b.includes(id));
 export function draftScopeRevision(scope: string, base: number): number {
   let revision=base;
-  for(const receipt of chains.get(scope)?.receipts || [])if(receipt.before === revision)revision=receipt.after;
+  for(const receipt of chains.get(workspaceScope(scope))?.receipts || [])if(receipt.before === revision)revision=receipt.after;
   return revision;
 }
 
 // Only receipts from this page may advance a queued edit's base, and only across unrelated writes.
 export function queueDraftSave<T extends Receipt>(scope: string, base: number, dependencies: string[], persist: (revision: number) => Promise<T>, replayId?: string): Promise<T> {
+  scope=workspaceScope(scope);
   let chain = chains.get(scope);
   if (!chain) { chain = { tail: Promise.resolve(), receipts: [] }; chains.set(scope, chain); }
   const current = chain;
@@ -53,35 +56,37 @@ export function queueDraftSave<T extends Receipt>(scope: string, base: number, d
   return result;
 }
 
-type SaveOperation<T> = { outcome: string; result?: T; error?: string; errorStatus?: number; dependencies?: { segmentIds?: string[]; unitIds?: string[]; roleIds?: string[] } };
-const commandKey = (key: string) => "pending-save:" + (sessionStorage.getItem("draft-owner") || "page") + ":" + key;
-export function saveOperationId(key: string, payload: unknown): string {
-  const storageKey = commandKey(key), signature = JSON.stringify(payload);
+type SaveOperation<T> = { outcome: string; result?: T; error?: string; errorStatus?: number; code?:string;scope?:Record<string,unknown>;retryClass?:string;dependencies?: { segmentIds?: string[]; unitIds?: string[]; roleIds?: string[] } };
+const commandKey = (key: string,identity=sessionStorage.getItem("workbench-workspace")||'') => "pending-save:" + (identity ? "workspace/"+encodeURIComponent(identity)+"/" : "") + (sessionStorage.getItem("draft-owner") || "page") + ":" + key;
+export function saveOperationId(key: string, payload: unknown,identity?:string): string {
+  const storageKey = commandKey(key,identity), signature = JSON.stringify(payload);
   const raw = localStorage.getItem(storageKey);
   if (raw) { const previous = JSON.parse(raw); if (previous.signature === signature) return previous.id; throw new Error("上一次保存回执尚未确认，请先恢复该次保存，不能再次创建或覆盖"); }
   const id = crypto.randomUUID();
   localStorage.setItem(storageKey, JSON.stringify({ id, signature }));
   return id;
 }
-export function pendingSaveOperation(key: string): {id:string;payload:{value:unknown;revision:number;chapterRevision?:number}} | null {
-  const raw=localStorage.getItem(commandKey(key));if(!raw)return null;
+export function pendingSaveOperation(key: string,identity?:string): {id:string;payload:{value:unknown;revision:number;chapterRevision?:number}} | null {
+  const raw=localStorage.getItem(commandKey(key,identity));if(!raw)return null;
   const record=JSON.parse(raw);return {id:record.id,payload:JSON.parse(record.signature)};
 }
-export function forgetSaveOperation(key: string, id: string) {
-  const storageKey = commandKey(key), raw = localStorage.getItem(storageKey);
+export function forgetSaveOperation(key: string, id: string,identity?:string) {
+  const storageKey = commandKey(key,identity), raw = localStorage.getItem(storageKey);
   if (raw && JSON.parse(raw).id === id) localStorage.removeItem(storageKey);
 }
 export async function saveAction<T = unknown>(action: string, data: Record<string, unknown>, operationId: string, replay = false): Promise<T> {
+  const workspaceIdentity=typeof sessionStorage==='undefined'?'':sessionStorage.getItem("workbench-workspace")||'';
   let operation: SaveOperation<T> | undefined;
   if(replay)try {operation=await api<SaveOperation<T>>("/operations/" + encodeURIComponent(operationId));}catch(error){if((error as {status?:number}).status !== 404)throw error;}
+  if(typeof sessionStorage!=='undefined'&&(sessionStorage.getItem("workbench-workspace")||'')!==workspaceIdentity)throw new Error("工作区已变化，本次未保存；原编辑仍在本机暂存。");
   try { if(!operation)operation = await api<SaveOperation<T>>("/operations", { operationId, kind: "save", action, data }); }
   catch (error) {
-    if ((error as { status?: number }).status) throw error;
+    if ((error as { status?: number;retryClass?:string }).status && (error as {retryClass?:string}).retryClass!=='check-existing-operation') throw error;
     try { operation = await api<SaveOperation<T>>("/operations/" + encodeURIComponent(operationId)); }
     catch { throw error; }
   }
   if (operation.outcome !== "completed" || operation.result === undefined)
-    throw Object.assign(new Error(operation.error || "本次保存尚未确认，编辑仍保留"), { status: operation.errorStatus, operationId });
+    throw Object.assign(new Error(operation.error || "本次保存尚未确认，编辑仍保留"), { status: operation.errorStatus, operationId,code:operation.code,scope:operation.scope,retryClass:operation.retryClass });
   return operation.result;
 }
 
@@ -99,32 +104,36 @@ export function mergeSavedValues<T extends object>(before: T, after: T, saved: T
 
 type Saver = { scope: string; dependencies: string[]; state: () => SaveState; dirty: () => boolean; flush: () => Promise<unknown>; freeze: (value: boolean) => void; mounted?: boolean; deferUnmounted?: () => boolean };
 const savers = new Map<string, Saver>(), timers = new Map<string, ReturnType<typeof setTimeout>>(), listeners = new Set<() => void>();
-export const hasLiveDraft = (key:string) => !!activeDraftSave(key) || !!savers.get(key)?.dirty();
+const freezes = new WeakMap<Saver,number>();
+export const hasLiveDraft = (key:string) => !!activeDraftSave(key) || !!savers.get(workspaceScope(key))?.dirty();
 export async function flushRegisteredDraft(key:string) {
-  const saver=savers.get(key);if(!saver)throw new Error("已创建对象的续写仍暂存本机，请从恢复入口返回该对象后继续。");
+  const saver=savers.get(workspaceScope(key));if(!saver)throw new Error("已创建对象的续写仍暂存本机，请从恢复入口返回该对象后继续。");
   return saver.flush();
 }
-export const notifyDraftSaves = () => {for(const [key,saver]of savers)if(saver.mounted === false && !saver.dirty()){savers.delete(key);cancelDraftSave(key);}listeners.forEach(listener => listener());};
+export const notifyDraftSaves = () => {for(const [key,saver]of savers)if(saver.mounted === false && !saver.dirty()){savers.delete(key);clearTimeout(timers.get(key));timers.delete(key);}listeners.forEach(listener => listener());};
 export const subscribeDraftSaves = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 export function registerDraftSave(key: string, saver: Saver) {
+  const registeredKey=workspaceScope(key),scope=workspaceScope(saver.scope);
+  saver={...saver,scope};key=registeredKey;
   saver.mounted=true;savers.set(key, saver); notifyDraftSaves();
-  return () => {saver.mounted=false;if(saver.deferUnmounted?.())cancelDraftSave(key);notifyDraftSaves();};
+  return () => {saver.mounted=false;if(saver.deferUnmounted?.()){clearTimeout(timers.get(key));timers.delete(key);}notifyDraftSaves();};
 }
-export function cancelDraftSave(key: string) { clearTimeout(timers.get(key)); timers.delete(key); }
+export function cancelDraftSave(key: string) { key=workspaceScope(key);clearTimeout(timers.get(key)); timers.delete(key); }
 export function scheduleDraftSave(key: string, save: () => Promise<unknown>, delay = 600) {
   cancelDraftSave(key);
+  key=workspaceScope(key);
   timers.set(key, setTimeout(() => { timers.delete(key); void save().catch(() => {}); }, delay));
 }
-const selected = (scope: string, dependencies?: string[]) => [...savers.values()].filter(saver => saver.scope === scope && !(saver.mounted === false && saver.deferUnmounted?.()) && (!dependencies || intersects(dependencies, saver.dependencies)));
+const selected = (scope: string, dependencies?: string[]) => [...savers.values()].filter(saver => saver.scope === workspaceScope(scope) && !(saver.mounted === false && saver.deferUnmounted?.()) && (!dependencies || intersects(dependencies, saver.dependencies)));
 export function draftSaveStatus(scope: string, dependencies?: string[]): SaveState {
   const states = selected(scope, dependencies).map(saver => saver.state());
   return (["unreliable", "conflict", "saving", "local", "saved"] as SaveState[]).find(state => states.includes(state)) || "saved";
 }
 export async function withSavedDrafts<T>(scope: string, dependencies: string[] | undefined, next: () => Promise<T>): Promise<T> {
   const relevant = selected(scope, dependencies);
-  relevant.forEach(saver => saver.freeze(true));
+  relevant.forEach(saver => {const count=freezes.get(saver)||0;freezes.set(saver,count+1);if(!count)saver.freeze(true);});
   try { for (const saver of relevant) if (saver.dirty()) await saver.flush(); return await next(); }
-  finally { relevant.forEach(saver => saver.freeze(false)); }
+  finally { relevant.forEach(saver => {const count=(freezes.get(saver)||1)-1;freezes.set(saver,count);if(!count)saver.freeze(false);}); }
 }
 export async function flushDraftSaves(scope: string, dependencies?: string[]) {
   await withSavedDrafts(scope, dependencies, async () => {});

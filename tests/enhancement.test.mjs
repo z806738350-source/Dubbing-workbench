@@ -36,6 +36,79 @@ function setup(t, source = '第一句。第二句。第三句。') {
   return {dir,store,d,p,c,role,v,e,edit,singleAudio,complete,mutateUnit};
 }
 
+test('N02/N03恢复只替换已采用事件，当前超限指导不阻断合法候选',t=>{
+  const {store,d,c,e,edit,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id;
+  const adopted=edit('event.create',{unitId:id,entityRevision:store.get('units',id).revision,kind:'music',description:'琴声保持旋律',memberId:id,position:'during',state:'adopted'}),old=complete(id,'scene');
+  const draft=edit('event.create',{unitId:id,entityRevision:store.get('units',id).revision,kind:'effect',description:'未采用水滴草稿',memberId:id,position:'after',state:'draft'}),savedDraft=store.get('events',draft.id);
+  edit('event.update',{unitId:id,eventId:adopted.id,entityRevision:store.get('units',id).revision,eventRevision:adopted.revision,description:'当前长音乐'.repeat(290)});
+  mutateUnit('unit.update',store.get('units',id),{mode:'scene',guidance:'长指导'.repeat(650)});
+  assert.equal(e.status(store.get('units',id),'scene').validity,'stale');
+  const u=store.get('units',id),preview=e.preview({kind:'restore',chapterId:c.id,revision:store.get('chapters',c.id).revision,id,entityRevision:u.revision,mode:'scene',audioId:old.audio.id});
+  assert.deepEqual(preview.preservedDraftIds,[draft.id]);assert.equal(preview.resultWouldMatch,true);
+  const restored=mutateUnit('unit.restore',u,{mode:'scene',audioId:old.audio.id,restoreSettings:true,baseRevisions:preview.baseRevisions});
+  assert.equal(restored.status.validity,'matched');assert.deepEqual(store.get('events',draft.id),savedDraft);assert.equal(store.get('events',adopted.id).description,'琴声保持旋律');
+  assert.deepEqual(store.get('audios',old.audio.id),JSON.parse(JSON.stringify(old.audio)));
+});
+
+test('N02合法短指导恢复不静默移除未采用草稿',t=>{
+  const {store,d,c,edit,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id,old=complete(id,'scene');
+  const draft=edit('event.create',{unitId:id,entityRevision:store.get('units',id).revision,kind:'effect',description:'保留待考虑的敲门声',memberId:id,position:'after',state:'draft'}),before=store.get('events',draft.id);
+  mutateUnit('unit.update',store.get('units',id),{mode:'scene',guidance:'合法新指导'});
+  mutateUnit('unit.restore',store.get('units',id),{mode:'scene',audioId:old.audio.id,restoreSettings:true});
+  assert.deepEqual(store.get('events',draft.id),before);
+});
+
+test('F05放弃A只更新列表，排队B和在途B内容基准继续有效',t=>{
+  const {store,d,e}=setup(t),session=d.mutate('voice-session.create',{description:'温和声音'});
+  const prepare=()=>e.prepare({kind:'voice-create',sessionId:session.id,entityRevision:store.get('voiceSessions',session.id).revision},{model:'seed-audio-1.0'});
+  const first=prepare(),ja={id:uid(),status:'success',...first.job},aa={id:uid(),jobId:ja.id,status:'success',...first.attempts[0]};store.put('jobs',ja);store.put('attempts',aa,ja.id);
+  const second=prepare(),jb={id:uid(),status:'queued',...second.job},ab={id:uid(),jobId:jb.id,status:'queued',...second.attempts[0]};store.put('jobs',jb);store.put('attempts',ab,jb.id);
+  d.mutate('voice-candidate.discard',{id:aa.id,sessionId:session.id,entityRevision:store.get('voiceSessions',session.id).revision});
+  assert.doesNotThrow(()=>e.validateDispatch(jb,ab));jb.status='running';assert.equal(e.register(jb,ab,{id:ab.id}),true);
+  d.mutate('voice-session.update',{id:session.id,entityRevision:store.get('voiceSessions',session.id).revision,description:'真正修改的声音'});
+  assert.throws(()=>e.validateDispatch(jb,ab),/修改/);assert.equal(e.register(jb,ab,{id:ab.id}),false);
+});
+
+test('N01同ID旧C/D语法逐字分类并恢复matched，原input和prompt不重写',t=>{
+  const {store,d,c,e,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id;
+  mutateUnit('unit.template',store.get('units',id),{mode:'scene',template:'scene-v3-native',confirm:true});
+  const old=complete(id,'scene'),audio=store.get('audios',old.audio.id);
+  // A literal frozen old prompt is independent of today's compiler. This is
+  // an isolated successful fixture, not the archived D unknown request.
+  audio.prompt='[任务]\n在以下1条正文的范围内，一次生成完整中文声景。旁白或对白与已采用的环境、音乐、音效共同构成这次输出；字词清楚可辨。\n\n[已采用声景与发展]\n无\n\n[人物与参考]\n说话者 A 的声音身份参考 @音频1；参考用于声音身份，当前场景与表演按本次要求安排。\n\n[只朗读以下正文一次]\n1. 说话者 A；表演：自然清楚地朗读；正文：第一句。\n\n[文字与范围边界]\n正文文字、顺序和说话者归属保持不变；编号、标题、说话者标签、参考编号和说明不读出。不增加、遗漏或改写台词，不增加未采用的独立声音事件或角色。已采用声音按各自范围及发展要求组织；环境和音乐可与说话同期呈现。';
+  store.put('audios',audio,c.id);const before=store.get('audios',audio.id),u=store.get('units',id);
+  assert.equal(e.status(u,'scene').validity,'stale');
+  const restored=mutateUnit('unit.restore',u,{mode:'scene',audioId:audio.id,restoreSettings:true});
+  assert.equal(restored.status.validity,'matched');assert.equal(restored.variants.scene.resolvedCompilerId,'native3-frozen-cd');
+  const saved=store.get('audios',audio.id);assert.deepEqual(saved.input,before.input);assert.equal(saved.prompt,before.prompt);assert.equal(saved.resolvedCompilerId,'native3-frozen-cd');assert.equal(saved.migrationProvenance.method,'exact-input-prompt');
+  assert.equal(e.compilerCompatibility()[0].resolvedCompilerId,'native3-frozen-cd');assert.equal(store.all('jobs').length,1);
+});
+
+test('N01未知历史编译器只读，N02草稿ID冲突及N03事务中途失败无半恢复',async t=>{
+  for(const failure of ['unknown-compiler','draft-id-conflict','write-failure','postcondition']) await t.test(failure,t=>{
+    const {store,d,c,e,edit,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id;
+    const event=edit('event.create',{unitId:id,entityRevision:store.get('units',id).revision,kind:'music',description:'原琴声',memberId:id,position:'during',state:'adopted'}),old=complete(id,'scene');
+    mutateUnit('unit.update',store.get('units',id),{mode:'scene',guidance:'当前新指导'});
+    if(failure==='unknown-compiler'){const a=store.get('audios',old.audio.id);a.prompt+='未知改动';store.put('audios',a,c.id);}
+    if(failure==='draft-id-conflict'){const e=store.get('events',event.id);e.state='draft';store.put('events',e,id);}
+    const before=['units','events','chapters','audios'].map(table=>store.all(table));
+    if(failure==='write-failure')store.db.exec("CREATE TRIGGER fail_restore BEFORE UPDATE ON units BEGIN SELECT RAISE(ABORT,'injected restore failure'); END");
+    if(failure==='postcondition'){const put=store.put.bind(store);t.mock.method(store,'put',(table,value,parent)=>put(table,table==='units'?{...value,variants:{...value.variants,scene:{...value.variants.scene,guidance:'tampered'}}}:value,parent));}
+    assert.throws(()=>mutateUnit('unit.restore',store.get('units',id),{mode:'scene',audioId:old.audio.id,restoreSettings:true}),failure==='unknown-compiler'?/无法.*重现/:failure==='draft-id-conflict'?/草稿/:failure==='write-failure'?/injected/:/未匹配/);
+    assert.deepEqual(['units','events','chapters','audios'].map(table=>store.all(table)),before);
+  });
+});
+
+test('N02恢复预览后新增草稿不进入旧确认范围，新预览后草稿原样保留',t=>{
+  const {store,d,c,e,edit,complete,mutateUnit}=setup(t),id=d.list(c.id)[0].id,old=complete(id,'scene');
+  mutateUnit('unit.update',store.get('units',id),{mode:'scene',guidance:'新指导'});
+  const preview=e.preview({kind:'restore',chapterId:c.id,revision:store.get('chapters',c.id).revision,id,entityRevision:store.get('units',id).revision,mode:'scene',audioId:old.audio.id});
+  const draft=edit('event.create',{unitId:id,entityRevision:store.get('units',id).revision,kind:'effect',description:'另页新草稿',memberId:id,position:'after',state:'draft'}),saved=store.get('events',draft.id);
+  assert.throws(()=>mutateUnit('unit.restore',store.get('units',id),{mode:'scene',audioId:old.audio.id,restoreSettings:true,baseRevisions:preview.baseRevisions}),/重新预览/);
+  const fresh=e.preview({kind:'restore',chapterId:c.id,revision:store.get('chapters',c.id).revision,id,entityRevision:store.get('units',id).revision,mode:'scene',audioId:old.audio.id});
+  assert.deepEqual(fresh.preservedDraftIds,[draft.id]);mutateUnit('unit.restore',store.get('units',id),{mode:'scene',audioId:old.audio.id,restoreSettings:true,baseRevisions:fresh.baseRevisions});assert.deepEqual(store.get('events',draft.id),saved);
+});
+
 test('MR01/MR02 旧选择/提示/检查映射原ID，重复迁移不写旧记录',t=>{
   const {store,d,c,singleAudio}=setup(t), rows=d.list(c.id), a=singleAudio(rows[0],true);
   rows[0]=store.get('segments',rows[0].id); rows[0].previous=uid();

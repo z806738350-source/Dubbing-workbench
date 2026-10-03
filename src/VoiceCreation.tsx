@@ -71,6 +71,7 @@ function SessionEditor({ session, draftId, enabled, configured, audioTools, rout
     setPending(true); setError("");
     try {
       const saved = await draft.flush();
+      if(!active.current)return;
       const id = session?.id || saved.targetId || savedSession.current?.id;
       if (!id || saved.dirty) throw new Error("描述仍有未保存修改，请稍后再生成。");
       const operation = await submitOperation("voice-candidate:" + id, { kind: "voiceCandidate", projectId: actualProject, ...(actualChapter ? { chapterId: actualChapter, revision: target?.revision } : {}), sessionId: id, entityRevision: saved.revision, grantId, ...(unknown && retryUnknown ? { retryUnknown: true } : {}), ...(resumeRoute?{resumeRoute:true}:{}) }, jobs);
@@ -115,6 +116,7 @@ function CandidateCard({ candidate, index, session, voices, playingId, play, ref
     setPending(true); setError("");
     try {
       const next = async () => {
+        if(!active.current)throw new Error("声音选用已取消，原候选与编辑仍保留。");
         if (applying && (currentTarget.current?.needsReview || JSON.stringify(currentTarget.current) !== JSON.stringify(target))) throw new Error("应用范围已变化，请重新核对后选用声音。");
         return submitOperation<{ voice?: Voice; target?: unknown }>("use-voice:" + candidate.id + "/" + (target?.segmentId || target?.roleId || "library"), {
           kind: "useVoice", ...(applying ? { chapterId: target?.chapterId, revision: draftScopeRevision("chapter:" + target!.chapterId, target!.revision!), roleId: target?.roleId, segmentId: target?.segmentId, entityRevision: target?.entityRevision, apply: target?.segmentId ? true : target?.apply !== false, chapterOnly: target?.chapterOnly !== false } : { scope: "library" }),

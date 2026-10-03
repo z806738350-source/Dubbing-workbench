@@ -5,15 +5,48 @@ const now = () => new Date().toISOString();
 const recordId = (kind, id) => `ux-${kind}:${id}`;
 export const policyOf = (store, projectId) => store.maybe('settings', recordId('policy', projectId)) || {projectId, mode:'review', revision:0};
 const valuesOf = (s, field) => field === 'role' ? [s.roleId,s.type] : [s.roleId,s.voiceId,s.voiceSource];
+const fieldDecided = (s, field) => s[field === 'role' ? 'roleConfirmed' : 'identityConfirmed'] && (!s.decisions?.[field] || s.decisions[field].state === 'accepted' && same(s.decisions[field].values,valuesOf(s,field)));
 export function configurationDecided(s) {
-  return ['role','identity'].every(field => {
-    const confirmed = s[field === 'role' ? 'roleConfirmed' : 'identityConfirmed'];
-    const decision = s.decisions?.[field];
-    return confirmed && (!decision || decision.state === 'accepted' && same(decision.values, valuesOf(s, field)));
-  });
+  return ['role','identity'].every(field => fieldDecided(s,field));
 }
 export function decide(s, field, source, extra = {}) {
   s.decisions = {...s.decisions, [field]:{source, at:now(), values:valuesOf(s,field), state:s[field === 'role' ? 'roleConfirmed' : 'identityConfirmed'] ? 'accepted' : 'needsDecision', ...extra}};
+}
+export function inheritStructure(s, parents, action, operationId) {
+  const provenance = {parentIds:parents.map(p=>p.id),parentRevision:s.source.parentRevision,action,...(operationId ? {operationId} : {})};
+  s.protectedFields = [...new Set(parents.flatMap(p=>p.protectedFields || []))];
+  for (const field of ['role','identity']) {
+    s[field === 'role' ? 'roleConfirmed' : 'identityConfirmed'] = parents.every(p=>fieldDecided(p,field));
+    decide(s,field,'structural',provenance);
+  }
+  s.decisions = {...s.decisions,performance:{source:'structural',at:now(),values:s.performance,...provenance}};
+  return s;
+}
+export const attemptScope = a => ({kind:['single','unit'].includes(a.targetKind) || a.segmentId ? 'unit' : a.targetKind,id:a.segmentId || a.unitId || a.targetId,mode:['single','unit'].includes(a.targetKind) || a.segmentId ? a.mode || a.input?.mode || 'dry' : null});
+const targetMembers = (store,target) => target.input?.members?.map(m=>m.id) || store.maybe('units',attemptScope(target).id)?.members || [attemptScope(target).id];
+export function relatedTarget(store, a, b) {
+  const left=attemptScope(a),right=attemptScope(b);
+  if(left.kind!=='unit' || right.kind!=='unit') return same(left,right);
+  if(left.id===right.id) return true;
+  const ancestry=id=>{const ids=new Set(),visit=id=>{if(!id || ids.has(id))return;ids.add(id);for(const parent of store.maybe('segments',id)?.source?.parentIds || [])visit(parent);};visit(id);return ids;};
+  return targetMembers(store,a).some(id=>targetMembers(store,b).some(other=>ancestry(id).has(other) || ancestry(other).has(id)));
+}
+function decisionCovers(store, sent, target) {
+  const a=attemptScope(sent),b=attemptScope(target);
+  if(a.kind!=='unit' || b.kind!=='unit') return same(a,b);
+  if(a.mode!==b.mode) return false;
+  const decided=new Set(targetMembers(store,sent));
+  const covers=(id,seen=new Set())=>{
+    if(decided.has(id))return true;
+    if(seen.has(id))return false;
+    const parents=store.maybe('segments',id)?.source?.parentIds || [];
+    return parents.length>0 && parents.every(parent=>covers(parent,new Set([...seen,id])));
+  };
+  return targetMembers(store,target).every(id=>covers(id));
+}
+export function outstandingAttempts(store, targets, history=store.all('attempts'), related=false) {
+  const decisions=history.filter(a=>a.createdAt && a.acknowledgedAttemptIds?.length);
+  return history.filter(a=>a.status === 'unknown' && targets.some(target=>(related ? relatedTarget(store,target,a) : same(attemptScope(target),attemptScope(a))) && !decisions.some(sent=>sent.acknowledgedAttemptIds.includes(a.id) && decisionCovers(store,sent,target))));
 }
 export function humanChanges(before, after, action, payload) {
   const fields = ['text','roleId','voiceId','voiceSource','performance','type','config','excluded'];
@@ -126,13 +159,18 @@ export function createExperience(store, domain, worker, analysis, config) {
       if (unit.chapterId !== c.id || !['active','pending'].includes(unit.state) || !unit.members.some(id => p.ids.includes(id))) fail('目标对话片段已变化',409);
       rows = [{s:unit}];
     }
+    const actionKind = p.actionKind || (p.regenerate ? 'forceRegenerate' : 'updateSelected');
+    if (!['fillMissing','updateSelected','redoRejected','forceRegenerate'].includes(actionKind)) fail('生成动作无效');
+    const history=store.all('attempts');
     const units = rows.map(row => {
       const mode = p.mode || row.s.mode;
       if (!['dry','scene'].includes(mode)) fail('声音版本无效');
       const st = domain.enhancement.status(domain.enhancement.getUnit(row.s.id),mode);
-      return {unitId:row.s.id,members:row.s.members,mode,reuse:!p.regenerate && st.validity === 'matched',audioId:st.audio?.id || null};
+      const rejected=st.review === 'rework', request=actionKind === 'forceRegenerate' || actionKind === 'redoRejected' ? actionKind === 'forceRegenerate' || rejected : st.validity !== 'matched' || actionKind === 'updateSelected' && rejected;
+      const outstandingAttemptIds=outstandingAttempts(store,[{targetKind:'unit',targetId:row.s.id,mode}],history,true).map(a=>a.id);
+      return {unitId:row.s.id,members:row.s.members,mode,reuse:!request,rejected,audioId:st.audio?.id || null,outstandingAttemptIds};
     });
-    return {chapterId:c.id,revision:c.revision,arrangement:c.arrangement,unitIds:units.filter(u => !u.reuse).map(u => u.unitId),memberIds:units.flatMap(u => u.members),units,textRequests:0,audioRequests:units.filter(u => !u.reuse).length};
+    return {chapterId:c.id,revision:c.revision,arrangement:c.arrangement,actionKind,unitIds:units.filter(u => !u.reuse).map(u => u.unitId),memberIds:units.flatMap(u => u.members),units,rejectedUnits:units.filter(u=>u.rejected).map(u=>u.unitId),outstandingAttemptIds:[...new Set(units.filter(u=>!u.reuse).flatMap(u=>u.outstandingAttemptIds))],textRequests:0,audioRequests:units.filter(u => !u.reuse).length};
   }
   function view(op) {
     const result = {...op}; delete result.request;
@@ -172,7 +210,7 @@ export function createExperience(store, domain, worker, analysis, config) {
     try {
       if (p.kind === 'save') {
         step('completed',() => {
-          const result = domain.mutate(p.action,p.data);
+          const result = domain.mutate(p.action,{...p.data,...(['segment.split','segment.merge'].includes(p.action)?{operationId:p.operationId}:{})});
           op.result = p.data.chapterId ? {...result,chapterRevision:store.get('chapters',p.data.chapterId).revision} : result;
           op.dependencies = {chapterId:p.data.chapterId || result.chapterId,segmentIds:p.action.startsWith('segment.') ? p.data.ids || [p.data.id].filter(Boolean) : [],unitIds:p.data.unitId ? [p.data.unitId] : [],roleIds:p.action === 'role.update' ? [p.data.id] : []};
           return true;
@@ -193,7 +231,7 @@ export function createExperience(store, domain, worker, analysis, config) {
         });
         op.steps.completed = true; op.outcome = 'completed';
       } else {
-        let payload = {chapterId:p.chapterId,projectId:p.projectId,revision:p.revision,grantId:p.grantId,requireGrant:true,commandId:p.operationId,...(p.retryUnknown === true ? {retryUnknown:true} : {}),...(p.resumeRoute === true ? {resumeRoute:true} : {})};
+        let payload = {chapterId:p.chapterId,projectId:p.projectId,revision:p.revision,grantId:p.grantId,requireGrant:true,commandId:p.operationId,...(p.retryUnknown === true ? {retryUnknown:true} : {}),...(p.acknowledgedAttemptIds ? {acknowledgedAttemptIds:p.acknowledgedAttemptIds} : {}),...(p.resumeRoute === true ? {resumeRoute:true} : {})};
         if (p.kind === 'groupAndGenerate') {
           const unit = step('unit',() => domain.mutate('unit.create',{chapterId:p.chapterId,revision:p.revision,ids:p.ids,guidance:p.guidance || ''}));
           op.createdObjectIds = [unit.id]; op.result = {unit};

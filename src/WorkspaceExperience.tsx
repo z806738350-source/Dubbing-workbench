@@ -9,31 +9,57 @@ import { submitOperation } from './taskOperations';
 import VoiceCreation from './VoiceCreation';
 import TaskAuthorization from './TaskAuthorization';
 import type { VoiceTarget } from './VoiceCreation';
-import type { ChapterDetail, GenerationPlan, Role, State, Voice } from './types';
+import type { ChapterDetail, GenerationPlan, Role, Segment, State, Voice } from './types';
 
-export type WorkspaceIssue = { key:string; title:string; detail:string; kind:'structure'|'identity'|'voice'|'request'|'audio'|'advice'; ids:string[]; roleId?:string; unitId?:string; mode?:'dry'|'scene' };
+export type WorkspaceIssue = { key:string; code?:string; scope?:{unitId?:string;mode?:'dry'|'scene';ids:string[]}; resolution?:string; title:string; detail:string; kind:'structure'|'configuration'|'identity'|'voice'|'request'|'audio'|'advice'; ids:string[]; roleId?:string; unitId?:string; mode?:'dry'|'scene' };
+export function configurationDecided(segment:Segment,field?:'role'|'identity'):boolean {
+  if(!field&&segment.configurationDecided!==undefined)return segment.configurationDecided;
+  return (field?[field]:['role','identity'] as const).every(key=>{
+    const decision=segment.decisions?.[key],values=key==='role'?[segment.roleId,segment.type]:[segment.roleId,segment.voiceId,segment.voiceSource];
+    return !!segment[key==='role'?'roleConfirmed':'identityConfirmed']&&(!decision||decision.state==='accepted'&&JSON.stringify(decision.values)===JSON.stringify(values));
+  });
+}
+export function playbackIdentity(items:ChapterDetail['playbackItems']|undefined):string {
+  return JSON.stringify(items?.map(({id,unitId,members,mode,audioId,basis,validity})=>({id,unitId,members,mode,audioId,basis,validity})));
+}
+export function chapterMemberState(chapter:ChapterDetail,segment:Segment){
+  const item=chapter.playbackItems.find(item=>item.id===segment.id||item.members?.includes(segment.id));
+  const unit=chapter.units?.find(unit=>unit.id===(item?.unitId||item?.id))||chapter.units?.find(unit=>unit.kind==='single'&&unit.members.includes(segment.id));
+  const pending=chapter.units?.filter(unit=>unit.state==='pending'&&unit.members.includes(segment.id))||[];
+  const requestIssues=[...(unit?[unit]:[]),...pending].flatMap(unit=>(['dry','scene'] as const).flatMap(mode=>{
+    const variant=unit.variants[mode],unknown=!!variant.outstandingAttemptIds?.length||variant.latest==='unknown';
+    return unknown||variant.latest==='failed'?[{unit,mode,status:unknown?'unknown':'failed'}]:[];
+  }));
+  if(!unit&&['unknown','failed'].includes(segment.latest))requestIssues.push({unit:undefined as never,mode:'dry',status:segment.latest});
+  return {...segment,...item,latest:requestIssues.some(issue=>issue.status==='unknown')?'unknown':requestIssues.length?'failed':(item as {latest?:string}|undefined)?.latest||segment.latest,requestIssues};
+}
 export function chapterIssues(chapter:ChapterDetail, roles:Role[], voices:Voice[]):WorkspaceIssue[] {
   const issues:WorkspaceIssue[]=[];
   if(chapter.arrangementIssues?.length) issues.push({key:'structure',kind:'structure',title:'编排需要修复',detail:chapter.arrangementIssues.join('；'),ids:[],unitId:chapter.units?.find(u=>u.diagnostics?.length)?.id});
   if(!chapter.coverage.valid) issues.push({key:'coverage',kind:'structure',title:'原文尚未完整覆盖',detail:`未覆盖 ${chapter.coverage.gaps} 字，重复覆盖 ${chapter.coverage.overlaps} 字。请查看原文及标注。`,ids:[]});
   for(const roleId of new Set(chapter.segments.filter(s=>!s.excluded).map(s=>s.roleId))){
     const segments=chapter.segments.filter(s=>!s.excluded&&s.roleId===roleId), role=roles.find(r=>r.id===roleId), name=role?.name||'未分配角色';
-    const unknown=segments.filter(s=>!s.roleConfirmed);
+    const unknown=segments.filter(s=>!configurationDecided(s,'role'));
     if(unknown.length) issues.push({key:'identity:'+roleId,kind:'identity',title:`核对${name}的说话人归属`,detail:`${unknown.length} 条需要判断。先查看原文，再确认或改绑角色。`,ids:unknown.map(s=>s.id),roleId});
     const missing=segments.filter(s=>!s.voiceId || !voices.some(v=>v.id===s.voiceId&&['active','archived'].includes(v.state)&&!v.deletePending));
-    if(missing.length)issues.push({key:'voice:'+roleId,kind:'voice',title:`为${name}选声音`,detail:`${missing.length} 条缺少可用声音。可一次应用到本章沿用默认声音的台词。`,ids:missing.map(s=>s.id),roleId});
-    const pendingIdentity=segments.filter(s=>s.roleConfirmed&&s.voiceId&&!s.identityConfirmed);
+    const generationMissing=missing.filter(s=>{const status=chapterMemberState(chapter,s);return status.validity!=='matched'||status.review==='rework';});
+    if(missing.length)issues.push({key:'voice:'+roleId,code:'reference_unavailable',kind:generationMissing.length?'voice':'advice',title:generationMissing.length?`为${name}选声音`:`${name}的参考已停用`,detail:generationMissing.length?`${generationMissing.length} 句的新生成需要可用参考。可应用到本章沿用默认声音的台词。`:'已有匹配声音仍可试听和导出；下一次生成前请改选可用参考。',ids:missing.map(s=>s.id),roleId});
+    const pendingIdentity=segments.filter(s=>configurationDecided(s,'role')&&s.voiceId&&!configurationDecided(s,'identity'));
     if(pendingIdentity.length)issues.push({key:'sound-identity:'+roleId,kind:'identity',title:`核对${name}使用的声音`,detail:`${pendingIdentity.length} 条声音身份尚未确认。明确选用声音后继续。`,ids:pendingIdentity.map(s=>s.id),roleId});
   }
   const playing=new Set(chapter.playbackItems.map(item=>item.unitId||item.id));
   const units=(chapter.units||[]).filter(unit=>playing.has(unit.id)||unit.state==='pending'&&unit.members.some(id=>chapter.segments.some(s=>s.id===id&&!s.excluded)));
   const represented=new Set(units.flatMap(unit=>unit.members));
+  for(const unit of units){
+    const blockers=unit.readiness?.generate.blockers.filter(issue=>issue.code==='prompt-invalid')||[];
+    if(blockers.length)issues.push({key:'prompt:'+unit.id,code:'prompt-invalid',kind:'configuration',title:'这段生成要求需要处理',detail:[...new Set(blockers.map(issue=>issue.message))].join('；'),ids:unit.members,unitId:unit.id,mode:unit.mode,resolution:'edit_prompt'});
+  }
   for(const unit of units) for(const mode of ['dry','scene'] as const){
-    const latest=unit.variants[mode].latest;
+    const latest=unit.variants[mode].outstandingAttemptIds?.length?'unknown':unit.variants[mode].latest;
     if(!['unknown','failed'].includes(latest))continue;
     const matching=chapter.playbackItems.some(item=>item.audioId&&item.validity==='matched'&&(item.unitId===unit.id||(item.members||[item.id]).some(id=>unit.members.includes(id))));
     const name=mode==='scene'?'声音背景':unit.kind==='group'?'对戏':'声音';
-    issues.push({key:`${latest}:${unit.id}:${mode}`,kind:'request',title:latest==='unknown'?`${name}新结果待核对`:`${name}生成失败`,detail:(latest==='unknown'?`${unit.members.length} 条的新结果待核对，可能已计费。先核对这次任务；只有明确再次发送时才重试。`:`${unit.members.length} 条的最新生成失败，已有音频和历史保留。`)+(matching?' 原有匹配声音仍可试听。':''),ids:unit.members,unitId:unit.id,mode});
+    issues.push({key:`${latest}:${unit.id}:${mode}`,code:latest==='unknown'?'outstanding_attempt':'generation_failed',scope:{unitId:unit.id,mode,ids:unit.members},resolution:'inspect_attempt',kind:'request',title:latest==='unknown'?`${name}新结果待核对`:`${name}生成失败`,detail:(latest==='unknown'?`${unit.members.length} 条的新结果待核对，可能已计费。先核对这次任务；只有明确再次发送时才重试。`:`${unit.members.length} 条的最新生成失败，已有音频和历史保留。`)+(matching?' 原有匹配声音仍可试听。':''),ids:unit.members,unitId:unit.id,mode});
   }
   const unknown=chapter.segments.filter(s=>!s.excluded&&!represented.has(s.id)&&s.latest==='unknown');
   if(unknown.length)issues.push({key:'unknown',kind:'request',title:'有生成请求结果不明',detail:`${unknown.length} 条可能已经计费。先检查任务记录；只有明确再发送时才重试。`,ids:unknown.map(s=>s.id)});
@@ -45,7 +71,7 @@ export function chapterIssues(chapter:ChapterDetail, roles:Role[], voices:Voice[
   const latest=suggestions.filter(d=>d.kind!=='scene').at(-1);
   const pending=latest?.items.filter(item=>latest.automation?.pendingItemIds?.includes(item.id))||[];
   if(pending.length)issues.push({key:'ai-advice',kind:'advice',title:'AI有表演建议等待选择',detail:`${pending.length} 项需判断，保持当前表演也可以继续制作。可查看建议与原文依据后一次采用。`,ids:pending.flatMap(i=>i.segmentId?[i.segmentId]:[])});
-  return issues;
+  return issues.map(issue=>({...issue,code:issue.code||issue.key.split(':')[0],scope:issue.scope||{unitId:issue.unitId,mode:issue.mode,ids:issue.ids},resolution:issue.resolution||({structure:'repair_structure',configuration:'edit_prompt',identity:'confirm_configuration',voice:'choose_reference',request:'inspect_attempt',audio:'redo_rejected',advice:'inspect_advice'})[issue.kind]}));
 }
 export function IssueCenter({chapter,roles,voices,onClose,onLocate,onVoice,onSource,onUnit,onTasks,onConfirm,onAI}:{chapter:ChapterDetail;roles:Role[];voices:Voice[];onClose:()=>void;onLocate:(id:string)=>void;onVoice:(roleId:string)=>void;onSource:()=>void;onUnit:(id:string,mode?:'dry'|'scene')=>void;onTasks:()=>void;onConfirm:(ids:string[])=>Promise<unknown>;onAI:()=>void}){
   const [error,setError]=useState(''),[pending,setPending]=useState(false);
@@ -53,10 +79,10 @@ export function IssueCenter({chapter,roles,voices,onClose,onLocate,onVoice,onSou
   return <Dialog title="需要你处理" presentation="sidepanel" onClose={onClose}>
     <p className="task-panel-summary">同一角色的问题集中处理。常规安排由 AI 完成，声音效果仍需要试听。</p>
     {!issues.length&&<div className="task-outcome"><Check size={20}/><h3>制作条件已就绪</h3><p>可以生成待办或试听现有声音。</p></div>}
-    {issues.map(issue=><article className="issue-card" key={issue.key}><span className="eyebrow">{({structure:'内容与编排',identity:'需要判断',voice:'选择声音',request:'任务结果',audio:'试听返工',advice:'可选创作建议'})[issue.kind]}</span><h3>{issue.title}</h3><p>{issue.detail}</p>
+    {issues.map(issue=><article className="issue-card" key={issue.key}><span className="eyebrow">{({structure:'内容与编排',configuration:'生成要求',identity:'需要判断',voice:'选择声音',request:'任务结果',audio:'试听返工',advice:'可选创作建议'})[issue.kind]}</span><h3>{issue.title}</h3><p>{issue.detail}</p>
       {issue.kind!=='identity'&&issue.ids.length>0&&<blockquote>{chapter.segments.find(s=>s.id===issue.ids[0])?.text}</blockquote>}
       <div className="button-row">
-        {issue.kind==='advice' ? <button className="button" onClick={onAI}>查看AI建议</button> : issue.kind==='voice'||issue.key.startsWith('sound-identity:') ? <button className="button primary" onClick={()=>issue.roleId&&onVoice(issue.roleId)}>选声音</button> : issue.unitId ? <button className="button primary" onClick={()=>onUnit(issue.unitId!,issue.mode)}>{issue.kind==='request'?'核对生成任务':'修复编排'}</button> : issue.kind==='request' ? <button className="button" onClick={onTasks}>查看任务</button> : issue.ids.length ? <button className="button" onClick={()=>onLocate(issue.ids[0])}>定位并修改</button> : <button className="button" onClick={onSource}>查看原文</button>}
+        {issue.kind==='voice'||issue.code==='reference_unavailable'||issue.key.startsWith('sound-identity:') ? <button className="button primary" onClick={()=>issue.roleId&&onVoice(issue.roleId)}>选声音</button> : issue.kind==='advice' ? <button className="button secondary" onClick={onAI}>查看AI建议</button> : issue.unitId ? <button className="button primary" onClick={()=>onUnit(issue.unitId!,issue.mode)}>{issue.kind==='request'?'核对生成任务':issue.kind==='configuration'?'修改生成要求':'修复编排'}</button> : issue.kind==='request' ? <button className="button secondary" onClick={onTasks}>查看任务</button> : issue.ids.length ? <button className="button secondary" onClick={()=>onLocate(issue.ids[0])}>定位并修改</button> : <button className="button secondary" onClick={onSource}>查看原文</button>}
 
       </div>
       {issue.kind==='identity'&&issue.key.startsWith('identity:')&&issue.ids.map(id=><div className="issue-judgment" key={id}><span className="eyebrow">第 {(chapter.segments.find(s=>s.id===id)?.order||0)+1} 条</span><p className="spoken-text">{chapter.segments.find(s=>s.id===id)?.text}</p><div className="button-row"><button className="button small" onClick={()=>onLocate(id)}>修改这一句</button><button className="text-button" disabled={pending} onClick={()=>void(async()=>{setPending(true);setError('');try{await onConfirm([id]);}catch(e){setError((e as Error).message);}finally{setPending(false);}})()}>这一句归属正确</button></div></div>)}
@@ -123,7 +149,7 @@ export function VoicePicker({state,chapter,roles,initialTarget,onClose,onRefresh
     {error&&<p className="error-inline" role="alert">{error}</p>}
   </Dialog>;
 }
-export type RecoveryTarget = {kind:'segment'|'unit'|'event'|'new-group'|'voice-session'|'voice-context'|'role'|'unknown';label:string;chapterId?:string;projectId?:string;segmentId?:string;unitId?:string;eventId?:string;mode?:'dry'|'scene';voiceSessionId?:string;roleId?:string;contextKey?:string;ids?:string[]};
+export type RecoveryTarget = {kind:'import'|'segment'|'unit'|'event'|'new-group'|'voice-session'|'voice-context'|'role'|'unknown';label:string;chapterId?:string;projectId?:string;segmentId?:string;unitId?:string;eventId?:string;mode?:'dry'|'scene';voiceSessionId?:string;roleId?:string;contextKey?:string;ids?:string[]};
 export function RecoveryCenter({chapter,state,onClose,onRecovered}:{chapter:ChapterDetail|null;state:State;onClose:()=>void;onRecovered:(id:string,target:RecoveryTarget)=>void|Promise<void>}){
   const [records,setRecords]=useState<{id:string;entry:DraftRecord<unknown>}[]>([]),[chapters,setChapters]=useState<ChapterDetail[]>(chapter?[chapter]:[]),[error,setError]=useState(''),[loading,setLoading]=useState(true),[pending,setPending]=useState(false);
   const reload=async()=>{
@@ -138,6 +164,8 @@ export function RecoveryCenter({chapter,state,onClose,onRecovered}:{chapter:Chap
   useEffect(()=>{void reload();},[]);
   const targetFor=(id:string,entry:DraftRecord<unknown>):RecoveryTarget=>{
     const unknown:RecoveryTarget={kind:'unknown',label:'尚未定位的暂存 · '+id},parts=id.split('/'),type=parts.shift()!,raw=parts[0]||id;
+    if(entry.compatible===false)return {kind:'unknown',label:(entry.workspaceIdentity?'其他工作区的暂存':'旧版归属未确认的暂存')+' · '+id};
+    if(type==='import-chapter'&&state.projects.some(project=>project.id===raw))return {kind:'import',label:state.projects.find(project=>project.id===raw)!.name+' · 未完成的章节导入',projectId:raw};
     const local=entry.data?.draft as {value?:{ids?:string[]}}|undefined;
     const segmentId=type==='segment-v1'?raw:id;
     for(const c of chapters){const segment=c.segments.find(s=>s.id===segmentId);if(segment)return {kind:'segment',label:`${c.title} · 第 ${segment.order+1} 条 · ${segment.text.slice(0,24)}`,chapterId:c.id,projectId:c.projectId,segmentId};}

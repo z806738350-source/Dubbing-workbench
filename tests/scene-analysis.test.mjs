@@ -21,6 +21,18 @@ function setup(t) {
   return {store,domain,project,chapter,segment,unit,analysis,start,change,item,result};
 }
 
+test('S03 AI与编辑采用共用1500 Unicode代码点，不截断原返回',async t=>{
+  for(const [description,ready] of [['声'.repeat(1500),true],['声'.repeat(1501),false],['声'.repeat(2000),false],['💧'.repeat(1500),true],['💧'.repeat(1501),false]]) await t.test(`${Array.from(description).length}代码点/${description.length}UTF16`,async t=>{
+    const {store,chapter,unit,analysis,start,item,result}=setup(t);let calls=0;
+    global.fetch=async()=>{calls++;return result([{...item,description}]);};
+    const r=await start();await analysis.close();const draft=store.get('suggestions',r.id);
+    assert.equal(draft.status,ready?'ready':'partial');assert.equal(draft.items[0].description,description);
+    if(ready){analysis.apply({id:r.id,revision:chapter.revision,draftVersion:draft.draftVersion,selected:[draft.items[0].id]});assert.equal(store.all('events',unit.id)[0].description,description);}
+    else {assert.ok(draft.items[0].issues.some(message=>/1500/.test(message)));assert.throws(()=>analysis.apply({id:r.id,revision:chapter.revision,draftVersion:draft.draftVersion,selected:[draft.items[0].id]}));assert.equal(store.all('events',unit.id).length,0);}
+    assert.equal(calls,1);
+  });
+});
+
 test('SC01/SC02 场景建议须明确开启；多选一次采用事件，不改正文或角色',async t=>{
   const {store,chapter,segment,unit,analysis,start,item,result}=setup(t);let calls=0;
   global.fetch=async(_,init)=>{calls++;const input=JSON.parse(JSON.parse(init.body).messages[1].content);assert.equal(input.unit.id,unit.id);return result([item,{...item,kind:'environment',description:'安静室内微弱底噪',evidence:'创作建议',evidenceRefs:[]}]);};

@@ -54,12 +54,32 @@ function fixture(t, folders = true) {
   store.put('settings', {id:'ux-operation:other-operation',request:{chapterId:otherChapter.id},jobIds:[],steps:{completed:true}});
   store.put('settings', {id:'audio-usage:retained',used:2,reserved:0,limit:10});
   const snapshot = () => Object.fromEntries(['projects','chapters','roles','segments','units','events','suggestions','jobs','attempts','audios','masters','exports','voices','voiceSessions','settings'].map(table => [table,store.all(table)]));
-  return {directory,store,domain,project,other,chapter,otherChapter,job,attempt,sharedJob,sharedAttempt,candidate,voice,session,grant,write,snapshot,audio,master,exported};
+  const remove=(extra={})=>domain.mutate('project.delete',{id:project.id,...(store.maybe('projects',project.id)?{scope:domain.deletionPlan({id:project.id}).scope}:{}),...extra});
+  return {directory,store,domain,project,other,chapter,otherChapter,job,attempt,sharedJob,sharedAttempt,candidate,voice,session,grant,write,snapshot,remove,audio,master,exported};
 }
+
+test('T14 删除确认后新建章节、编辑章节或增加产物均拒绝旧范围，不删除任何新资料',async t=>{
+  for(const changed of ['chapter.create','chapter.update','export'])await t.test(changed,t=>{
+    const f=fixture(t),scope=f.domain.deletionPlan({id:f.project.id}).scope;
+    if(changed==='chapter.create')f.domain.mutate('chapter.create',{projectId:f.project.id,title:'确认后新章',source:'必须保留的新正文。',segment:true});
+    if(changed==='chapter.update')f.domain.mutate('chapter.update',{chapterId:f.chapter.id,revision:f.store.get('chapters',f.chapter.id).revision,title:'确认后编辑'});
+    if(changed==='export')f.store.put('exports',{id:uid(),path:f.write(`${f.project.folder}/exports/later.wav`)},f.chapter.id);
+    const before=f.snapshot();assert.throws(()=>f.domain.mutate('project.delete',{id:f.project.id,scope}),{status:409});assert.deepEqual(f.snapshot(),before);
+    assert.equal(fs.readFileSync(join(f.directory,f.audio.path),'utf8'),f.audio.path);
+  });
+});
+
+test('T14 删除预览只读且缺范围拒绝，相同快照可删除；已删除命令仍幂等',t=>{
+  const f=fixture(t),before=f.snapshot(),plan=f.domain.deletionPlan({id:f.project.id});
+  assert.deepEqual(f.snapshot(),before);assert.equal(plan.counts.chapters,1);assert.equal(plan.counts.exports,1);assert.equal(plan.chapters[0].id,f.chapter.id);
+  assert.throws(()=>f.domain.mutate('project.delete',{id:f.project.id}),{status:409});assert.deepEqual(f.snapshot(),before);
+  assert.equal(f.domain.mutate('project.delete',{id:f.project.id,scope:JSON.parse(JSON.stringify(plan.scope))}).deleted,true);
+  assert.equal(f.domain.mutate('project.delete',{id:f.project.id,scope:plan.scope}).alreadyDeleted,true);
+});
 
 for (const folders of [true,false]) test(`直接删除${folders?'目录项目':'旧平铺项目'}，只清本项目，保留其他项目和共用声音及账本`, t => {
   const f=fixture(t,folders), before=f.snapshot();
-  assert.deepEqual(f.domain.mutate('project.delete',{id:f.project.id,entityRevision:1}),{id:f.project.id,deleted:true,cleanupPending:false});
+  assert.deepEqual(f.remove({entityRevision:1}),{id:f.project.id,deleted:true,cleanupPending:false});
   assert.equal(f.store.maybe('projects',f.project.id),null);
   for (const table of ['chapters','segments','units','events','suggestions','jobs','attempts','audios','masters','exports'])
     assert.equal(f.store.all(table).some(row=>row.chapterId===f.chapter.id||row.id===f.job.id||row.jobId===f.job.id),false,table);
@@ -74,12 +94,12 @@ for (const folders of [true,false]) test(`直接删除${folders?'目录项目':'
   for (const path of [f.audio.path,f.master.path,f.exported.path,f.attempt.path,f.attempt.path+'.part']) assert.equal(fs.existsSync(join(f.directory,path)),false,path);
   if(folders)assert.equal(fs.existsSync(join(f.directory,f.project.folder)),false);
   assert.equal(fs.readdirSync(f.directory).some(name=>name.startsWith('.project-delete-')),false);
-  assert.deepEqual(f.domain.mutate('project.delete',{id:f.project.id}),{id:f.project.id,deleted:true,alreadyDeleted:true,cleanupPending:false});
+  assert.deepEqual(f.remove(),{id:f.project.id,deleted:true,alreadyDeleted:true,cleanupPending:false});
 });
 
 test('活动任务、分析及项目授权的共享候选阻止删除；其他项目任务不会阻止',t=>{
   const f=fixture(t), before=f.snapshot();
-  const check=()=>{const current=f.snapshot();assert.throws(()=>f.domain.mutate('project.delete',{id:f.project.id}),{status:409});assert.deepEqual(f.snapshot(),current);assert.equal(fs.readFileSync(join(f.directory,f.audio.path),'utf8'),f.audio.path);};
+  const check=()=>{const current=f.snapshot();assert.throws(()=>f.remove(),{status:409});assert.deepEqual(f.snapshot(),current);assert.equal(fs.readFileSync(join(f.directory,f.audio.path),'utf8'),f.audio.path);};
   f.store.put('jobs',{...f.job,status:'running'},f.chapter.id);check();f.store.put('jobs',f.job,f.chapter.id);
   const suggestion=f.store.all('suggestions',f.chapter.id)[0];f.store.put('suggestions',{...suggestion,status:'running'},f.chapter.id);check();f.store.put('suggestions',suggestion,f.chapter.id);
   f.store.put('jobs',{...f.sharedJob,status:'running'});check();f.store.put('jobs',f.sharedJob);
@@ -87,14 +107,14 @@ test('活动任务、分析及项目授权的共享候选阻止删除；其他�
   f.store.put('attempts',{...f.attempt,quota:{scope:'retained',state:'reserved'}},f.job.id);check();f.store.put('attempts',f.attempt,f.job.id);
   assert.deepEqual(f.snapshot(),before);
   const otherJob={id:uid(),chapterId:f.otherChapter.id,status:'running'};f.store.put('jobs',otherJob,f.otherChapter.id);
-  assert.equal(f.domain.mutate('project.delete',{id:f.project.id}).deleted,true);assert.deepEqual(f.store.get('jobs',otherJob.id),otherJob);
+  assert.equal(f.remove().deleted,true);assert.deepEqual(f.store.get('jobs',otherJob.id),otherJob);
 });
 
 test('数据库中途失败回滚全部记录和已移动文件，过期版本也不删除',t=>{
   const f=fixture(t), before=f.snapshot();
-  assert.throws(()=>f.domain.mutate('project.delete',{id:f.project.id,entityRevision:0}),{status:409});
+  assert.throws(()=>f.remove({entityRevision:0}),{status:409});
   f.store.db.exec("CREATE TRIGGER fail_project_delete BEFORE DELETE ON roles BEGIN SELECT RAISE(ABORT,'delete rollback fixture'); END");
-  assert.throws(()=>f.domain.mutate('project.delete',{id:f.project.id}),/delete rollback fixture/);
+  assert.throws(()=>f.remove(),/delete rollback fixture/);
   assert.deepEqual(f.snapshot(),before);
   for(const row of [f.audio,f.master,f.exported,f.attempt])assert.equal(fs.readFileSync(join(f.directory,row.path),'utf8'),row.path);
   assert.equal(fs.readdirSync(f.directory).some(name=>name.startsWith('.project-delete-')),false);
@@ -104,21 +124,21 @@ test('文件移动中途失败恢复此前已移动文件，不删除数据库�
   const f=fixture(t),legacy=f.write('audio/legacy-owned.wav');f.store.put('audios',{id:uid(),path:legacy},f.chapter.id);
   const before=f.snapshot(),original=fs.renameSync;let moves=0;
   fs.renameSync=(from,to)=>{if(String(to).includes('.project-delete-')&&++moves===2)throw Object.assign(new Error('move fixture failure'),{code:'EACCES'});return original(from,to);};syncBuiltinESMExports();
-  try{assert.throws(()=>f.domain.mutate('project.delete',{id:f.project.id}),/move fixture failure/);}finally{fs.renameSync=original;syncBuiltinESMExports();}
+  try{assert.throws(()=>f.remove(),/move fixture failure/);}finally{fs.renameSync=original;syncBuiltinESMExports();}
   assert.deepEqual(f.snapshot(),before);assert.equal(fs.readFileSync(join(f.directory,f.audio.path),'utf8'),f.audio.path);assert.equal(fs.readFileSync(join(f.directory,legacy),'utf8'),legacy);
   assert.equal(fs.readdirSync(f.directory).some(name=>name.startsWith('.project-delete-')),false);
 });
 
 test('项目归属标记、符号链接与越界素材拒绝删除，其他文件原样保留',t=>{
   const f=fixture(t),marker=join(f.directory,f.project.folder,'.project-id'),before=f.snapshot();
-  fs.writeFileSync(marker,f.other.id);assert.throws(()=>f.domain.mutate('project.delete',{id:f.project.id}),{status:409});fs.writeFileSync(marker,f.project.id);
+  fs.writeFileSync(marker,f.other.id);assert.throws(()=>f.remove(),{status:409});fs.writeFileSync(marker,f.project.id);
   const row={id:uid(),path:'audio/../private-not-a-project-file'};f.store.put('audios',row,f.chapter.id);f.write('private-not-a-project-file');
-  assert.throws(()=>f.domain.mutate('project.delete',{id:f.project.id}),{status:409});f.store.remove('audios',row.id);
+  assert.throws(()=>f.remove(),{status:409});f.store.remove('audios',row.id);
   const link=join(f.directory,f.project.folder,'audio','linked.wav');fs.symlinkSync(join(f.directory,f.voice.path),link);f.store.put('audios',{id:row.id,path:`${f.project.folder}/audio/linked.wav`},f.chapter.id);
-  assert.throws(()=>f.domain.mutate('project.delete',{id:f.project.id}),{status:409});f.store.remove('audios',row.id);
-  const shared={...f.voice,path:f.audio.path};f.store.put('voices',shared);assert.throws(()=>f.domain.mutate('project.delete',{id:f.project.id}),{status:409});f.store.put('voices',f.voice);
+  assert.throws(()=>f.remove(),{status:409});f.store.remove('audios',row.id);
+  const shared={...f.voice,path:f.audio.path};f.store.put('voices',shared);assert.throws(()=>f.remove(),{status:409});f.store.put('voices',f.voice);
   const sharedLink=f.write('voices/shared-alias.wav');fs.unlinkSync(join(f.directory,sharedLink));fs.symlinkSync(join(f.directory,f.audio.path),join(f.directory,sharedLink));
-  f.store.put('voices',{...f.voice,path:sharedLink});assert.throws(()=>f.domain.mutate('project.delete',{id:f.project.id}),{status:409});f.store.put('voices',f.voice);
+  f.store.put('voices',{...f.voice,path:sharedLink});assert.throws(()=>f.remove(),{status:409});f.store.put('voices',f.voice);
   assert.deepEqual(f.snapshot(),before);assert.equal(fs.readFileSync(join(f.directory,f.voice.path),'utf8'),f.voice.path);assert.equal(fs.readFileSync(join(f.directory,'private-not-a-project-file'),'utf8'),'private-not-a-project-file');
 });
 
@@ -129,8 +149,8 @@ test('删除中断按数据库commit状态恢复或完成，清理失败仍保�
   const original=fs.rmSync;
   fs.rmSync=(path,options)=>{if(String(path).includes('.project-delete-')&&/\/0$/.test(String(path)))throw Object.assign(new Error('cleanup fixture failure'),{code:'EACCES'});return original(path,options);};syncBuiltinESMExports();
   let result;try{
-    result=f.domain.mutate('project.delete',{id:f.project.id});
-    assert.deepEqual(f.domain.mutate('project.delete',{id:f.project.id}),{id:f.project.id,deleted:true,alreadyDeleted:true,cleanupPending:true});
+    result=f.remove();
+    assert.deepEqual(f.remove(),{id:f.project.id,deleted:true,alreadyDeleted:true,cleanupPending:true});
   }finally{fs.rmSync=original;syncBuiltinESMExports();}
   assert.equal(result.deleted,true);assert.equal(result.cleanupPending,true);assert.equal(f.store.maybe('projects',f.project.id),null);assert.equal(fs.existsSync(join(f.directory,f.project.folder)),false);
   recoverProjectFolders(f.store);assert.equal(fs.readdirSync(f.directory).some(name=>name.startsWith('.project-delete-')),false);assert.equal(fs.readFileSync(join(f.directory,f.voice.path),'utf8'),f.voice.path);

@@ -7,6 +7,27 @@ const compile=file=>ts.transpileModule(readFileSync(new URL(file,import.meta.url
 const apiUrl='data:text/javascript;base64,'+Buffer.from(compile('../src/api.ts')).toString('base64');
 const source=compile('../src/autosave.ts').replace('"./api"',JSON.stringify(apiUrl));
 const fresh=()=>import('data:text/javascript;base64,'+Buffer.from(source+'\n// '+crypto.randomUUID()).toString('base64'));
+test('同ID换工作区不复用旧保存链、在途保存或已关闭编辑器屏障',async()=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'sessionStorage');let identity='/A',oldRelease;
+  Object.defineProperty(globalThis,'sessionStorage',{configurable:true,value:{getItem:()=>identity}});
+  try{
+    const {queueDraftSave,draftScopeRevision,runDraftSave,activeDraftSave,registerDraftSave,withSavedDrafts}=await fresh();
+    await queueDraftSave('chapter',1,['old'],async revision=>({revision:revision+1,changes:['old']}));
+    const old=runDraftSave('same',()=>new Promise(resolve=>oldRelease=resolve));await Promise.resolve();
+    registerDraftSave('same',{scope:'chapter',dependencies:['same'],dirty:()=>true,state:()=> 'local',freeze:()=>assert.fail('旧工作区不得冻结新页'),flush:()=>assert.fail('旧工作区不得从新页保存')})();
+    identity='/B';assert.equal(draftScopeRevision('chapter',1),1);assert.equal(activeDraftSave('same'),undefined);
+    let sent=0;await withSavedDrafts('chapter',undefined,async()=>sent++);assert.equal(sent,1);
+    const current=runDraftSave('same',async()=> 'B保存');assert.equal(await current,'B保存');oldRelease('A保存');assert.equal(await old,'A保存');
+    identity='/A';assert.equal(draftScopeRevision('chapter',1),2);
+  }finally{oldRelease?.();if(previous)Object.defineProperty(globalThis,'sessionStorage',previous);else delete globalThis.sessionStorage;}
+});
+test('两个保存屏障重叠时，先完成一个不会提前解冻仍在使用的编辑',async()=>{
+  const {registerDraftSave,withSavedDrafts}=await fresh(),changes=[];let first,second;
+  registerDraftSave('one',{scope:'chapter',dependencies:['segment'],dirty:()=>false,state:()=> 'saved',freeze:value=>changes.push(value),flush:async()=>{}});
+  const a=withSavedDrafts('chapter',undefined,()=>new Promise(resolve=>first=resolve));
+  const b=withSavedDrafts('chapter',undefined,()=>new Promise(resolve=>second=resolve));
+  first();await a;assert.equal(changes.at(-1),true);second();await b;assert.equal(changes.at(-1),false);
+});
 
 test('同章保存串行，只沿本页不相交依赖的确切回执推进；不能跨过外页修订',async()=>{
   const {queueDraftSave,draftScopeRevision}=await fresh();
@@ -60,6 +81,12 @@ test('保存丢响应查询同操作恢复；修订冲突保留具体状态，�
     assert.deepEqual(await saveAction('event.update',{id:'rebuilt'},'one',true),{id:'original-created',revision:1});
     assert.deepEqual(calls,[['/api/operations/one','GET']]);
   }finally{globalThis.fetch=fetchOriginal;}
+});
+
+test('HTTP500与无法读取的200回执均查询原保存操作，确认后不重复POST',async t=>{
+  const {saveAction}=await fresh();const calls=[];let unreadable=false;
+  t.mock.method(globalThis,'fetch',async(path,options)=>{calls.push([path,options?.method||'GET']);if(options)return unreadable?new Response('{lost',{status:200}):new Response(JSON.stringify({error:'服务中断',code:'operation-result-unconfirmed',retryClass:'check-existing-operation'}),{status:500});return new Response(JSON.stringify({outcome:'completed',result:{id:'created',revision:1}}));});
+  for(const kind of [false,true]){unreadable=kind;calls.length=0;assert.deepEqual(await saveAction('event.create',{},'stable'),{id:'created',revision:1});assert.deepEqual(calls,[['/api/operations','POST'],['/api/operations/stable','GET']]);}
 });
 
 test('新对象回执移交失败可查询原操作，不重复推进已确认写入链',async()=>{
@@ -131,7 +158,7 @@ test('真实未挂载判断保留同对象在途保存、未确认创建回执�
   const current={current:{options:{deferUnmounted:true},targetId:undefined}},pending={current:null},key='new-background';let release,sent=0,flushed=0;
   const waiting=new Promise(resolve=>release=resolve);
   try{
-    const defer=new Function('current','pending','key','activeDraftSave','pendingSaveOperation',compiled+'\nreturn callback;')(current,pending,key,activeDraftSave,pendingSaveOperation);
+    const defer=new Function('current','pending','key','activeDraftSave','pendingSaveOperation','workspaceIdentity',compiled+'\nreturn callback;')(current,pending,key,activeDraftSave,pendingSaveOperation,'');
     const unmount=registerDraftSave(key,{scope:'chapter:one',dependencies:['events:u'],dirty:()=>true,state:()=> 'local',freeze:()=>{},deferUnmounted:defer,flush:async()=>{flushed++;const active=activeDraftSave(key);if(active)return active;throw new Error('创建回执尚未确认');}});
     unmount();assert.equal(defer(),true);await withSavedDrafts('chapter:one',['events:u'],async()=>sent++);assert.equal(flushed,0);
 

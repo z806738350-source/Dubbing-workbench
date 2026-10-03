@@ -18,7 +18,7 @@ function fixture(){
   const calls={api:[],paid:[],chapters:[],plans:[],errors:[],notices:[],refresh:0};
   const waiting=new Map();
   const env={chapter:chapter(),chapterRef:{current:'chapter'},generationIntent:{current:0},generationPlan:{plan:plan(),ids:['one'],regenerate:true,retryUnknown:true,resumeRoute:true},grantId:'old-grant',state:{jobs:[]},
-    pendingPlay:{current:null},pendingPlaySnapshot:{current:null},audio:{current:{pause(){}}},
+    playIntent:{current:0},pendingPlay:{current:null},pendingPlaySnapshot:{current:null},audio:{current:{pause(){}}},
     withSavedDrafts:async(_scope,_dependencies,next)=>{const pending=waiting.get('save')?.shift();if(pending)await pending.promise;return next();},hasDraft:()=>false,unitHasDraft:()=>false,draftScopeRevision:(_scope,revision)=>revision,
     api:async(path,payload)=>{calls.api.push({path,payload});const pending=waiting.get(path)?.shift();if(pending)return pending.promise;return path.startsWith('/chapters/')?chapter(7):plan(payload.revision,payload.ids);},
     submitOperation:async(...args)=>{calls.paid.push(args);const pending=waiting.get('submit')?.shift();return pending?pending.promise:{outcome:'completed',jobIds:['mock-job']};},
@@ -26,7 +26,7 @@ function fixture(){
     setGenerationPlan:value=>{env.generationPlan=typeof value==='function'?value(env.generationPlan):value;calls.plans.push(env.generationPlan);},
     setChapter:value=>{env.chapter=value;calls.chapters.push(value);},setChapterId:value=>{env.chapterId=value;},
     setGrantId:value=>{env.grantId=value;},setError:value=>calls.errors.push(value),setNotice:value=>calls.notices.push(value),
-    setInspectorOpen(){},setVoiceTarget(){},setUnitPanelId(){},setUnitInitialMode(){},setPlayer(){},setNavOpen(){},
+    setDeleteTarget(){},setInspectorOpen(){},setVoiceTarget(){},setUnitPanelId(){},setUnitInitialMode(){},setPlayer(){},setNavOpen(){},
   };
   function render(){env.closeGeneration=project(declaration('closeGeneration'),env);env.generate=project(declaration('generate'),env);env.planIntent=project(declaration('planIntent'),env);return {generate:env.generate,recheck:project(callback('onRecheck'),env),close:project(callback('onClose'),env),grant:project(callback('onGrant'),env),pick:project(declaration('pickChapter'),env),submit:project(declaration('submitGeneration'),env)};}
   function defer(path){let resolve,reject;const pending={promise:new Promise((yes,no)=>{resolve=yes;reject=no;}),resolve:value=>resolve(value),reject:error=>reject(error)};waiting.set(path,[...(waiting.get(path)||[]),pending]);return pending;}

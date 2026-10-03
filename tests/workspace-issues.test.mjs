@@ -7,12 +7,13 @@ import ts from 'typescript';
 import { openStore, uid } from '../server/store.mjs';
 import { createDomain } from '../server/domain.mjs';
 import { compile } from '../server/templates.mjs';
+import { outstandingAttempts } from '../server/experience.mjs';
 
 const source = readFileSync(new URL('../src/WorkspaceExperience.tsx', import.meta.url), 'utf8');
 const component = source.slice(source.indexOf('export type WorkspaceIssue'), source.indexOf('export function ProjectOverview('));
 const runtime = `const React={createElement:(type,props,...children)=>({type,props:{...props,children}})}; const useState=value=>[value,()=>{}],Dialog='Dialog',Check='Check';\n`;
 const compiled = ts.transpileModule(runtime + component, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.React } }).outputText;
-const { chapterIssues, IssueCenter } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
+const { chapterIssues, chapterMemberState, configurationDecided, playbackIdentity, IssueCenter } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
 const nodes = node => !node || typeof node !== 'object' ? [] : [node, ...(node.props?.children || []).flat(Infinity).flatMap(nodes)];
 
 function setup(t) {
@@ -29,6 +30,9 @@ function setup(t) {
     const prepared = domain.enhancement.prepare({ kind: 'unit-generate', chapterId: chapter.id, revision: store.get('chapters', chapter.id).revision, unitId, mode, retryUnknown }, { model: 'seed-audio-1.0' });
     const job = { id: uid(), kind: 'unit-generate', status: 'running', ...prepared.job };
     const item = { id: uid(), jobId: job.id, ...prepared.attempts[0], status };
+    // The isolated fixture simulates the worker's explicit decision and dispatch.
+    if(retryUnknown)item.acknowledgedAttemptIds=outstandingAttempts(store,[item]).map(attempt=>attempt.id);
+    item.createdAt=new Date().toISOString();
     store.put('jobs', job, chapter.id); store.put('attempts', item, job.id);
     if (status === 'success') {
       const audio = { id: item.id, path: `audio/${item.id}.wav`, input: item.input, basis: item.basis, prompt: compile(item.input), model: item.input.model };
@@ -85,4 +89,28 @@ test('active group suppresses superseded member failures; pending group and late
   assert.equal(f.issues().filter(issue => issue.kind === 'request').length, 0);
   f.attempt(group.id, 'dry', 'failed');
   const issues = f.issues().filter(issue => issue.kind === 'request'); assert.equal(issues.length, 1); assert.equal(issues[0].unitId, group.id); assert.equal(issues[0].mode, 'dry');
+});
+
+test('actual unit and variant projection agrees with the issue scope and expands all group members',t=>{
+  const f=setup(t),group=f.edit('unit.create',{ids:f.ids});f.attempt(group.id);f.attempt(group.id,'scene','unknown');
+  const chapter=f.snapshot(),issue=f.issues().find(issue=>issue.kind==='request');
+  assert.deepEqual(chapter.segments.filter(segment=>chapterMemberState(chapter,segment).requestIssues.length).map(segment=>segment.id),issue.ids);
+  assert.equal(issue.scope.unitId,group.id);assert.equal(issue.scope.mode,'scene');assert.ok(issue.code);assert.ok(issue.resolution);
+});
+test('true confirmation flags cannot hide a decision for the wrong voice source',t=>{
+  const f=setup(t),segment=f.store.get('segments',f.ids[0]);segment.decisions={...segment.decisions,identity:{source:'human',state:'accepted',at:new Date().toISOString(),values:[segment.roleId,segment.voiceId,segment.voiceSource]}};segment.voiceSource='override';
+  assert.equal(segment.roleConfirmed,true);assert.equal(segment.identityConfirmed,true);f.store.put('segments',segment,f.chapter.id);
+  const actual=f.snapshot().segments.find(value=>value.id===segment.id);assert.equal(configurationDecided(actual),false);
+  assert.ok(f.issues().some(issue=>issue.kind==='identity'&&issue.ids.includes(segment.id)));
+});
+test('retired reference is a next-generation warning while existing matched audio remains ready',t=>{
+  const f=setup(t),voice=f.store.all('voices')[0];voice.state='retired';f.store.put('voices',voice);
+  const warnings=f.issues().filter(issue=>issue.code==='reference_unavailable');assert.equal(warnings.length,1);assert.equal(warnings[0].kind,'advice');
+  assert.match(warnings[0].detail,/仍可试听和导出/);assert.ok(f.snapshot().playbackItems.every(item=>item.validity==='matched'));
+});
+test('harmless review labels preserve playback identity; actual file/config changes invalidate it',()=>{
+  const one=[{id:'one',audioId:'audio',basis:{text:'正文'},validity:'matched',review:'pending'}];
+  assert.equal(playbackIdentity(one),playbackIdentity([{...one[0],review:'passed'}]));
+  assert.notEqual(playbackIdentity(one),playbackIdentity([{...one[0],audioId:'other'}]));
+  assert.notEqual(playbackIdentity(one),playbackIdentity([{...one[0],basis:{text:'改字'}}]));
 });

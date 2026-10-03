@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { Select } from "./components";
 import { draftScopeRevision, withSavedDrafts } from "./autosave";
@@ -13,6 +13,7 @@ export default function SceneSuggestions({ unit, chapter, contextRevision, model
   const records = (chapter.suggestions as Suggestion[]).filter(record => record.kind === "scene" && record.unitId === unit.id);
   const [selected, setSelected] = useState<string[]>([]), [view, setView] = useState("");
   const [grantId, setGrantId] = useState<string | null>(null), [pending, setPending] = useState(false), [error, setError] = useState("");
+  const live=useRef(true);useEffect(()=>()=>{live.current=false;},[]);
   const record = records.find(record => record.id === view) || records.at(-1);
   useEffect(() => setSelected([]), [record?.id, record?.draftVersion]);
   const current = record?.status === "ready" && record.revision === chapter.revision && record.contextRevision === contextRevision && record.unitRevision === unit.revision;
@@ -22,13 +23,14 @@ export default function SceneSuggestions({ unit, chapter, contextRevision, model
     try {
       await withSavedDrafts("chapter:" + chapter.id, ["unit:" + unit.id + "/scene", "events:" + unit.id, ...unit.members.map(id => "segment:" + id)], async () => {
         const base = savedBase ? await savedBase() : { revision: draftScopeRevision("chapter:" + chapter.id, chapter.revision), entityRevision: unit.revision };
+        if(!live.current)return;
         if (base.revision !== draftScopeRevision("chapter:" + chapter.id, chapter.revision)) throw new Error("声音背景在准备期间发生了变化，请核对后再分析。");
         const result = await submitOperation("scene-analysis:" + unit.id, { kind: "prepareChapter", analysisKind: "scene", sceneEnabled: true, chapterId: chapter.id, revision: base.revision, unitId: unit.id, unitRevision: base.entityRevision, model, grantId });
         if (result.error) throw new Error(result.error);
         await refresh();
       });
-    } catch (failure) { setError((failure as Error).message); }
-    finally { setPending(false); }
+    } catch (failure) { if(live.current)setError((failure as Error).message); }
+    finally { if(live.current)setPending(false); }
   };
   return <details className="task-panel-section"><summary>让 AI 提供声音建议</summary>
     <p className="hint">只分析这段台词的声音背景，不改台词、不自动生成声音。选择需要的建议后，一次加入当前场景。</p>
@@ -45,11 +47,11 @@ export default function SceneSuggestions({ unit, chapter, contextRevision, model
       </section>)}
       {current && <button className="button secondary" disabled={!selected.length || !enabled || pending} onClick={() => void (async () => {
         setPending(true); setError("");
-        try { await api("/analysis/apply", { id: record.id, draftVersion: record.draftVersion, revision: chapter.revision, unitRevision: unit.revision, selected }); setSelected([]); await refresh(); }
-        catch (failure) { setError((failure as Error).message); }
-        finally { setPending(false); }
+        try { await api("/analysis/apply", { id: record.id, draftVersion: record.draftVersion, revision: chapter.revision, unitRevision: unit.revision, selected }); if(live.current)setSelected([]); await refresh(); }
+        catch (failure) { if(live.current)setError((failure as Error).message); }
+        finally { if(live.current)setPending(false); }
       })()}>加入选中的 {selected.length} 个声音</button>}
     </>}
-    {!!records.length && <details><summary>历史建议与模型</summary><p className="hint">文本模型：{model}</p><Select label="历史声音建议" value={record!.id} options={records.map(record => ({ value: record.id, label: (record.createdAt ? new Date(record.createdAt).toLocaleString("zh-CN") : "历史建议") + " · " + record.model }))} onChange={id => { setView(id); setSelected([]); }} /></details>}
+    {!!records.length && <details><summary>历史建议与模型</summary><p className="hint">文本模型：{model}</p><Select label="历史声音建议" value={record!.id} disabled={pending} options={records.map(record => ({ value: record.id, label: (record.createdAt ? new Date(record.createdAt).toLocaleString("zh-CN") : "历史建议") + " · " + record.model }))} onChange={id => { setView(id); setSelected([]); }} /></details>}
   </details>;
 }

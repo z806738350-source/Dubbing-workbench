@@ -6,7 +6,7 @@ import { compile, templateOf, templateCatalog, listTemplates, listUnitTemplates 
 import { createProjectFolder, renameProjectFolder, stageProjectDeletion, recoverProjectDeletions } from './workspace.mjs';
 export { compile } from "./templates.mjs";
 import { createEnhancement, defaultFeatures } from "./enhancement.mjs";
-import { configurationDecided, humanChanges, policyOf } from './experience.mjs';
+import { configurationDecided, decide, humanChanges, inheritStructure, outstandingAttempts, policyOf } from './experience.mjs';
 import { shortRanges } from './semantic.mjs';
 
 export const defaultConfig = templateOf("dry-v1").defaults;
@@ -206,6 +206,16 @@ export function createDomain(store) {
     p.contextRevision++;
     store.put("projects", p);
   }
+  function deletionPlan({id}) {
+    return store.transaction(()=>{
+      const project=store.get('projects',id),chapters=store.all('chapters',id),related=table=>chapters.flatMap(c=>store.all(table,c.id));
+      const jobs=related('jobs'),attempts=jobs.flatMap(j=>store.all('attempts',j.id)),products=Object.fromEntries(['audios','masters','exports'].map(table=>[table,related(table)]));
+      const snapshot=(rows,fields)=>rows.map(row=>Object.fromEntries(['id',...fields].map(field=>[field,row[field]??null]))).sort((a,b)=>a.id.localeCompare(b.id));
+      const scope={project:{id,revision:project.revision??1,contextRevision:project.contextRevision??0},chapters:snapshot(chapters,['revision','arrangement']),products:Object.fromEntries(Object.entries(products).map(([table,rows])=>[table,snapshot(rows,['path'])])),jobs:snapshot(jobs,['status','stop']),attempts:snapshot(attempts,['status','path']),suggestions:snapshot(related('suggestions'),['draftVersion','status'])};
+      const audioIds=new Set(products.audios.map(a=>a.id)),sharedVoiceIds=store.all('voices').filter(v=>audioIds.has(v.sampleAudioId)||audioIds.has(v.sourceAudioId)).map(v=>v.id);
+      return {projectId:id,name:project.name,scope,chapters:chapters.map(c=>({id:c.id,title:c.title,revision:c.revision,arrangement:c.arrangement})),counts:{chapters:chapters.length,...Object.fromEntries(Object.entries(products).map(([table,rows])=>[table,rows.length]))},sharedVoiceIds,blockers:sharedVoiceIds.length?[{code:'shared-voice-reference',message:'共用音色仍引用本项目音频，请先处理引用后再删除。'}]:[]};
+    });
+  }
   function deleteProject(p) {
     text(p.id, '项目标识', 100);
     let files;
@@ -213,6 +223,7 @@ export function createDomain(store) {
     try { result = store.transaction(() => {
       const project = store.maybe('projects', p.id);
       if (!project) return {id:p.id,deleted:true,alreadyDeleted:true};
+      if (!p.scope || !same(p.scope,deletionPlan({id:p.id}).scope)) fail('项目的章节、产物或任务范围已变化，请重新查看删除范围；未删除任何资料',409);
       if (p.entityRevision !== undefined) checkEntityRevision(project, p.entityRevision);
       const chapters = store.all('chapters', project.id), chapterIds = new Set(chapters.map(c => c.id));
       const related = table => chapters.flatMap(c => store.all(table, c.id));
@@ -503,6 +514,12 @@ export function createDomain(store) {
         }
         if (action === "chapter.create") {
           store.get("projects", p.projectId);
+          const operationKey = p.operationId === undefined ? null : `ux-chapter-create:${text(p.operationId,'操作标识',100)}`;
+          const receipt = operationKey && store.maybe('settings',operationKey);
+          if (receipt) {
+            if (!same(receipt.request,p)) fail('同一操作标识的内容不同',409);
+            return store.get('chapters',receipt.chapterId);
+          }
           const source =
             typeof p.source === "string"
               ? p.source.replace(/\r\n?/g, "\n")
@@ -549,6 +566,7 @@ export function createDomain(store) {
                 c.id,
               ),
             );
+          if (operationKey) store.put('settings',{id:operationKey,projectId:p.projectId,chapterId:c.id,request:JSON.parse(JSON.stringify(p)),at:new Date().toISOString()});
           return c;
         }
         if (action === "role.create") {
@@ -915,7 +933,7 @@ export function createDomain(store) {
           let offset = 0;
           const children = parts.map((t, i) => {
             const splitOffset = offset; offset += Array.from(t).length;
-            return ({
+            return inheritStructure({
             ...s,
             id: uid(),
             text: t,
@@ -938,7 +956,7 @@ export function createDomain(store) {
             approved: null,
             review: null,
             latest: "none",
-          }); });
+          },[s],action,p.operationId); });
           children.forEach((v) => {
             validate(v, c);
             store.put("segments", v, c.id);
@@ -973,7 +991,7 @@ export function createDomain(store) {
             fail("音色或配置不同，请明确选择合并后的设置", 409);
           if ((s.performance || n.performance) && typeof p.performance !== "string") fail("请确认合并后的表演指导");
           const chosen = p.choice === "second" ? n : s;
-          const merged = {
+          const merged = inheritStructure({
             ...chosen,
             id: uid(),
             text: s.text + n.text,
@@ -1003,7 +1021,7 @@ export function createDomain(store) {
             approved: null,
             review: null,
             latest: "none",
-          };
+          },[s,n],action,p.operationId);
           validate(merged, c);
           s.retired = n.retired = true;
           store.put("segments", s, c.id);
@@ -1079,8 +1097,50 @@ export function createDomain(store) {
   api.textModel = () => textModel(store);
   api.roleVoice = roleVoice;
   api.configurationDecided = configurationDecided;
+  api.deletionPlan = deletionPlan;
+  api.structuralRepairPlan = ({chapterId}) => {
+    const c=store.get('chapters',chapterId), rows=list(c.id), targets=rows.filter(s=>!configurationDecided(s));
+    const proof=s=>s && Object.fromEntries(['id','chapterId','retired','source','text','roleId','type','voiceId','voiceSource','config','template','model','roleConfirmed','identityConfirmed','decisions'].map(field=>[field,s[field]??null]));
+    const scope=targets.map(s=>({target:proof(s),parents:(s.source?.parentIds || []).map(id=>proof(store.maybe('segments',id)))}));
+    return {chapterId:c.id,revision:c.revision,dryRun:true,scope,items:targets.map(s=>{
+      const parentIds=s.source?.parentIds || [], parents=parentIds.map(id=>store.maybe('segments',id)), siblings=rows.filter(r=>same(r.source?.parentIds,parentIds));
+      const proven=parentIds.length>0 && Number.isInteger(s.source.parentRevision) && s.source.parentRevision<=c.revision && parents.every(p=>p?.retired && p.chapterId===c.id && p.roleId===s.roleId && p.type===s.type) && (parents.length===1 ? siblings.map(r=>r.text).join('')===parents[0].text : s.text===parents.map(p=>p.text).join('')) && parents.some(p=>same([s.voiceId,s.config,s.template,inputOf(s).model],[p.voiceId,p.config,p.template,inputOf(p).model]));
+      const next=JSON.parse(JSON.stringify(s));
+      const fields=proven ? ['role','identity'].filter(field=>s.decisions?.[field] && parents.some(p=>same(p.decisions?.[field],s.decisions[field])) && !same(s.decisions[field].values,field==='role'?[s.roleId,s.type]:[s.roleId,s.voiceId,s.voiceSource]) && parents.every(configurationDecided)) : [];
+      for(const field of fields) decide(next,field,'structural',{parentIds:s.source.parentIds,parentRevision:s.source.parentRevision,action:'repair',previousDecision:s.decisions[field]});
+      return {id:s.id,parentIds,eligible:fields.length>0 && configurationDecided(next),fields,before:s.decisions || null,proposed:fields.length?next.decisions:null,reason:fields.length?'父记录与最终结构可核对，旧决定值未转换':'缺少可证明来源或存在待确认父项，请人工核对'};
+    })};
+  };
+  api.actionReadiness = (u, mode=u.mode, st=enhancement.status(u,mode), history) => {
+    const scope={unitId:u.id,memberIds:u.members,mode}, issue=(code,message,resolution)=>({code,scope,message,resolution});
+    const members=u.members.map(id=>store.maybe('segments',id)), identity=!members.length || members.some(s=>!s || s.retired || s.excluded || !configurationDecided(s)), outstandingAttemptIds=outstandingAttempts(store,[{targetKind:'unit',targetId:u.id,mode}],history).map(a=>a.id);
+    const generate=[], play=[], exported=[], warnings=[];
+    if(identity) { const i=issue('configuration-undecided','角色或声音决定与当前设置不一致','confirm-configuration');generate.push(i);exported.push(i); }
+    if(members.some(s=>{const v=s?.voiceId && store.maybe('voices',s.voiceId);return !v || !['active','archived'].includes(v.state) || v.deletePending || !v.path || !existsSync(join(store.directory,v.path));})) generate.push(issue('reference-unavailable','参考声音已停用或缺失','choose-reference'));
+    if(st.promptIssues?.length || Array.from(st.prompt || '').length>3000) generate.push(issue('prompt-invalid',st.promptIssues?.join('；') || '完整提示超过3000字符','edit-settings'));
+    const relatedAttemptIds=outstandingAttempts(store,[{targetKind:'unit',targetId:u.id,mode}],history,true).map(a=>a.id);
+    if(relatedAttemptIds.length) generate.push({...issue('request-unknown','相关目标的上次请求结果不明，继续生成需要一次明确决定','decide-unknown'),attemptIds:relatedAttemptIds});
+    if(outstandingAttemptIds.length) warnings.push({...issue('request-unknown','上次请求结果不明，现有声音仍可使用','decide-unknown'),attemptIds:outstandingAttemptIds});
+    if(['missing','broken'].includes(st.validity)) play.push(issue('audio-'+st.validity,st.validity==='missing'?'没有可试听音频':'原音频损坏或缺失','restore-audio'));
+    if(st.validity!=='matched') exported.push(issue('audio-'+st.validity,'当前成品没有匹配的完整音频','restore-or-generate'));
+    if(st.review==='rework') exported.push(issue('audio-rework','当前声音已标记返工','redo-rejected'));
+    else if(st.review!=='passed') exported.push(issue('audio-unreviewed','当前声音尚未检查通过','review-audio'));
+    return {outstandingAttemptIds,generate:{allowed:!generate.length,blockers:generate,warnings:[]},play:{allowed:!play.length,blockers:play,warnings},export:{allowed:!exported.length,blockers:exported,warnings}};
+  };
   const originalMutate = api.mutate, originalSnapshot = api.snapshot, originalChapter = api.chapter;
   api.mutate = (action, p) => action === 'project.delete' ? deleteProject(p) : store.transaction(() => {
+    if (action === 'chapter.repair-structural-decisions') {
+      const c=editable(p.chapterId,p.revision),plan=api.structuralRepairPlan({chapterId:c.id});
+      if (!p.scope || !same(p.scope,plan.scope)) fail('结构修复预览范围已变化，请重新核对；未修改任何决定',409);
+      if (!Array.isArray(p.ids) || !p.ids.length || new Set(p.ids).size!==p.ids.length || p.ids.some(id=>!plan.items.some(item=>item.id===id && item.eligible))) fail('仅可修复本次预览中有可证明来源的目标；未知来源需人工核对',409);
+      const changeId=uid(),items=p.ids.map(id=>{const s=store.get('segments',id),decisions=plan.items.find(item=>item.id===id).proposed;return {id,before:{decisions:s.decisions},after:{decisions}};});
+      const change={id:`ux-change:${changeId}`,changeId,kind:'structural-repair',projectId:c.projectId,chapterId:c.id,revision:c.revision,items,scope:p.scope,at:new Date().toISOString()};
+      store.put('settings',change);
+      for (const item of items) store.put('segments',{...store.get('segments',item.id),...item.after},c.id);
+      touch(c,true,false);
+      return {changeId,chapterId:c.id,chapterRevision:c.revision,repairedIds:p.ids};
+    }
+    if (['segment.split','segment.merge'].includes(action)) p={...p,operationId:p.operationId || uid()};
     const before = p.chapterId && (/^segment\./.test(action) || action === 'role.update') ? api.list(p.chapterId) : [];
     const result = /^(voice-session|voice-candidate|unit|event)\./.test(action) ? enhancement.mutate(action,p) : originalMutate(action,p);
     for (const previous of before) {
@@ -1104,10 +1164,15 @@ export function createDomain(store) {
   };
   api.chapter = id => {
     enhancement.syncLegacy();
-    const result = originalChapter(id), { rows, issues: arrangementIssues } = enhancement.inspectArrangement(id), reviewItems = rows.map(r => ({ id: r.s.id, audioId: r.a?.id || null, basis: r.basis }));
+    const result = originalChapter(id), { rows, issues: arrangementIssues } = enhancement.inspectArrangement(id,result), reviewItems = rows.map(r => ({ id: r.s.id, audioId: r.a?.id || null, basis: r.basis }));
     const exportReady = !arrangementIssues.length && rows.length > 0 && result.coverage.valid && result.segments.filter(s => !s.excluded).every(configurationDecided) && rows.every(r => r.validity === 'matched' && r.review === 'passed');
-    const units = store.all('units', id).filter(u => u.state !== 'retired').map(enhancement.view);
-    return { ...result, arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems: rows.map(r => ({ id: r.s.id, unitId: r.s.id, members: r.s.members, mode: r.s.mode, audioId: r.a?.id || null, basis: r.basis, validity: r.validity, review: r.review })), segments: result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, ...(group ? {groupId:group.id} : {}) }; }), exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && same(e.confirmation?.reviewItems, reviewItems) })) };
+    const history=store.all('attempts');
+    const units = store.all('units', id).filter(u => u.state !== 'retired').map(u=>{
+      const v=enhancement.view(u,result), readiness=api.actionReadiness(u,u.mode,v.status,history);
+      return {...v,outstandingAttemptIds:readiness.outstandingAttemptIds,readiness,variants:Object.fromEntries(Object.entries(v.variants).map(([mode,variant])=>[mode,{...variant,outstandingAttemptIds:outstandingAttempts(store,[{targetKind:'unit',targetId:u.id,mode}],history).map(a=>a.id)}]))};
+    });
+    const playbackItems=rows.map(r=>{const u=units.find(u=>u.id===r.s.id);return {id:r.s.id,unitId:r.s.id,members:r.s.members,mode:r.s.mode,audioId:r.a?.id || null,basis:r.basis,validity:r.validity,review:r.review,latest:u?.outstandingAttemptIds.length?'unknown':u?.variants[r.s.mode].latest,outstandingAttemptIds:u?.outstandingAttemptIds || [],readiness:u?.readiness};});
+    return { ...result, arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems, segments: result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, configurationDecided:configurationDecided(s), ...(group ? {groupId:group.id} : {}) }; }), exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && same(e.confirmation?.reviewItems, reviewItems) })) };
   };
   return api;
 }

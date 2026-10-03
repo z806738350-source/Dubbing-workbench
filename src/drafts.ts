@@ -1,11 +1,20 @@
 const storage = localStorage, session = sessionStorage, locks = navigator.locks;
 let owner = "";
+let workspace = "";
+export function bindDraftWorkspace(identity:string){
+  if(workspace===identity)return;
+  try{session.setItem('workbench-workspace',identity);workspace=identity;}
+  catch{throw Object.assign(new Error('浏览器未能可靠保存工作区归属。原暂存仍保留；请恢复浏览器存储后继续。'),{storageFailure:true});}
+}
+export const draftWorkspace = () => workspace;
 const keys = () => Array.from({length:storage.length}, (_, i) => storage.key(i)).filter((k): k is string => !!k?.startsWith("draft-"));
-const keyOf = (id: string) => `draft-${id}:${owner}`;
-const commandOf = (id:string,page=owner) => `pending-save:${page}:${id}`;
+const namespace = (identity=workspace) => identity ? `workspace/${encodeURIComponent(identity)}/` : '';
+const keyOf = (id: string,identity=workspace) => `draft-${namespace(identity)}${id}:${owner}`;
+const commandOf = (id:string,page=owner,identity=workspace) => `pending-save:${namespace(identity)}${page}:${id}`;
 const ownerSuffix = (key:string) => key.match(/:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
-const idOf = (key:string) => {const suffix=ownerSuffix(key);return key.slice(6,suffix ? -suffix[0].length : undefined);};
-const matches = (key: string, id: string) => idOf(key) === id;
+const workspaceOf = (key:string) => key.startsWith('draft-workspace/') ? decodeURIComponent(key.slice(16).split('/')[0]) : undefined;
+const idOf = (key:string) => {const suffix=ownerSuffix(key),raw=key.slice(6,suffix ? -suffix[0].length : undefined);return raw.startsWith('workspace/') ? raw.slice(raw.indexOf('/',10)+1) : raw;};
+const matches = (key: string, id: string) => idOf(key) === id && (workspaceOf(key)||'') === workspace;
 
 export type DraftRecord<T> = {
   key: string;
@@ -13,6 +22,8 @@ export type DraftRecord<T> = {
   data: {draft:T; revision:number};
   status: "current" | "active" | "orphan";
   error?: string;
+  workspaceIdentity?: string;
+  compatible?: boolean;
 };
 
 export async function initDrafts() {
@@ -32,8 +43,8 @@ export async function initDrafts() {
     if (previous && previous !== owner) {
       for (const key of keys().filter(k => k.endsWith(":" + previous))) {
         storage.setItem(key.slice(0, -previous.length) + owner, storage.getItem(key)!);
-        const id=idOf(key),command=storage.getItem(commandOf(id,previous));
-        if(command !== null)storage.setItem(commandOf(id),command);
+        const id=idOf(key),identity=workspaceOf(key)||'',command=storage.getItem(commandOf(id,previous,identity));
+        if(command !== null)storage.setItem(commandOf(id,owner,identity),command);
       }
     }
     session.setItem("draft-owner", owner);
@@ -41,14 +52,14 @@ export async function initDrafts() {
   }
 }
 
-export function readDraft<T>(id: string): {draft:T; revision:number} | null {
-  let raw = storage.getItem(keyOf(id));
-  if (raw === null) {
+export function readDraft<T>(id: string,identity=workspace): {draft:T; revision:number} | null {
+  let raw = storage.getItem(keyOf(id,identity));
+  if (raw === null && !identity) {
     const legacy = "draft-" + id;
     raw = storage.getItem(legacy);
     if (raw !== null) {
       const parsed = JSON.parse(raw);
-      storage.setItem(keyOf(id), raw);
+      storage.setItem(keyOf(id,identity), raw);
       if (storage.getItem(legacy) === raw) storage.removeItem(legacy);
       return parsed;
     }
@@ -56,30 +67,30 @@ export function readDraft<T>(id: string): {draft:T; revision:number} | null {
   return raw === null ? null : JSON.parse(raw);
 }
 
-export function writeDraft(id: string, draft: unknown, revision: number) {
-  storage.setItem(keyOf(id), JSON.stringify({draft, revision}));
+export function writeDraft(id: string, draft: unknown, revision: number,identity=workspace) {
+  storage.setItem(keyOf(id,identity), JSON.stringify({draft, revision}));
 }
 
-export function clearDraft(id: string, expected?: string, abandonSave = false) {
-  if (expected !== undefined && storage.getItem(keyOf(id)) !== expected) return false;
-  storage.removeItem(keyOf(id));
-  if(abandonSave){storage.removeItem(commandOf(id));if(typeof window !== "undefined")window.dispatchEvent(new CustomEvent("workbench-draft-discarded",{detail:{id}}));}
+export function clearDraft(id: string, expected?: string, abandonSave = false,identity=workspace) {
+  if (expected !== undefined && storage.getItem(keyOf(id,identity)) !== expected) return false;
+  storage.removeItem(keyOf(id,identity));
+  if(abandonSave){storage.removeItem(commandOf(id,owner,identity));if(typeof window !== "undefined")window.dispatchEvent(new CustomEvent("workbench-draft-discarded",{detail:{id,workspaceIdentity:identity}}));}
   return true;
 }
 
-export function finishDraftSave<T>(id: string, submitted: string, savedRevision: number, sentRevision?: number): {draft:T; revision:number} | null {
+export function finishDraftSave<T>(id: string, submitted: string, savedRevision: number, sentRevision?: number,identity=workspace): {draft:T; revision:number} | null {
   if (!Number.isSafeInteger(savedRevision) || savedRevision < 1) throw new Error("保存结果缺少有效版本，草稿仍保留，请核对最新资料");
   const base = JSON.parse(submitted).revision;
   // A same-page coordinator may have advanced this base across proven unrelated writes.
   const expected = sentRevision ?? base;
   if (!Number.isSafeInteger(base) || !Number.isSafeInteger(expected) || expected < base || savedRevision !== expected + 1) throw new Error("保存版本与本次提交不一致，草稿仍保留，请核对最新资料");
-  if (clearDraft(id, submitted)) return null;
-  const raw = storage.getItem(keyOf(id));
+  if (clearDraft(id, submitted,false,identity)) return null;
+  const raw = storage.getItem(keyOf(id,identity));
   if (raw === null) return null;
   const remaining = JSON.parse(raw);
   if (remaining.revision === base) {
     remaining.revision = savedRevision;
-    storage.setItem(keyOf(id), JSON.stringify(remaining));
+    storage.setItem(keyOf(id,identity), JSON.stringify(remaining));
   }
   return remaining;
 }
@@ -97,12 +108,13 @@ export async function listAllDrafts(): Promise<{id:string;entry:DraftRecord<unkn
     let data,error;
     try {data=JSON.parse(raw);}catch {data={draft:raw,revision:-1};error="这份暂存无法解析，原内容仍保留。";}
     const status:DraftRecord<unknown>["status"]=key === keyOf(id) ? "current" : suffix && held.has("workbench-drafts-" + suffix[1]) ? "active" : "orphan";
-    return [{id,entry:{key,raw,data,status,...(error ? {error} : {})}}];
+    const workspaceIdentity=workspaceOf(key),compatible=(workspaceIdentity||'')===workspace;
+    return [{id,entry:{key,raw,data,status,workspaceIdentity,compatible,...(error ? {error} : {})}}];
   });
 }
 
-async function accessOrphan<T>(id: string, entry: {key:string; raw:string}, apply: () => T): Promise<T> {
-  if (!matches(entry.key, id) || entry.key === keyOf(id)) throw new Error("只能处理本片段的其他页面遗留草稿");
+async function accessOrphan<T>(id: string, entry: {key:string; raw:string}, apply: () => T,discardOnly=false): Promise<T> {
+  if (idOf(entry.key)!==id || !discardOnly&&!matches(entry.key, id) || entry.key === keyOf(id)) throw new Error("只能处理本片段的其他页面遗留草稿");
   const source = ownerSuffix(entry.key)?.[1] || `legacy:${id}`;
   return locks.request("workbench-drafts-" + source, {ifAvailable:true}, lock => {
     if (!lock) throw new Error("该草稿页面仍在使用，请在原页面保存或放弃");
@@ -127,13 +139,13 @@ export function recoverDraft<T>(id: string, entry: {key:string; raw:string}): Pr
     }
     storage.removeItem(entry.key);
     if(sourceCommand && command !== null && storage.getItem(sourceCommand) === command)storage.removeItem(sourceCommand);
-    if(typeof window !== "undefined")window.dispatchEvent(new CustomEvent("workbench-draft-restored",{detail:{id,data}}));
+    if(typeof window !== "undefined")window.dispatchEvent(new CustomEvent("workbench-draft-restored",{detail:{id,data,workspaceIdentity:workspace}}));
     return data;
   });
 }
 
 export function discardDraft(id: string, entry: {key:string; raw:string}): Promise<void> {
-  return accessOrphan(id, entry, () => {storage.removeItem(entry.key);const source=ownerSuffix(entry.key)?.[1];if(source)storage.removeItem(commandOf(id,source));});
+  return accessOrphan(id, entry, () => {storage.removeItem(entry.key);const source=ownerSuffix(entry.key)?.[1];if(source)storage.removeItem(commandOf(id,source,workspaceOf(entry.key)||''));},true);
 }
 
 export function hasDraft(id: string) {

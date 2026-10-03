@@ -183,3 +183,142 @@ test('OP05 逐项旧项目明确用声也形成继承资格；确认说话人不
   d.mutate('segment.confirm',{chapterId:c.id,revision:rev(),ids:[s.id],roleOnly:true});assert.equal(store.get('segments',s.id).roleConfirmed,true);assert.equal(store.get('segments',s.id).identityConfirmed,false);
   const op=await e.run({operationId:uid(),kind:'useVoice',scope:'chapter',chapterId:c.id,revision:rev(),roleId:role.id,entityRevision:store.get('roles',role.id).revision,voiceId:v.id,apply:true});assert.equal(op.outcome,'completed');assert.ok(configurationDecided(store.get('segments',s.id)));assert.equal(store.get('segments',s.id).decisions.identity.source,'inherited');
 });
+
+test('F07 同次章节创建丢回执后重发返回原章，同ID异载荷拒绝',t=>{
+  const {d,p,store}=setup(t),payload={operationId:uid(),projectId:p.id,title:'稳定导入',source:'自拟原文。',segment:true};
+  const first=d.mutate('chapter.create',payload),second=d.mutate('chapter.create',payload);
+  assert.equal(second.id,first.id);assert.equal(store.all('chapters',p.id).length,2);
+  assert.throws(()=>d.mutate('chapter.create',{...payload,title:'不同载荷'}),/同一操作/);
+  assert.notEqual(d.mutate('chapter.create',{...payload,operationId:uid()}).id,first.id);
+});
+
+test('F01 默认和覆盖同音色合并重建最终决定并保存双方人工保护',t=>{
+  for(const choice of ['first','second']) {
+    const {d,c,rev,v}=setup(t,true),[first,second]=d.list(c.id);
+    d.mutate('segment.confirm',{chapterId:c.id,revision:rev(),ids:[first.id,second.id],identityChosen:true});
+    d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:second.id,voiceId:v.id,performance:'低声',identityChosen:true});
+    const merged=d.mutate('segment.merge',{chapterId:c.id,revision:rev(),id:first.id,choice,performance:'自然'});
+    assert.equal(merged.voiceSource,'override');assert.ok(configurationDecided(merged));
+    assert.ok(merged.protectedFields.includes('voiceSource'));assert.ok(merged.protectedFields.includes('performance'));
+    assert.equal(merged.decisions.identity.source,'structural');assert.deepEqual(merged.decisions.identity.parentIds,[first.id,second.id]);
+    assert.equal(merged.current,null);assert.equal(merged.review,null);
+  }
+});
+
+test('F02 matched返工进入所选生成计划，标返工零请求且普通好结果复用',async t=>{
+  const {d,e,w,c,rev,grant,store}=setup(t,true),ids=d.list(c.id).map(s=>s.id),g=grant();let calls=0;
+  t.mock.method(globalThis,'fetch',async()=>{calls++;return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
+  await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),grantId:g.grantId,ids});await w.tick();
+  const first=store.get('units',ids[0]);d.mutate('unit.review',{chapterId:c.id,revision:rev(),unitId:first.id,entityRevision:first.revision,audioId:first.variants.dry.current,basis:d.enhancement.basis(first,'dry'),state:'rework'});
+  assert.equal(calls,2);
+  const plan=e.plan({chapterId:c.id,revision:rev(),ids});assert.equal(plan.audioRequests,1);assert.deepEqual(plan.unitIds,[first.id]);assert.equal(plan.units[0].rejected,true);assert.equal(plan.units[1].reuse,true);
+  await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),grantId:g.grantId,ids});await w.tick();assert.equal(calls,3);
+});
+
+test('F03 拆分双子计划按集合绑定同一父unknown并可直接提交',async t=>{
+  const {d,e,w,c,rev,grant,store}=setup(t,true),first=d.list(c.id)[0],g=grant();
+  const fetchMock=t.mock.method(globalThis,'fetch',async()=>{throw Error('unknown parent');});
+  const initial=await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),grantId:g.grantId,ids:[first.id]});await w.tick();
+  const unknown=store.all('attempts',initial.jobIds[0])[0];assert.equal(unknown.status,'unknown');
+  const ids=d.mutate('segment.split',{chapterId:c.id,revision:rev(),id:first.id,offset:1}).map(s=>s.id),plan=e.plan({chapterId:c.id,revision:rev(),ids});
+  assert.deepEqual(plan.outstandingAttemptIds,[unknown.id]);assert.equal(plan.audioRequests,2);
+  fetchMock.mock.mockImplementation(async()=>new Response(wav(),{headers:{'Content-Type':'audio/wav'}}));
+  const next=await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),grantId:g.grantId,ids,retryUnknown:true,acknowledgedAttemptIds:plan.outstandingAttemptIds});
+  assert.equal(next.error,undefined);await w.tick();assert.equal(store.get('jobs',next.jobIds[0]).status,'success');
+});
+
+test('F01 未确认父项不提权；拆分决定按实际表演重建并保留操作来源',t=>{
+  const {d,c,rev,store}=setup(t,true),[first,second]=d.list(c.id);
+  d.mutate('segment.confirm',{chapterId:c.id,revision:rev(),ids:[first.id,second.id],identityChosen:true});
+  d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:second.id,identityConfirmed:false});
+  const merged=d.mutate('segment.merge',{chapterId:c.id,revision:rev(),id:first.id,performance:'低声再转自然'});
+  assert.equal(configurationDecided(merged),false);assert.equal(merged.identityConfirmed,false);
+  d.mutate('segment.confirm',{chapterId:c.id,revision:rev(),ids:[merged.id],identityChosen:true});
+  const operationId=uid(),children=d.mutate('segment.split',{operationId,chapterId:c.id,revision:rev(),id:merged.id,offset:Array.from(first.text).length,performance:['低声','自然']});
+  assert.ok(children.every(configurationDecided));assert.deepEqual(children.map(s=>s.decisions.performance.values),['低声','自然']);
+  assert.ok(children.every(s=>s.decisions.identity.operationId===operationId && s.current===null && s.review===null));
+  assert.equal(store.get('segments',merged.id).retired,true);
+});
+
+test('F01 存量决定dry-run只列可证明父来源，不写库或补造人工确认',t=>{
+  const {d,c,rev,store,v}=setup(t,true),[first,second]=d.list(c.id);
+  d.mutate('segment.confirm',{chapterId:c.id,revision:rev(),ids:[first.id,second.id],identityChosen:true});
+  d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:second.id,voiceId:v.id,identityChosen:true});
+  const merged=d.mutate('segment.merge',{chapterId:c.id,revision:rev(),id:first.id});
+  merged.decisions=store.get('segments',first.id).decisions;store.put('segments',merged,c.id);
+  const before=store.all('segments',c.id),plan=d.structuralRepairPlan({chapterId:c.id});
+  assert.equal(plan.dryRun,true);assert.equal(plan.items[0].eligible,true);assert.equal(plan.items[0].proposed.identity.source,'structural');assert.deepEqual(store.all('segments',c.id),before);
+  merged.source.parentIds=[uid()];store.put('segments',merged,c.id);assert.equal(d.structuralRepairPlan({chapterId:c.id}).items[0].eligible,false);
+});
+
+test('A21 可证明存量决定预览后事务修复并留前快照，音频/input/review不改',t=>{
+  const {d,c,rev,store,v}=setup(t,true),[first,second]=d.list(c.id);
+  d.mutate('segment.confirm',{chapterId:c.id,revision:rev(),ids:[first.id,second.id],identityChosen:true});
+  d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:second.id,voiceId:v.id,identityChosen:true});
+  const merged=d.mutate('segment.merge',{chapterId:c.id,revision:rev(),id:first.id});
+  merged.decisions=store.get('segments',first.id).decisions;merged.current=uid();merged.review={state:'passed',basis:'original-fixture'};store.put('segments',merged,c.id);
+  store.put('audios',{id:merged.current,input:{original:true},prompt:'保留原提示',path:'original.wav'},c.id);
+  const plan=d.structuralRepairPlan({chapterId:c.id}),before=store.get('segments',merged.id),audios=store.all('audios'),units=store.all('units'),arrangement=store.get('chapters',c.id).arrangement;
+  const result=d.mutate('chapter.repair-structural-decisions',{chapterId:c.id,revision:plan.revision,ids:[merged.id],scope:JSON.parse(JSON.stringify(plan.scope))});
+  const after=store.get('segments',merged.id);assert.equal(configurationDecided(after),true);assert.equal(after.decisions.identity.source,'structural');assert.equal(after.decisions.identity.action,'repair');
+  assert.deepEqual(store.get('settings',`ux-change:${result.changeId}`).items[0].before.decisions,before.decisions);
+  assert.deepEqual({...after,decisions:before.decisions},before);assert.deepEqual(store.all('audios'),audios);assert.deepEqual(store.all('units'),units);assert.equal(store.get('chapters',c.id).arrangement,arrangement);
+});
+
+test('A21 缺预览、范围/修订变化、未知父来源和事务故障均零修复',async t=>{
+  for(const failure of ['missing-scope','stale-revision','stale-scope','unknown-source','snapshot-failure','write-failure'])await t.test(failure,t=>{
+    const {d,c,rev,store,v}=setup(t,true),[first,second]=d.list(c.id);
+    d.mutate('segment.confirm',{chapterId:c.id,revision:rev(),ids:[first.id,second.id],identityChosen:true});
+    d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:second.id,voiceId:v.id,identityChosen:true});
+    const merged=d.mutate('segment.merge',{chapterId:c.id,revision:rev(),id:first.id});merged.decisions=store.get('segments',first.id).decisions;store.put('segments',merged,c.id);
+    let plan=d.structuralRepairPlan({chapterId:c.id}),payload={chapterId:c.id,revision:plan.revision,ids:[merged.id],scope:plan.scope};
+    if(failure==='missing-scope')delete payload.scope;
+    if(failure==='stale-revision')d.mutate('chapter.update',{chapterId:c.id,revision:rev(),title:'预览后的章名'});
+    if(failure==='stale-scope')payload.scope[0].target.voiceSource='different';
+    if(failure==='unknown-source'){merged.source.parentIds=[uid()];store.put('segments',merged,c.id);plan=d.structuralRepairPlan({chapterId:c.id});payload={...payload,scope:plan.scope};assert.equal(plan.items[0].eligible,false);}
+    if(failure.endsWith('failure')){const original=store.put.bind(store);t.mock.method(store,'put',(table,value,...args)=>{if(failure==='snapshot-failure'&&table==='settings'&&value.kind==='structural-repair')throw Error('injected repair interruption');const result=original(table,value,...args);if(failure==='write-failure'&&table==='segments'&&value.id===merged.id)throw Error('injected repair interruption');return result;});}
+    const snapshot=()=>Object.fromEntries(['segments','chapters','settings','audios','units'].map(table=>[table,store.all(table)])),before=snapshot();
+    assert.throws(()=>d.mutate('chapter.repair-structural-decisions',payload),failure.endsWith('failure')?/injected repair interruption/:{status:409});assert.deepEqual(snapshot(),before);
+  });
+});
+
+test('F07 回执写入失败整笔回滚，重启后同命令不重复创建',t=>{
+  const {d,p,store,dir}=setup(t),payload={operationId:uid(),projectId:p.id,title:'安全导入',source:'用户正文。',segment:true},before=store.all('chapters');
+  const original=store.put.bind(store),mock=t.mock.method(store,'put',(table,value,...rest)=>{if(value.id.startsWith('ux-chapter-create:'))throw Error('disk fixture');return original(table,value,...rest);});
+  assert.throws(()=>d.mutate('chapter.create',payload),/disk fixture/);assert.deepEqual(store.all('chapters'),before);mock.mock.restore();
+  const chapter=d.mutate('chapter.create',payload),reopened=openStore(dir);try{assert.equal(createDomain(reopened).mutate('chapter.create',payload).id,chapter.id);}finally{reopened.close();}
+});
+
+test('T06 参考停用/unknown不阻断本地成品，实际决定无效可见而正式导出保持阻断',async t=>{
+  const {d,e,w,c,rev,grant,store,v}=setup(t,true),ids=d.list(c.id).map(s=>s.id);let calls=0;
+  t.mock.method(globalThis,'fetch',async()=>{calls++;return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
+  await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),grantId:grant().grantId,ids});await w.tick();
+  for(const id of ids){const u=d.enhancement.getUnit(id);d.mutate('unit.review',{chapterId:c.id,revision:rev(),unitId:id,entityRevision:u.revision,audioId:u.variants.dry.current,basis:d.enhancement.basis(u,'dry'),state:'passed'});}
+  v.state='stopped';store.put('voices',v);
+  const target=ids[0];store.put('attempts',{id:uid(),jobId:uid(),status:'unknown',targetKind:'unit',targetId:target,mode:'dry'});
+  let chapter=d.chapter(c.id),u=chapter.units.find(u=>u.id===target);assert.equal(u.readiness.play.allowed,true);assert.equal(u.readiness.export.allowed,true);assert.equal(u.readiness.generate.allowed,false);assert.equal(chapter.playbackItems[0].latest,'unknown');
+  const exported=await w.submit({kind:'export',chapterId:c.id,revision:rev(),arrangement:chapter.arrangement,reviewItems:chapter.reviewItems,format:'wav',commandId:uid()});await w.tick();assert.equal(store.get('jobs',exported.id).status,'success');assert.equal(store.all('exports',c.id).length,1);assert.equal(calls,2);
+  const s=store.get('segments',target);s.decisions={identity:{state:'accepted',values:[s.roleId,uid(),'default']}};store.put('segments',s,c.id);
+  chapter=d.chapter(c.id);u=chapter.units.find(u=>u.id===target);assert.equal(chapter.segments[0].configurationDecided,false);assert.ok(u.readiness.generate.blockers.some(b=>b.code==='configuration-undecided'));assert.equal(u.readiness.export.allowed,false);assert.equal(u.readiness.play.allowed,true);assert.equal(calls,2);
+});
+
+test('F01 不同声音明确first/second后决定对应选择；结构保存沿操作回执可追溯',async t=>{
+  for(const choice of ['first','second']) {
+    const {d,e,c,rev,store,v}=setup(t,true),[first,second]=d.list(c.id),alternate={...v,id:uid()};store.put('voices',alternate);
+    d.mutate('segment.confirm',{chapterId:c.id,revision:rev(),ids:[first.id,second.id],identityChosen:true});
+    d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:second.id,voiceId:alternate.id,identityChosen:true});
+    const operationId=uid(),op=await e.run({operationId,kind:'save',action:'segment.merge',data:{chapterId:c.id,revision:rev(),id:first.id,choice}});
+    assert.equal(op.outcome,'completed');assert.equal(op.result.voiceId,choice==='first'?v.id:alternate.id);assert.ok(configurationDecided(op.result));assert.equal(op.result.decisions.identity.operationId,operationId);
+  }
+});
+
+test('F02 组返工在混合选择中计一次，redoRejected复用好结果且export仍阻断',async t=>{
+  const {d,e,w,c,rev,grant,store}=setup(t,true),ids=d.list(c.id).map(s=>s.id),extra=d.mutate('segment.create',{chapterId:c.id,revision:rev(),text:'新的一句。'}),group=d.mutate('unit.create',{chapterId:c.id,revision:rev(),ids});let calls=0;
+  t.mock.method(globalThis,'fetch',async()=>{calls++;return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
+  const g=grant();await w.submit({kind:'unit-generate',chapterId:c.id,revision:rev(),unitIds:[group.id,extra.id],grantId:g.grantId,commandId:uid()});await w.tick();
+  const u=d.enhancement.getUnit(group.id);d.mutate('unit.review',{chapterId:c.id,revision:rev(),unitId:u.id,entityRevision:u.revision,audioId:u.variants.dry.current,basis:d.enhancement.basis(u),state:'rework'});
+  const plan=e.plan({chapterId:c.id,revision:rev(),ids:[ids[0],extra.id],actionKind:'redoRejected'});assert.deepEqual(plan.unitIds,[group.id]);assert.equal(plan.audioRequests,1);assert.deepEqual(plan.units[0].members,ids);assert.equal(calls,2);
+  assert.equal(d.chapter(c.id).units.find(u=>u.id===group.id).readiness.export.allowed,false);
+  await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),ids:[ids[0],extra.id],actionKind:'redoRejected',grantId:g.grantId});await w.tick();assert.equal(calls,3);
+  assert.equal(e.plan({chapterId:c.id,revision:rev(),ids:[...ids,extra.id],actionKind:'forceRegenerate'}).audioRequests,2);
+});

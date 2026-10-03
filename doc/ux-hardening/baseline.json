@@ -1,0 +1,91 @@
+{
+  "observedAtUTC": "2026-10-03T10:28:02.990460+00:00",
+  "baselineSHA": "a291fe3e4ec220d6300ff7f36a935901002d2ce5",
+  "branch": "codex/ux-redesign-v1-1",
+  "purpose": "evidence record only; no additional runtime gate/hash/frozen contract",
+  "sourceFiles": [
+    {
+      "path": "server/analysis.mjs",
+      "existingGitBlob": "de7a01d4d7f9959a919dd77afea734d4ddc5bc82",
+      "matchesPlanAppendix": true
+    },
+    {
+      "path": "server/audio.mjs",
+      "existingGitBlob": "54bcb1ecd344c53f8378999ddded9051c79d3320",
+      "matchesPlanAppendix": true
+    },
+    {
+      "path": "server/domain.mjs",
+      "existingGitBlob": "1ccbd8e8e43d2c149638adce7af8c04a1481fad8",
+      "matchesPlanAppendix": true
+    },
+    {
+      "path": "server/enhancement.mjs",
+      "existingGitBlob": "d36febe3f639928dc5f23373aa3549348060e1f1",
+      "matchesPlanAppendix": true
+    },
+    {
+      "path": "server/experience.mjs",
+      "existingGitBlob": "af44c319e7463707bd8a73601aab5353a043bcd4",
+      "matchesPlanAppendix": true
+    },
+    {
+      "path": "server/index.mjs",
+      "existingGitBlob": "f7af8c11d9c8cc38f3740fe43462d4e10bb1e262",
+      "matchesPlanAppendix": true
+    },
+    {
+      "path": "server/semantic.mjs",
+      "existingGitBlob": "87788d53db0cf8063ac4fefd040cdc97959ad93d",
+      "matchesPlanAppendix": true
+    },
+    {
+      "path": "server/store.mjs",
+      "existingGitBlob": "d49800d59b36246b11ee3cc4055e6a77c7242e57",
+      "matchesPlanAppendix": true
+    },
+    {
+      "path": "server/templates.mjs",
+      "existingGitBlob": "786c3e20fc1e569e5521a0649ccd3c0b9d401b1b",
+      "matchesPlanAppendix": true
+    },
+    {
+      "path": "server/worker.mjs",
+      "existingGitBlob": "4a2fa5bea811a719056fd1831dbb7db0466bf3b8",
+      "matchesPlanAppendix": true
+    },
+    {
+      "path": "server/workspace.mjs",
+      "existingGitBlob": "c86bdd7960bdc7463eb144c1db0cd9d24185a799",
+      "matchesPlanAppendix": true
+    },
+    {
+      "path": "src/App.tsx",
+      "existingGitBlob": "3e29681385172f4e03bef2ed42c725b46f17f13f",
+      "matchesPlanAppendix": true
+    }
+  ],
+  "backup": {
+    "metadata": {
+      "createdAt": "2026-10-03T09:12:58.087Z",
+      "operation": "create"
+    },
+    "databaseSchemaReadOnly": 2,
+    "path": "data/ux-hardening-20261003/real-workspace-backup",
+    "log": "data/ux-hardening-20261003/backup.log",
+    "verifiedByExistingCreateProcedure": true,
+    "privateNotDistributed": true
+  },
+  "missingMaterial": [
+    "original two audit ZIP attachments",
+    "original 38-scenario fixtures and full 13-red evidence"
+  ],
+  "faultInjection": "isolated only; tests use Mock provider",
+  "realCallsThisExecution": {
+    "K0": 1,
+    "K1": 1,
+    "authorization": "current user authorization handled by root; no automatic additional calls",
+    "humanListening": "pending"
+  },
+  "currentImplementationSchema": 3
+}

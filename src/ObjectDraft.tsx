@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { clearDraft, discardDraft, finishDraftSave, listDrafts, readDraft, recoverDraft, writeDraft, type DraftRecord } from "./drafts";
+import { draftWorkspace, clearDraft, discardDraft, finishDraftSave, listDrafts, readDraft, recoverDraft, writeDraft, type DraftRecord } from "./drafts";
 import { Dialog } from "./components";
 import { activeDraftSave, cancelDraftSave, draftSaveStatus, flushRegisteredDraft, forgetSaveOperation, mergeSavedValues, notifyDraftSaves, pendingSaveOperation, queueDraftSave, registerDraftSave, runDraftSave, saveOperationId, saveStateLabels, scheduleDraftSave, subscribeDraftSaves, type SaveContext, type SaveState } from "./autosave";
 
@@ -18,13 +18,14 @@ export function useDraftSaveStatus(scope: string, dependencies?: string[]) {
 // Keep subsequent user changes while accepting the exact normalized save result.
 export function useObjectDraft<T extends object>(type: string, id: string, value: T, revision: number, options: DraftOptions<T> = {}) {
   const key = options.legacyRaw ? id : objectDraftId(type, id);
+  const workspaceIdentity=useRef(draftWorkspace()).current;
   const wrap = (next: T) => options.legacyRaw ? next : envelope(type, next);
   const unwrap = (next: T | Value<T>) => options.legacyRaw ? next as T : (next as Value<T>).value;
   const validValue = (next: unknown) => options.legacyRaw ? !!next && typeof next === "object" && ["text","performance","roleId","config"].filter(field => field in value).every(field=>typeof (next as Record<string,unknown>)[field] === typeof (value as Record<string,unknown>)[field]) : valid(next, type, value);
   let cached: {draft:Value<T>;revision:number} | null = null;
   let readError = "";
   try {
-    const result=readDraft<T | Value<T>>(key);
+    const result=readDraft<T | Value<T>>(key,workspaceIdentity);
     if(result && (!validValue(result.draft) || !Number.isSafeInteger(result.revision) || result.revision < 0))readError="草稿格式不同，原记录仍保留；请明确处理后编辑。";
     else if (result) cached={draft:envelope(type,unwrap(result.draft)),revision:result.revision};
   } catch { readError="本页草稿无法读取，原记录仍保留；请明确处理后编辑。"; }
@@ -40,7 +41,7 @@ export function useObjectDraft<T extends object>(type: string, id: string, value
   current.current = {...current.current,draft,base,dirty,options,targetId};
   const pending = useRef<Promise<Saved<T> & {dirty:boolean}> | null>(null);
   const report = (state: SaveState, message = "") => { current.current.status=state;current.current.error=message;setStatus(state);setError(message);notifyDraftSaves(); };
-  const put = (next: T, nextBase: number) => writeDraft(key, wrap(next), nextBase);
+  const put = (next: T, nextBase: number) => writeDraft(key, wrap(next), nextBase,workspaceIdentity);
   const apply = (next: T, nextBase: number, nextDirty: boolean) => {
     current.current = {...current.current,draft: next, base: nextBase, dirty: nextDirty};
     setDraft(next); setBase(nextBase); setDirty(nextDirty);
@@ -49,13 +50,13 @@ export function useObjectDraft<T extends object>(type: string, id: string, value
   useEffect(() => { if (!current.current.dirty && !pending.current) { apply(value, revision, false);current.current.chapterRevision=options.chapterRevision; } }, [savedText, revision, options.chapterRevision]);
   useEffect(() => {
     const listener = (event: Event) => {
-      const detail = (event as CustomEvent<{key: string; submitted: string; saved: Saved<T>}>).detail;
-      if (detail.key !== key || !current.current.dirty) return;
+      const detail = (event as CustomEvent<{key: string; submitted: string; saved: Saved<T>;workspaceIdentity?:string}>).detail;
+      if (detail.key !== key || detail.workspaceIdentity!==workspaceIdentity || !current.current.dirty) return;
       const before = JSON.parse(detail.submitted) as {draft: Value<T>; revision: number};
       const now = current.current;
       current.current.chapterRevision=detail.saved.chapterRevision ?? current.current.chapterRevision;
       if (same(wrap(now.draft), before.draft) && now.base === before.revision) {
-        clearDraft(key); apply(detail.saved.value, detail.saved.revision, false);
+        clearDraft(key,undefined,false,workspaceIdentity); apply(detail.saved.value, detail.saved.revision, false);
       } else {
         const nextBase = now.base === before.revision ? detail.saved.revision : now.base;
         const next = now.base === before.revision ? mergeSavedValues(unwrap(before.draft), now.draft, detail.saved.value, current.current.options.coupled) : now.draft;
@@ -77,6 +78,7 @@ export function useObjectDraft<T extends object>(type: string, id: string, value
     if(pending.current)return pending.current;
     const existing=activeDraftSave(key);if(existing)return existing.then(()=>flush());
     const work = async () => {
+    if(draftWorkspace()!==workspaceIdentity)throw new Error("工作区已变化，原编辑保留在原工作区的本机暂存；请重新打开目标后继续。");
     if(cacheError)throw new Error(cacheError);
     if(current.current.composing)throw new Error("正在输入中文，请完成选字后再继续");
     if(current.current.options.locked)throw new Error("当前章节正在制作，本页修改仅暂存本机");
@@ -87,7 +89,7 @@ export function useObjectDraft<T extends object>(type: string, id: string, value
     report("saving");
     cancelDraftSave(key);
     const before = current.current;
-    const previous=pendingSaveOperation(key);
+    const previous=pendingSaveOperation(key,workspaceIdentity);
     const submittedValue=previous ? previous.payload.value as T : before.draft;
     const submittedBase=previous?.payload.revision ?? before.base;
     const submitted = JSON.stringify({draft: wrap(submittedValue), revision: previous ? submittedBase : before.base});
@@ -95,42 +97,43 @@ export function useObjectDraft<T extends object>(type: string, id: string, value
       const scoped = before.options.chapterRevision !== undefined;
       const scope = before.options.scope || key;
       const received = await queueDraftSave(scope, scoped ? previous?.payload.chapterRevision ?? before.chapterRevision ?? before.options.chapterRevision! : submittedBase, before.options.dependencies || [key], async actualRevision => {
+        if(draftWorkspace()!==workspaceIdentity)throw new Error("工作区已变化，本次未保存；原编辑仍在本机暂存。");
         const expected = previous?.payload.revision ?? (before.options.legacyRaw && scoped ? actualRevision : before.base);
-        const operationId=previous?.id || saveOperationId(key,{value:submittedValue,revision:expected,chapterRevision:scoped ? actualRevision : undefined});
+        const operationId=previous?.id || saveOperationId(key,{value:submittedValue,revision:expected,chapterRevision:scoped ? actualRevision : undefined},workspaceIdentity);
         const saved=await persist(submittedValue,expected,{operationId,chapterRevision:scoped ? previous?.payload.chapterRevision ?? actualRevision : undefined,replay:!!previous});
         return {saved,operationId,inputRevision:expected,revision:scoped ? saved.chapterRevision! : saved.revision,changes:saved.changes || before.options.changes || before.options.dependencies || [key]};
       },previous?.id);
       const saved = received.saved;
-      let remaining = finishDraftSave<T | Value<T>>(key, submitted, saved.revision, received.inputRevision);
+      let remaining = finishDraftSave<T | Value<T>>(key, submitted, saved.revision, received.inputRevision,workspaceIdentity);
       if (remaining?.revision === saved.revision) {
         remaining = {draft:wrap(mergeSavedValues(submittedValue, unwrap(remaining.draft), saved.value, before.options.coupled)),revision:saved.revision};
-        writeDraft(key, remaining.draft, remaining.revision);
+        writeDraft(key, remaining.draft, remaining.revision,workspaceIdentity);
       }
       current.current.chapterRevision=saved.chapterRevision ?? current.current.chapterRevision;
       if(current.current.status === "unreliable" && current.current.dirty){
         const kept=mergeSavedValues(submittedValue,current.current.draft,saved.value,before.options.coupled);
-        remaining={draft:wrap(kept),revision:saved.revision};writeDraft(key,remaining.draft,remaining.revision);
+        remaining={draft:wrap(kept),revision:saved.revision};writeDraft(key,remaining.draft,remaining.revision,workspaceIdentity);
       }
       apply(remaining ? unwrap(remaining.draft) : saved.value,saved.revision,!!remaining);
-      window.dispatchEvent(new CustomEvent("workbench-object-saved", {detail: {key, submitted, saved}}));
+      window.dispatchEvent(new CustomEvent("workbench-object-saved", {detail: {key, submitted, saved,workspaceIdentity}}));
       if (saved.targetId && objectDraftId(type, saved.targetId) !== key && remaining) {
         const target = options.legacyRaw ? saved.targetId : objectDraftId(type, saved.targetId);
-        if (readDraft(target)) throw new Error("已创建对象已有本页草稿，续写仍保留在新建草稿，请先处理");
+        if (readDraft(target,workspaceIdentity)) throw new Error("已创建对象已有本页草稿，续写仍保留在新建草稿，请先处理");
         const source = JSON.stringify(remaining);
-        writeDraft(target, remaining.draft, remaining.revision);
-        if (!clearDraft(key, source)) {
-          clearDraft(target, source);
+        writeDraft(target, remaining.draft, remaining.revision,workspaceIdentity);
+        if (!clearDraft(key, source,false,workspaceIdentity)) {
+          clearDraft(target, source,false,workspaceIdentity);
           throw new Error("新建草稿已改变，续写仍保留，请重新处理");
         }
         current.current.transferredKey=target;
         apply(unwrap(remaining.draft),remaining.revision,false);
       }
       if(saved.targetId){current.current.targetId=saved.targetId;setTargetId(saved.targetId);}
-      forgetSaveOperation(key,received.operationId);
+      forgetSaveOperation(key,received.operationId,workspaceIdentity);
       report(remaining ? "local" : "saved");
       if(remaining && current.current.options.persist && !saved.targetId)scheduleDraftSave(key,flush,current.current.options.delay);
       return {...saved,dirty:!!remaining};
-    } catch (failure) { if((failure as {status?:number}).status){const known=pendingSaveOperation(key);if(known)forgetSaveOperation(key,known.id);}report((failure as {status?:number}).status === 409 ? "conflict" : storageFailure(failure) || current.current.status === "unreliable" ? "unreliable" : "local", storageFailure(failure) ? "未能可靠暂存，请复制保留本页编辑；原草稿仍保留。" : (failure as Error).message);throw failure; }
+    } catch (failure) { if((failure as {status?:number}).status&&(failure as {retryClass?:string}).retryClass!=='check-existing-operation'){const known=pendingSaveOperation(key,workspaceIdentity);if(known)forgetSaveOperation(key,known.id,workspaceIdentity);}report((failure as {status?:number}).status === 409 ? "conflict" : storageFailure(failure) || current.current.status === "unreliable" ? "unreliable" : "local", storageFailure(failure) ? "未能可靠暂存，请复制保留本页编辑；原草稿仍保留。" : (failure as Error).message);throw failure; }
     finally { setSaving(false); }
     };
     pending.current=runDraftSave(key,work).catch(failure=>{if(current.current.status !== "conflict")report((failure as {status?:number}).status === 409 ? "conflict" : current.current.status === "unreliable" ? "unreliable" : "local",(failure as Error).message);throw failure;}).finally(()=>{pending.current=null;});
@@ -143,11 +146,11 @@ export function useObjectDraft<T extends object>(type: string, id: string, value
     const persist=current.current.options.persist;if(!persist)throw new Error("这份编辑尚未接入自动保存，请在原编辑区保存");
     return save(persist);
   };
-  const discard = () => { cancelDraftSave(key);clearDraft(key,undefined,true);setCacheError("");apply(value, revision, false);current.current.chapterRevision=options.chapterRevision;report("saved"); };
+  const discard = () => { cancelDraftSave(key);clearDraft(key,undefined,true,workspaceIdentity);setCacheError("");apply(value, revision, false);current.current.chapterRevision=options.chapterRevision;report("saved"); };
   useEffect(()=>{
-    const abandoned=(event:Event)=>{if((event as CustomEvent<{id:string}>).detail.id !== key)return;cancelDraftSave(key);setCacheError("");apply(value,revision,false);current.current.chapterRevision=options.chapterRevision;report("saved");};
+    const abandoned=(event:Event)=>{const detail=(event as CustomEvent<{id:string;workspaceIdentity?:string}>).detail;if(detail.id !== key || detail.workspaceIdentity!==workspaceIdentity)return;cancelDraftSave(key);setCacheError("");apply(value,revision,false);current.current.chapterRevision=options.chapterRevision;report("saved");};
     const restored=(event:Event)=>{
-      const detail=(event as CustomEvent<{id:string;data:{draft:T|Value<T>;revision:number}}>).detail;if(detail.id !== key)return;
+      const detail=(event as CustomEvent<{id:string;data:{draft:T|Value<T>;revision:number};workspaceIdentity?:string}>).detail;if(detail.id !== key || detail.workspaceIdentity!==workspaceIdentity)return;
       if(!validValue(detail.data.draft)){setCacheError("草稿格式不同，原记录仍保留；请明确处理后编辑。");report("unreliable");return;}
       const restoredValue=unwrap(detail.data.draft);apply(restoredValue,detail.data.revision,true);
       current.current.chapterRevision=options.legacyRaw ? detail.data.revision : (restoredValue as {chapterRevision?:number}).chapterRevision ?? options.chapterRevision;report("local");
@@ -164,8 +167,8 @@ export function useObjectDraft<T extends object>(type: string, id: string, value
   const freeze = (next: boolean) => {current.current.frozen=next;setFrozen(next);};
   const compositionStart = () => {current.current.composing=true;setComposing(true);cancelDraftSave(key);};
   const compositionEnd = () => {current.current.composing=false;setComposing(false);};
-  const hasTransferredDraft=()=>{if(!current.current.transferredKey)return false;try{return !!readDraft(current.current.transferredKey);}catch{return true;}};
-  useEffect(()=>registerDraftSave(key,{scope:options.scope || key,dependencies:options.dependencies || [key],deferUnmounted:()=>{if(!current.current.options.deferUnmounted || current.current.targetId || pending.current || activeDraftSave(key))return false;try{return !pendingSaveOperation(key);}catch{return false;}},state:()=>hasTransferredDraft()?"local":current.current.status,dirty:()=>current.current.dirty || hasTransferredDraft(),flush,freeze}),[key,options.scope,JSON.stringify(options.dependencies)]);
+  const hasTransferredDraft=()=>{if(!current.current.transferredKey)return false;try{return !!readDraft(current.current.transferredKey,workspaceIdentity);}catch{return true;}};
+  useEffect(()=>registerDraftSave(key,{scope:options.scope || key,dependencies:options.dependencies || [key],deferUnmounted:()=>{if(!current.current.options.deferUnmounted || current.current.targetId || pending.current || activeDraftSave(key))return false;try{return !pendingSaveOperation(key,workspaceIdentity);}catch{return false;}},state:()=>hasTransferredDraft()?"local":current.current.status,dirty:()=>current.current.dirty || hasTransferredDraft(),flush,freeze}),[key,options.scope,JSON.stringify(options.dependencies)]);
   useEffect(()=>{
     if(!dirty || !options.persist || composing || options.locked || status === "conflict" || status === "unreliable")return;
     if(options.validate?.(draft))return;

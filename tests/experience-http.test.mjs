@@ -35,9 +35,9 @@ test('删除项目只等待本项目在途操作；删除后的迟到保存不�
   const operation=post('/operations',{operationId:uid(),kind:'generateSelection',chapterId:chapter.id,revision:chapter.revision,ids:[segment.id]});
   await started;
   const blocked=await post('/action',{action:'project.delete',id:project.id});assert.equal(blocked.status,409);assert.ok(app.store.maybe('projects',project.id));
-  const unrelated=await post('/action',{action:'project.delete',id:other.id});assert.equal(unrelated.status,200);assert.equal(app.store.maybe('projects',other.id),null);
+  const unrelated=await post('/action',{action:'project.delete',id:other.id,scope:app.domain.deletionPlan({id:other.id}).scope});assert.equal(unrelated.status,200);assert.equal(app.store.maybe('projects',other.id),null);
   release();assert.equal((await operation).status,200);
-  const deleted=await post('/action',{action:'project.delete',id:project.id});assert.equal(deleted.status,200);assert.equal(app.store.maybe('chapters',chapter.id),null);
+  const deleted=await post('/action',{action:'project.delete',id:project.id,scope:app.domain.deletionPlan({id:project.id}).scope});assert.equal(deleted.status,200);assert.equal(app.store.maybe('chapters',chapter.id),null);
   const lateId=uid(),late=await post('/operations',{operationId:lateId,kind:'save',action:'segment.update',data:{chapterId:chapter.id,revision:chapter.revision,id:segment.id,text:'迟到内容'}});
   assert.equal(late.status,404);assert.equal(app.store.maybe('settings',`ux-operation:${lateId}`),null);
   const nested=await post('/operations',{operationId:uid(),kind:'save',action:'project.delete',data:{id:project.id}});assert.equal(nested.status,400);
