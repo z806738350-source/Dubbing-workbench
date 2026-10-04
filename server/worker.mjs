@@ -26,7 +26,7 @@ export function createWorker(store, domain, config) {
   if (config.callLimit !== undefined && (!Number.isSafeInteger(config.callLimit) || config.callLimit < 1)) fail("本地调用额度应为正整数");
   const quotaScope = config.usageScope || "audio-calls-v1";
   if (typeof quotaScope !== "string" || !quotaScope || quotaScope.length > 100) fail("调用额度范围无效");
-  for (const [name, max] of [['audioConcurrency',4],['routeConcurrencyCap',4],['localAudioConcurrency',2]])
+  for (const [name, max] of [['audioConcurrency',8],['routeConcurrencyCap',8],['localAudioConcurrency',2]])
     if (config[name] !== undefined && (!Number.isSafeInteger(config[name]) || config[name] < 1 || config[name] > max)) fail(`${name} 应为1至${max}的整数`);
   if (config.audioStartIntervalMs !== undefined && (!Number.isSafeInteger(config.audioStartIntervalMs) || config.audioStartIntervalMs < 0 || config.audioStartIntervalMs > 60000)) fail('发送间隔应为0至60000毫秒');
   for (const name of ['timeout', 'audioResponseTimeoutMs', 'audioReceiveTimeoutMs'])
@@ -39,7 +39,7 @@ export function createWorker(store, domain, config) {
   if (!Number.isSafeInteger(pendingLimit) || pendingLimit < 1 || !Number.isSafeInteger(pendingBytesLimit) || pendingBytesLimit < responseLimit) fail('音频积压上限无效');
   let closing = false, localRecovery = false, admissionStopped = false, storageBlocked = false, schedulingError = "", pumping = false, nextSendAt = 0, timer;
   const desiredConcurrency = () => store.maybe('settings','scheduler')?.desiredAudioConcurrency ?? config.audioConcurrency ?? 1;
-  const concurrency = () => Math.min(Number.isSafeInteger(desiredConcurrency()) ? Math.max(1, Math.min(4, desiredConcurrency())) : 1, config.routeConcurrencyCap || 1, pendingLimit, Math.floor(pendingBytesLimit / responseLimit));
+  const concurrency = () => Math.min(Number.isSafeInteger(desiredConcurrency()) ? Math.max(1, Math.min(8, desiredConcurrency())) : 1, config.routeConcurrencyCap || 1, pendingLimit, Math.floor(pendingBytesLimit / responseLimit));
   const networkActive = () => [...executing.values()].filter(item => item.network).length;
   const busy = () => executing.size > 0 || renders.size > 0 || localRecovery || local.active > 0 || local.queued > 0 || !!timer;
   const routeBlocked = () => !!store.maybe("settings", "audio-route")?.blocked;

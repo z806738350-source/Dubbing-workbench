@@ -437,9 +437,10 @@
           "status": "工程关闭",
           "evidence": [
             "tests/assistant-model.test.mjs",
-            "tests/assistant-vision.test.mjs"
+            "tests/assistant-lifecycle.test.mjs",
+            "tests/assistant-client.test.mjs"
           ],
-          "note": "默认 claude-sonnet-5-5 可修改；配置/独立密钥/像素链/能力未验证状态已测试，真实模型验证见 T30。"
+          "note": "默认 claude-sonnet-5-5 可修改；配置、独立密钥与真实像素链已测试。2026-10-04 按用户要求取消运行时识图验证前置，保存的图片输入设置直接生效，旧验证端点返回404且零模型调用；发送授权、附件归属、费用记录及未知请求不自动重发继续测试。真实模型验收边界见 real-provider-results-2026-10-04.md。"
         }
       ]
     },

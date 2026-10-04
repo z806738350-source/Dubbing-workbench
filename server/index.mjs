@@ -252,7 +252,6 @@ export async function startServer({
         const parts = path.split('/').slice(3), [resource, id, action] = parts;
         if (resource === 'config' && req.method === 'GET') return send(res, 200, assistant.model.publicSettings());
         if (resource === 'config' && req.method === 'PUT') return send(res, 200, assistant.model.save(await body(req)));
-        if (resource === 'verify' && req.method === 'POST') return send(res, 200, await assistant.verify(await body(req)));
         if (resource === 'sessions' && !id && req.method === 'GET') return send(res, 200, assistant.list(query.get('projectId')));
         if (resource === 'sessions' && !id && req.method === 'POST') return send(res, 200, assistant.create(await body(req)));
         if (resource === 'sessions' && id && !action && req.method === 'GET') return send(res, 200, assistant.get(id));
@@ -271,7 +270,7 @@ export async function startServer({
       if (path === '/api/scheduler' && req.method === 'PUT') {
         const p = await body(req), old = store.maybe('settings', 'scheduler') || { revision: 0 };
         if (p.revision !== old.revision) fail('并发设置已改变，请重新核对', 409);
-        if (!Number.isInteger(p.desiredAudioConcurrency) || p.desiredAudioConcurrency < 1 || p.desiredAudioConcurrency > 4 || Object.keys(p).some(k => !['revision', 'desiredAudioConcurrency'].includes(k))) fail('同时生成段数应为1至4');
+        if (!Number.isInteger(p.desiredAudioConcurrency) || p.desiredAudioConcurrency < 1 || p.desiredAudioConcurrency > 8 || Object.keys(p).some(k => !['revision', 'desiredAudioConcurrency'].includes(k))) fail('同时生成段数应为1至8');
         store.put('settings', { id: 'scheduler', revision: old.revision + 1, desiredAudioConcurrency: p.desiredAudioConcurrency });
         return send(res, 200, { ...worker.getActivity(), revision: old.revision + 1 });
       }

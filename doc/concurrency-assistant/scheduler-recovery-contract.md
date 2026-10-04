@@ -6,8 +6,8 @@
 
 | 项目 | 当前默认和边界 |
 | --- | --- |
-| 期望并发 | 1；用户可选 1／2／3／4，持久化于 `settings.scheduler.desiredAudioConcurrency` |
-| 账号／路由上限 | 缺少已验证配置时为 1；受信服务端 `routeConcurrencyCap` 最大 4 |
+| 期望并发 | 1；绝对范围为 1 至 8，界面只显示不超过受信开放上限的可用档位；持久化于 `settings.scheduler.desiredAudioConcurrency` |
+| 账号／路由上限 | 缺少已验证配置时为 1；受信服务端 `routeConcurrencyCap` 最大 8；本机本轮完整实测通过到 4，8 路试点未通过 |
 | 有效并发 | 期望值、路由上限、积压数量与字节许可的最小值 |
 | 本地音频工作 | `localAudioConcurrency` 默认 1，受信配置最多 2 |
 | 原生媒体进程 | 全服务共用 1 个进程槽，包括上传、校验、截图和渲染 |

@@ -116,8 +116,8 @@ test('公平选择器交互最多连续两次，两个后台章节轮转，不�
   assert.deepEqual(order.slice(0,7),['a','c','d','b','c','d','a']);
 });
 
-test('无已验证路由cap时即使期望4仍只发送1',async t=>{
-  const {worker,chapter,enqueue}=setup(t,{audioConcurrency:4,routeConcurrencyCap:undefined}),gate=heldFetch(t);enqueue(chapter(2));
+test('无已验证路由cap时即使期望8仍只发送1',async t=>{
+  const {worker,chapter,enqueue}=setup(t,{audioConcurrency:8,routeConcurrencyCap:undefined}),gate=heldFetch(t);enqueue(chapter(2));
   const pending=worker.tick();await until(()=>gate.calls.length===1);assert.equal(worker.getActivity().effectiveAudioConcurrency,1);
   gate.calls[0].release();await until(()=>gate.calls.length===2);gate.calls[1].release();await pending;assert.equal(gate.peak,1);
 });
@@ -297,4 +297,18 @@ test('提前拒绝响应类型时终止剩余响应体，不遗留已释放槽�
   const {store,worker,chapter,enqueue}=setup(t,{audioConcurrency:1}),job=enqueue(chapter(1));let signal;
   t.mock.method(globalThis,'fetch',async(_,options)=>{signal=options.signal;return new Response(new ReadableStream({start(controller){controller.enqueue(new Uint8Array([1]));}}),{headers:{'content-type':'text/plain'}});});
   await worker.tick();assert.equal(signal.aborted,true);assert.equal(store.get('jobs',job.id).status,'unknown');assert.equal(worker.getActivity().attemptsActive,0);
+});
+
+test('八槽使用同一worker真实重叠，第九项等待空槽；上限9被拒绝',async t=>{
+  const {store,worker,chapter,enqueue,domain,config}=setup(t,{audioConcurrency:8,routeConcurrencyCap:8});
+  assert.throws(()=>createWorker(store,domain,{...config,audioConcurrency:9}),/1至8/);
+  assert.throws(()=>createWorker(store,domain,{...config,routeConcurrencyCap:9}),/1至8/);
+  const job=enqueue(chapter(9)),gate=heldFetch(t),pending=worker.tick();
+  await until(()=>gate.calls.length===8);assert.equal(worker.getActivity().effectiveAudioConcurrency,8);assert.equal(gate.peak,8);
+  await worker.tick();assert.equal(gate.calls.length,8);
+  gate.calls[0].release();await until(()=>gate.calls.length===9);assert.equal(gate.peak,8);
+  gate.calls.slice(1).forEach(call=>call.release());await pending;
+  assert.equal(store.get('jobs',job.id).status,'success');assert.equal(store.get('jobs',job.id).done,9);
+  assert.equal(store.all('attempts',job.id).filter(attempt=>attempt.status==='success').length,9);
+  assert.equal(worker.getActivity().localPeak,1);
 });

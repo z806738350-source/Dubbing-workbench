@@ -315,9 +315,9 @@ test('assistant call journal records only the actual attachment fingerprints and
  const f=fixture(t,[{reply:'截图已核对'}]),id=uid(),pixel='data:image/png;base64,fixture-pixels';
  const record={id,sessionId:f.session.id,projectId:f.project.id,mime:'image/png',hash:'f'.repeat(64),path:'not-used.png'};f.store.put('assistantAttachments',record,f.session.id);
  f.assistant.model.save({revision:f.assistant.model.publicSettings().revision,enabled:true,baseUrl:f.config.baseUrl,model:'claude-sonnet-5-5',credentialSource:'audio',vision:true});
- f.assistant.model.recordVisionVerification(f.assistant.model.identity(),{passed:true,providerRequestId:'mock-vision-fixture',attachmentId:id});
  t.mock.method(f.assistant.attachments,'imageParts',async()=>[{type:'image_url',image_url:{url:pixel}}]);
  await send(f,{attachmentIds:[id],materials:['text','image']});await idle(f.assistant);
+ assert.equal(f.requests.length,1);
  const journal=f.store.all('settings').find(r=>r.id.startsWith('assistant-call:'));assert.deepEqual(journal.materials,[{id,sha256:record.hash,mime:'image/png'}]);assert.ok(!JSON.stringify(journal).includes(pixel));assert.equal(journal.inputSha256,createHash('sha256').update(JSON.stringify(f.requests[0].messages)).digest('hex'));
 });
 

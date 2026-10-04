@@ -15,8 +15,6 @@ export function createAssistantModel(store, audioConfig, { fetchImpl = (...args)
   function publicSettings() {
     const { apiKey, verification, ...settings } = read();
     return { ...settings, configured: !!settings.baseUrl && !!settings.model, hasKey: settings.credentialSource === 'audio' ? !!audioConfig.key : !!apiKey,
-      visionVerified: !!settings.vision && verification?.revision === settings.revision,
-      verifiedAt: verification?.revision === settings.revision ? verification.at : null,
       protocol: 'openai-chat-completions' };
   }
   function save(p) {
@@ -48,19 +46,19 @@ export function createAssistantModel(store, audioConfig, { fetchImpl = (...args)
     return publicSettings();
   }
   const identity = () => { const { revision, baseUrl, model, credentialSource } = read(); return { revision, baseUrl, model, credentialSource }; };
-  function assertReady({ images = false, expected, verifying = false } = {}) {
+  function assertReady({ images = false, expected } = {}) {
     const connection = read();
     if (!connection.enabled) error('AI 助手尚未开启，请先设置助手连接', 'assistant-disabled', 403);
     if (!connection.baseUrl || !connection.model) error('请先填写助手模型与接口地址', 'assistant-not-configured');
     if (expected && !same(expected, identity())) error('助手模型或接口已改变，请重新核对本次发送范围', 'assistant-route-changed', 409);
-    if (images && (!connection.vision || !verifying && connection.verification?.revision !== connection.revision))
-      error('当前助手模型尚未通过识图验证，图片未发送', 'image-not-supported');
+    if (images && !connection.vision)
+      error('当前助手模型未设置为支持图片，图片未发送；请选择支持图片的多模态模型并开启图片支持', 'image-not-supported');
     return connection;
   }
-  async function generate({ messages, expected, signal, verifying = false }) {
+  async function generate({ messages, expected, signal }) {
     if (!Array.isArray(messages) || !messages.length) error('助手消息不能为空', 'assistant-message-invalid');
     const images = messages.some(m => Array.isArray(m.content) && m.content.some(p => p.type === 'image_url'));
-    const connection = assertReady({ images, expected, verifying });
+    const connection = assertReady({ images, expected });
     const key = connection.credentialSource === 'audio' ? audioConfig.key : connection.apiKey;
     const request = { model: connection.model, messages, stream: false };
     let response;
@@ -91,12 +89,5 @@ export function createAssistantModel(store, audioConfig, { fetchImpl = (...args)
     return { content: reply, usage: envelope.usage || null, providerRequestId: response.headers.get('x-request-id') || raw.id || null,
       finishReason: envelope.choices?.[0]?.finish_reason || null, connection: { revision: connection.revision, baseUrl: connection.baseUrl, model: connection.model }, responseAt, firstByteAt: firstByteAt || null, receivedAt: stamp() };
   }
-  function recordVisionVerification(expected, evidence) {
-    const current = assertReady({ expected, verifying: true });
-    if (!current.vision || !evidence?.passed || !evidence.providerRequestId || !evidence.attachmentId)
-      error('缺少当前模型的真实像素验证结果', 'image-verification-invalid');
-    store.put('settings', { ...current, verification: { revision: current.revision, at: stamp(), providerRequestId: evidence.providerRequestId, attachmentId: evidence.attachmentId } });
-    return publicSettings();
-  }
-  return { publicSettings, save, identity, assertReady, generate, recordVisionVerification };
+  return { publicSettings, save, identity, assertReady, generate };
 }

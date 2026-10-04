@@ -9,13 +9,13 @@ const nodes = node => !node||typeof node!=='object'?[]:[node,...(node.props?.chi
 const text=node=>node==null||typeof node==='boolean'?'':typeof node!=='object'?String(node):(node.props?.children||[]).flat(Infinity).map(text).join('');
 const find=(tree,label)=>nodes(tree).find(n=>n.props?.['aria-label']===label||n.type==='Select'&&n.props.label===label||n.type==='button'&&text(n)===label);
 const tick=()=>new Promise(done=>setImmediate(done));
-const config={revision:1,enabled:true,configured:true,hasKey:true,baseUrl:'https://example.invalid/v1',model:'test',credentialSource:'audio',vision:true,visionVerified:true};
+const config={revision:1,enabled:true,configured:true,hasKey:true,baseUrl:'https://example.invalid/v1',model:'test',credentialSource:'audio',vision:true};
 const session=id=>({id,projectId:'p',chapterId:'c'+id,title:id,state:'active'});
 const detail=id=>({session:session(id),messages:[],runs:[],steps:[],attachments:[],capabilities:[]});
 let sequence=0;
-async function setup({request,initial,records=new Map(),component="default",sessionRows=[session('A'),session('B')]}={}){
+async function setup({request,initial,records=new Map(),component="default",sessionRows=[session('A'),session('B')],savedConfig=config}={}){
   let index=0,queued=[],rendered;const values=[],effects=[],calls=[],saved=[],unmounts=[];
-  const api=async(path,body,method)=>{calls.push([path,body,method]);if(path==='/assistant/config'&&!body)return config;if(path==='/assistant/sessions'&&!body)return sessionRows;if(request){const value=await request(path,body,method);if(value!==undefined)return value;}return detail(path.endsWith('/B')?'B':'A');};
+  const api=async(path,body,method)=>{calls.push([path,body,method]);if(path==='/assistant/config'&&!body)return savedConfig;if(path==='/assistant/sessions'&&!body)return sessionRows;if(request){const value=await request(path,body,method);if(value!==undefined)return value;}return detail(path.endsWith('/B')?'B':'A');};
   const state={settings:{workspaceIdentity:'w'},projects:[{id:'p',name:'测试'}],chapters:[{id:'cA',projectId:'p',title:'甲章'},{id:'cB',projectId:'p',title:'乙章'}],voices:[],roles:[]};
   const props={state,config,connected:true,onSaved:()=>{},projectId:'p',chapterId:'cA',selectedSegmentIds:['segment'],connected:true,pane:'settings',onClose:()=>{},onManual:()=>{},onNavigate:()=>{},onUIAction:async()=>{},withSavedScope:async(binding,work)=>{saved.push(binding);await work();},refresh:async()=>{},...initial};
   globalThis.window={setInterval:()=>1,clearInterval:()=>{}};
@@ -37,7 +37,7 @@ test('截图输入边界与提案展示覆盖实际内容，包括未知字段�
   assert.deepEqual(rows.map(r=>r.value),['全部正文\n第二行','否','不得隐藏']);
 });
 
-test('纯图片可发送真实附件ID；IME输入不会误发，预览不是模型验证',async()=>{
+test('已开启图片输入时可直接发送纯图片；IME输入不会误发',async()=>{
   let posted;
   const records=new Map([['assistant:A',{...client.newAssistantDraft(),attachments:[{id:'pic',sessionId:'A',mime:'image/png',width:2,height:2,bytes:3}]}]]);
   const f=await setup({records,request:async(path,body)=>{if(path.endsWith('/messages')){posted=body;return {...detail('A'),messages:[{id:body.messageId,role:'user',content:'',attachmentIds:['pic']}]};}}});
@@ -70,14 +70,16 @@ test('任务卡批准使用冻结绑定与版本；关闭仅卸载轮询不停�
 });
 
 
-test('助手连接保存与付费识图分开，只有明确同意才发送一次验证',async()=>{
-  let verification=0,saved;
-  const f=await setup({component:'AssistantConnection',initial:{config:{...config,visionVerified:false}},request:async(path,body,method)=>{if(path==='/assistant/verify'){verification++;return {...config,visionVerified:true};}if(path==='/assistant/config'&&method==='PUT'){saved=body;return {...config,revision:2,visionVerified:false};}}});
-  assert.equal(f.find('验证识图能力').props.disabled,true);f.find('验证识图能力').props.onClick();await tick();assert.equal(verification,0);
-  const secret=nodes(f.render()).find(n=>n.type==='input'&&n.props.placeholder==='claude-sonnet-5-5');secret.props.onChange({target:{value:'another-model'}});assert.equal(f.find('验证识图能力').props.disabled,true);
-  f.find('保存连接').props.onClick();await tick();assert.equal(saved.model,'another-model');assert.equal(saved.revision,1);assert.equal(verification,0);assert.equal('apiKey'in saved,false);
-  const agree=nodes(f.render()).find(n=>n.type==='label'&&text(n).includes('同意发送测试图片'));nodes(agree).find(n=>n.type==='input').props.onChange({target:{checked:true}});
-  assert.equal(f.find('验证识图能力').props.disabled,false);f.find('验证识图能力').props.onClick();f.find('验证识图能力').props.onClick();await tick();assert.equal(verification,1);assert.match(text(f.render()),/已通过真实识图验证/);f.unmount();
+test('用户可更换任意助手模型并自行设置图片能力，保存只写连接配置',async()=>{
+  const saved=[];
+  const f=await setup({component:'AssistantConnection',request:async(path,body,method)=>{if(path==='/assistant/config'&&method==='PUT'){saved.push(body);return {...config,...body,revision:body.revision+1};}}});
+  assert.equal(f.find('验证识图能力'),undefined);assert.doesNotMatch(text(f.render()),/同意发送测试图片|尚未通过识图验证/);
+  const model=nodes(f.render()).find(n=>n.type==='input'&&n.props.placeholder==='claude-sonnet-5-5');model.props.onChange({target:{value:'my-image-model'}});
+  const imageOption=()=>nodes(nodes(f.render()).find(n=>n.type==='label'&&text(n)==='此模型支持图片输入')).find(n=>n.type==='input');
+  imageOption().props.onChange({target:{checked:false}});f.find('保存连接').props.onClick();await tick();
+  assert.equal(saved[0].model,'my-image-model');assert.equal(saved[0].vision,false);assert.equal(saved[0].revision,1);assert.equal('apiKey'in saved[0],false);
+  imageOption().props.onChange({target:{checked:true}});f.find('保存连接').props.onClick();await tick();assert.equal(saved[1].vision,true);assert.equal(saved[1].revision,2);
+  assert.deepEqual(f.calls.map(([path,,method])=>[path,method]),[['/assistant/config','PUT'],['/assistant/config','PUT']]);f.unmount();
 });
 
 
@@ -141,7 +143,7 @@ test('助手会话和任务选择复用统一控件；选择只更新本会话�
   f.props.connected=false;assert.equal(f.find('助手会话').props.disabled,true);assert.equal(f.find('完成目标').props.disabled,false);f.unmount();
 });
 
-test('连接保存未返回时表单禁止继续改写，返回后恢复编辑且不暗发识图验证',async()=>{
+test('连接保存未返回时表单禁止继续改写，返回后恢复编辑且仅提交连接',async()=>{
   let finishSave,posted;
   const f=await setup({component:'AssistantConnection',request:async(path,body,method)=>{
     if(path==='/assistant/config'&&method==='PUT'){posted=body;return new Promise(done=>{finishSave=done;});}
@@ -151,8 +153,8 @@ test('连接保存未返回时表单禁止继续改写，返回后恢复编辑�
   assert.equal(f.calls.filter(([,body])=>!!body).length,0);
   f.find('保存连接').props.onClick();await tick();assert.equal(posted.credentialSource,'separate');
   const locked=nodes(f.render()).filter(n=>n.type==='input'||n.type==='Select');assert.ok(locked.length>=6);assert.ok(locked.every(n=>n.props.disabled===true));
-  finishSave({...config,revision:2,credentialSource:'separate',visionVerified:false});await tick();
-  assert.equal(f.find('连接凭据').props.disabled,false);assert.equal(f.find('连接凭据').props.value,'separate');assert.equal(f.find('验证识图能力').props.disabled,true);
+  finishSave({...config,revision:2,credentialSource:'separate'});await tick();
+  assert.equal(f.find('连接凭据').props.disabled,false);assert.equal(f.find('连接凭据').props.value,'separate');assert.equal(f.find('验证识图能力'),undefined);
   assert.equal(f.calls.filter(([path])=>path==='/assistant/verify').length,0);f.unmount();
 });
 
@@ -165,4 +167,23 @@ test('连接设置入口独立于被抽屉隐藏的标题，空会话和归档�
     f.find('助手连接设置').props.onClick();const connection=nodes(f.render()).find(n=>typeof n.type==='function'&&n.type.name==='AssistantConnection');assert.ok(connection);connection.props.onClose();assert.equal(nodes(f.render()).some(n=>typeof n.type==='function'&&n.type.name==='AssistantConnection'),false);
     assert.equal(f.calls.filter(([,body])=>!!body).length,0);f.unmount();
   }
+});
+
+
+test('未开启图片输入时只拦截图并保留附件，保存启用后直接发送且不要求验证',async()=>{
+  let posted;const records=new Map([['assistant:A',{...client.newAssistantDraft(),text:'看这张图',attachments:[{id:'pic',sessionId:'A',mime:'image/png',width:2,height:2,bytes:3}]}]]);
+  const f=await setup({records,savedConfig:{...config,vision:false},request:async(path,body)=>{if(path.endsWith('/messages')){posted=body;return {...detail('A'),messages:[{id:body.messageId,role:'user',content:body.text,attachmentIds:['pic']}]};}}});
+  assert.equal(f.find('发送').props.disabled,true);assert.match(text(f.render()),/连接设置中启用图片输入/);assert.doesNotMatch(text(f.render()),/发送将把|可能产生服务费用/);
+  f.find('发送').props.onClick();await tick();assert.equal(posted,undefined);assert.equal(records.get('assistant:A').attachments.length,1);
+  f.find('助手连接设置').props.onClick();const connection=nodes(f.render()).find(n=>typeof n.type==='function'&&n.type.name==='AssistantConnection');connection.props.onSaved({...config,revision:2,model:'another-image-model',vision:true});connection.props.onClose();
+  assert.equal(f.find('发送').props.disabled,false);assert.doesNotMatch(text(f.render()),/尚未.*验证|已验证/);f.find('发送').props.onClick();await tick();assert.deepEqual(posted.attachmentIds,['pic']);assert.equal(f.calls.filter(([path])=>path==='/assistant/verify').length,0);f.unmount();
+  const g=await setup({savedConfig:{...config,vision:false}});g.change('只问文字问题');assert.equal(g.find('发送').props.disabled,false);g.find('发送').props.onClick();await tick();assert.equal(g.calls.filter(([path])=>path.endsWith('/messages')).length,1);g.unmount();
+});
+
+
+test('精简助手保留顶部连接与关闭，移除手动入口和常驻发送说明；主次发送按钮使用相同尺寸',async()=>{
+  let closed=0;const f=await setup({initial:{onClose:()=>{closed++;}}});
+  const tree=f.render();assert.equal(f.find('手动操作'),undefined);assert.equal(f.find('连接设置'),undefined);assert.equal(nodes(tree).some(n=>n.props?.className==='assistant-send-notice'),false);assert.equal(nodes(tree).some(n=>n.props?.className==='hint assistant-image-hint'),false);
+  const actions=nodes(nodes(tree).find(n=>n.props?.className==='assistant-send-row')).filter(n=>n.type==='button');assert.equal(actions.length,2);assert.ok(actions.every(n=>n.props.className.split(' ').includes('small')));assert.ok(actions[1].props.className.split(' ').includes('primary'));
+  assert.ok(f.find('助手连接设置'));f.find('关闭 AI 助手').props.onClick();assert.equal(closed,1);assert.equal(f.calls.filter(([,body])=>!!body).length,0);f.unmount();
 });

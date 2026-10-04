@@ -101,3 +101,48 @@ test('在途截图阻止本项目删除和重命名，保存完成后可按新�
   assert.equal(removed.status, 200, JSON.stringify(removed.data));
   assert.equal(app.store.all('assistantAttachments').length, 0);
 });
+
+test('HTTP sends approved screenshots directly to the selected multimodal model; removed verification never sends and unknown image calls never retry', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'assistant-direct-image-')), calls = []; let failNext = false;
+  const app = await startServer({ port: 0, directory: join(root, 'data'), config: { key: '', baseUrl: 'https://test.example/v1' }, assistantFetchImpl: async (_url, options) => {
+    calls.push(JSON.parse(options.body));
+    return failNext ? new Response('private upstream error', { status: 502 }) : new Response(JSON.stringify({ choices: [{ message: { content: '{"reply":"请点击截图中的播放按钮。"}' } }] }));
+  } });
+  t.after(async () => { await app.close(); rmSync(root, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${app.server.address().port}/api`, request = async (path, data, method = data ? 'POST' : 'GET') => {
+    const r = await fetch(base + path, { method, ...(data ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) } : {}) });
+    return { status: r.status, data: await r.json() };
+  };
+  const wait = async () => { for (let i = 0; i < 300 && app.assistant.active; i++) await new Promise(r => setTimeout(r, 5)); assert.equal(app.assistant.active, 0); };
+  const connection = { model: 'user-chosen-multimodal', baseUrl: 'https://test.example/v1', enabled: true, credentialSource: 'audio', vision: true };
+  const saved = await request('/assistant/config', { ...connection, revision: 0 }, 'PUT'); assert.equal(saved.status, 200);
+  for (const key of ['verification', 'visionVerified', 'verifiedAt']) assert.equal(key in saved.data, false);
+  for (const method of ['POST', 'GET']) assert.equal((await request('/assistant/verify', method === 'POST' ? { approved: true, requestId: uid() } : null, method)).status, 404);
+  assert.equal(calls.length, 0);
+  const session = (await request('/assistant/sessions', {})).data.session, other = (await request('/assistant/sessions', {})).data.session;
+  const file = join(root, 'screenshot.png');
+  execFileSync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=40x40', '-frames:v', '1', file]);
+  const uploaded = await request('/assistant/attachments', { sessionId: session.id, mime: 'image/png', dataBase64: readFileSync(file).toString('base64') }); assert.equal(uploaded.status, 200);
+  const attachment = uploaded.data, path = `/assistant/sessions/${session.id}/messages`, message = { messageId: uid(), text: '截图中的按钮怎样使用？', attachmentIds: [attachment.id], materials: ['text', 'image'], approved: true };
+  assert.equal((await request(path, { ...message, approved: false })).status, 403);
+  assert.equal((await request(path, { ...message, materials: ['text'] })).status, 403);
+  assert.equal((await request(`/assistant/sessions/${other.id}/messages`, message)).status, 403);
+  assert.equal((await request(`/assistant/attachments/${attachment.id}?sessionId=${other.id}`)).status, 403);
+  assert.equal(calls.length, 0);
+  assert.equal((await request(path, message)).status, 200); await wait(); assert.equal(calls.length, 1);
+  const preview = await fetch(base + `/assistant/attachments/${attachment.id}?sessionId=${session.id}`); assert.equal(preview.status, 200);
+  const parts = calls[0].messages.flatMap(m => Array.isArray(m.content) ? m.content : []).filter(p => p.type === 'image_url'); assert.equal(parts.length, 1);
+  assert.deepEqual(Buffer.from(parts[0].image_url.url.split(',')[1], 'base64'), Buffer.from(await preview.arrayBuffer()));
+  assert.equal(calls[0].model, connection.model);
+  let detail = (await request(`/assistant/sessions/${session.id}`)).data;
+  assert.equal(detail.runs[0].state, 'completed'); assert.equal(detail.runs[0].budget.used.assistant, 1);
+  assert.equal(app.store.all('settings').filter(s => s.id.startsWith('assistant-vision:')).length, 0);
+  assert.equal((await request(path, message)).status, 200); assert.equal(calls.length, 1, 'replaying a completed image message is free');
+  failNext = true; const unknown = { ...message, messageId: uid() };
+  assert.equal((await request(path, unknown)).status, 200); await wait(); assert.equal(calls.length, 2);
+  detail = (await request(`/assistant/sessions/${session.id}`)).data;
+  const run = detail.runs.find(r => r.state === 'needsReconciliation'); assert.ok(run); assert.equal(run.budget.used.assistant, 1); assert.ok(!run.error.includes('private upstream'));
+  assert.equal((await request(path, unknown)).status, 200);
+  assert.equal((await request(path, { ...unknown, messageId: uid() })).status, 409);
+  assert.equal(calls.length, 2, 'unknown image request is never silently resent');
+});

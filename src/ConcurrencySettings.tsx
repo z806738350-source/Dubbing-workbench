@@ -57,11 +57,10 @@ export function ConcurrencySettings({ status, connected, refresh }: {
     <summary><span>同时制作：最多 {current.effectiveAudioConcurrency} 段</span><span className="hint">{current.routeConcurrencyCap > 1 ? '调整' : '查看'}</span></summary>
     <div className="concurrency-content">
       <div className="concurrency-options" role="group" aria-label="同时制作段数">
-        {[1, 2, 3, 4].map(count => <button key={count} type="button" className="button secondary small"
-          aria-pressed={selected === count} disabled={!connected || pending || count > current.routeConcurrencyCap}
+        {[1, 2, 3, 4, 5, 6, 7, 8].filter(count => count <= current.routeConcurrencyCap).map(count => <button key={count} type="button" className="button secondary small"
+          aria-pressed={selected === count} disabled={!connected || pending}
           onClick={() => void change(count)}>{count} 段</button>)}
       </div>
-      {current.routeConcurrencyCap < 4 && <p className="hint">当前已开放 {current.routeConcurrencyCap} 段，灰色档位暂不可用。</p>}
       {current.desiredAudioConcurrency > current.routeConcurrencyCap ?
         <p className="hint" role="status">此前保存的 {current.desiredAudioConcurrency} 段超出当前开放上限，未生效。可点选已开放档位更新设置。</p> :
         current.desiredAudioConcurrency !== current.effectiveAudioConcurrency &&

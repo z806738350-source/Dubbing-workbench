@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { fail, same, text, uid } from '../store.mjs';
 import { createAssistantModel } from './model.mjs';
 import { createAttachments } from './attachments.mjs';
-import { verifyVision } from './vision.mjs';
 import { createCapabilities, validateCapabilityInput } from './capabilities.mjs';
 import { createAssistantContext, pick, getHelp, draftStatus } from './context.mjs';
 
@@ -505,11 +504,6 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
   }
   const busy = projectId => [...pending.keys()].some(id => store.maybe('assistantRuns', id)?.binding?.projectId === projectId) || storedRuns().some(r => r.binding?.projectId === projectId && ['executing', 'planning', 'waitingJobs'].includes(r.state));
   return { model, attachments, capabilities, create, get, send, approve, control, archive, tick, recover, busy,
-    async verify(p) {
-      if (closing || pending.has('vision-verification')) fail('已有识图验证正在处理，请等待结果', 409);
-      const task = verifyVision(store, model, p); pending.set('vision-verification', task);
-      try { return await task; } finally { pending.delete('vision-verification'); }
-    },
     list: projectId => storedSessions().filter(s => !projectId || s.projectId === projectId),
     get active() { return pending.size + attachments.active; },
     stop() { closing = true; attachments.stop(); },

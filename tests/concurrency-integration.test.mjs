@@ -61,3 +61,13 @@ test('三段在途时迁移被拒；服务器关闭等待回执及本地整理�
     for(const audio of saved.all('audios'))assert.deepEqual(readFileSync(join(directory,audio.path)),wav());
   }finally{saved.close();}
 });
+
+test('scheduler HTTP接受期望8但仍受cap限制，9及客户端改cap均拒绝',async t=>{
+  const {app,request}=await server(t);
+  const response=await request('/api/scheduler',{revision:0,desiredAudioConcurrency:8},'PUT');
+  assert.equal(response.status,200);const current=await response.json();
+  assert.equal(current.desiredAudioConcurrency,8);assert.equal(current.effectiveAudioConcurrency,3);assert.equal(current.routeConcurrencyCap,3);
+  assert.equal((await request('/api/scheduler',{revision:1,desiredAudioConcurrency:9},'PUT')).status,400);
+  assert.equal((await request('/api/scheduler',{revision:1,desiredAudioConcurrency:8,routeConcurrencyCap:8},'PUT')).status,400);
+  assert.equal(app.store.get('settings','scheduler').revision,1);
+});
