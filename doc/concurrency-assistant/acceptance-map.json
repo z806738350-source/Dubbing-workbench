@@ -3734,8 +3734,18 @@
       "id": "VG08",
       "scenario": "构建/包/资源一致",
       "required": "实际发布内容与源码/帮助相符",
-      "status": "实现待验",
-      "evidence": []
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "data/concurrency-assistant/distribution/894cbe0343bf/report.json",
+            "data/concurrency-assistant/distribution/894cbe0343bf/runtime.json"
+          ],
+          "note": "固定源码提交894cbe0343bf，228源码与46构建文件逐项一致；实际包解压零node_modules启动，HTTP资源和能力检查通过；现有Mac不替代干净Mac。"
+        }
+      ]
     },
     {
       "id": "VG09",
@@ -3822,10 +3832,9 @@
       "产品待验": 2
     },
     "checks": {
-      "工程关闭": 102,
+      "工程关闭": 103,
       "有依据延期": 1,
       "模型待验": 5,
-      "实现待验": 1,
       "产品待验": 3
     }
   }
