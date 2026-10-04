@@ -1,0 +1,26 @@
+{
+  "scope": "独立阅读助手后端授权、持久化与恢复，用隔离SQLite和Mock复现；未修改服务实现。",
+  "realProviderCalls": 0,
+  "findings": [
+    {
+      "id": "AUDIT-MESSAGE-ATOMIC",
+      "before": "故障注入首次run写入失败后遗留message=1/run=0；同UUID重试无任务且mockCalls=0。",
+      "after": "消息、旧提案supersede和run改为同一事务；失败后0/0，同UUID重试1/1、mockCalls=1。",
+      "status": "已实现并验证",
+      "beforeEvidence": "automation/assistant-independent-audit-before.json",
+      "afterEvidence": "automation/assistant-independent-audit.json"
+    },
+    {
+      "id": "AUDIT-MANUAL-JOB-OWNERSHIP",
+      "before": "源码发现job.stop及experience.revoke允许通用委托，可能操作同章手动job或其他grant；未实际执行修前停止。",
+      "after": "改为明确提案批准并有执行器回拦；独立delegatedStop遭拒，手动job保持queued。",
+      "status": "已实现并验证",
+      "afterEvidence": "automation/assistant-independent-audit.json"
+    }
+  ],
+  "limits": [
+    "不扩大为穷尽全部隐患。",
+    "Mock像素通路不等于真实视觉验收。",
+    "前端实际缺陷与回归另见ui-evidence.json。"
+  ]
+}

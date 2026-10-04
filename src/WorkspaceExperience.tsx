@@ -200,7 +200,7 @@ export function RecoveryCenter({chapter,state,onClose,onRecovered}:{chapter:Chap
     {error&&<p className="error-inline" role="alert">{error}</p>}
   </Dialog>;
 }
-export function GeneratePlan({plan,chapter,model,grantId,unknown,routeBlocked,retryUnknown,resumeRoute,busy,onGrant,onRetryUnknown,onResumeRoute,onGenerate,onRecheck,onEdit,onClose}:{plan:GenerationPlan;chapter:ChapterDetail;model?:string;grantId:string|null;unknown:boolean;routeBlocked:boolean;retryUnknown:boolean;resumeRoute:boolean;busy:boolean;onGrant:(id:string|null)=>void;onRetryUnknown:(value:boolean)=>void;onResumeRoute:(value:boolean)=>void;onGenerate:()=>Promise<void>;onRecheck:()=>Promise<void>;onEdit:(id:string)=>void;onClose:()=>void}){
+export function GeneratePlan({plan,chapter,model,concurrency,grantId,unknown,routeBlocked,retryUnknown,resumeRoute,busy,onGrant,onRetryUnknown,onResumeRoute,onGenerate,onRecheck,onEdit,onClose}:{plan:GenerationPlan;chapter:ChapterDetail;model?:string;concurrency?:import('react').ReactNode;grantId:string|null;unknown:boolean;routeBlocked:boolean;retryUnknown:boolean;resumeRoute:boolean;busy:boolean;onGrant:(id:string|null)=>void;onRetryUnknown:(value:boolean)=>void;onResumeRoute:(value:boolean)=>void;onGenerate:()=>Promise<void>;onRecheck:()=>Promise<void>;onEdit:(id:string)=>void;onClose:()=>void}){
   const [invalid,setInvalid]=useState(false),[pending,setPending]=useState(false),[error,setError]=useState(''),[updated,setUpdated]=useState(false);
   const execute=async(recheck:boolean)=>{
     if(pending||busy||!recheck&&invalid)return;
@@ -223,6 +223,7 @@ export function GeneratePlan({plan,chapter,model,grantId,unknown,routeBlocked,re
       return <div className="warning section-rule" key={unit.unitId} role="note"><p>第 {members.map(s=>s.order+1).join('、')} 条共 {length} 字符，可能超过单次 120 秒。建议按语义拆短正文；字数不是精确时长预测{unit.members.length>1?'，一起演绎需先缩小整段范围':''}。</p><button className="text-button" disabled={busy||pending} onClick={()=>onEdit(unit.members[0])}>返回编辑</button></div>;
     })}
     {!invalid&&plan.audioRequests>0&&<>
+      {concurrency}
       <TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="生成所列台词" steps={["unit-generate"]} model={model} requests={plan.audioRequests} voiceIds={[...new Set(chapter.segments.filter(s=>plan.memberIds.includes(s.id)).flatMap(s=>s.voiceId?[s.voiceId]:[]))]} onReady={onGrant} disabled={busy||pending}/>
       {unknown&&<label className="check-label warning"><input type="checkbox" checked={retryUnknown} disabled={busy||pending} onChange={e=>onRetryUnknown(e.target.checked)}/>上次结果不明，可能已计费；明确再发送上述请求。</label>}
       {routeBlocked&&<label className="check-label warning"><input type="checkbox" checked={resumeRoute} disabled={busy||pending} onChange={e=>onResumeRoute(e.target.checked)}/>已核对接口权限与额度，恢复本次声音请求。</label>}
@@ -231,6 +232,6 @@ export function GeneratePlan({plan,chapter,model,grantId,unknown,routeBlocked,re
     {error&&<p className="error-inline" role="alert">{error}</p>}
   </Dialog>;
 }
-export function QuickHelp({onClose,onDemo,onImport,configured}:{onClose:()=>void;onDemo:()=>void;onImport:()=>void;configured:boolean}){
-  return <Dialog title="四步完成一章配音" onClose={onClose}><ol className="quick-start"><li><strong>导入文字</strong><p>新建项目，按章节导入 TXT、Markdown，或直接粘贴原文。</p></li><li><strong>让 AI 准备</strong><p>选择“AI先安排”，常规分段和表演建议自动进入初稿。只处理说话人疑点，为角色试听并选声音。</p></li><li><strong>试听与修改</strong><p>生成待办，逐条或整章试听。选两条连续对白可“一起演绎”；“声音背景”集中设置环境、音效、音乐。</p></li><li><strong>导出成品</strong><p>确认实际试听结果，导出 WAV 或 MP3。导出使用同一母版，不重复调用配音模型。</p></li></ol><p className="hint">有效输入自动保存。空正文或输入到一半的数字先保留本机；“本机暂存”可以找回。AI安排不代表声音已听评通过。</p>{!configured&&<p className="warning">当前声音接口未配置。你仍可免费试听演示，再从“设置与连接”完成配置。</p>}<div className="button-row"><button className="button" onClick={onDemo}><Play size={16}/>免费试听演示</button><button className="button primary" onClick={onImport}>开始导入</button></div><p className="hint">演示使用本机语音，供体验播放器，不代表 Seed Audio 的生成效果。</p></Dialog>;
+export function QuickHelp({onClose,onDemo,onImport,configured,onAssistant}:{onClose:()=>void;onDemo:()=>void;onImport:()=>void;configured:boolean;onAssistant?:()=>void}){
+  return <Dialog title="四步完成一章配音" onClose={onClose}><ol className="quick-start"><li><strong>导入文字</strong><p>新建项目，按章节导入 TXT、Markdown，或直接粘贴原文。</p></li><li><strong>让 AI 准备</strong><p>选择“AI先安排”，常规分段和表演建议自动进入初稿。只处理说话人疑点，为角色试听并选声音。</p></li><li><strong>试听与修改</strong><p>生成待办，逐条或整章试听。选两条连续对白可“一起演绎”；“声音背景”集中设置环境、音效、音乐。</p></li><li><strong>导出成品</strong><p>确认实际试听结果，导出 WAV 或 MP3。导出使用同一母版，不重复调用配音模型。</p></li></ol><p className="hint">有效输入自动保存。空正文或输入到一半的数字先保留本机；“本机暂存”可以找回。AI安排不代表声音已听评通过。</p>{!configured&&<p className="warning">当前声音接口未配置。你仍可免费试听演示，再从“设置与连接”完成配置。</p>}<div className="button-row">{onAssistant&&<button className="button" onClick={onAssistant}>问助手</button>}<button className="button" onClick={onDemo}><Play size={16}/>免费试听演示</button><button className="button primary" onClick={onImport}>开始导入</button></div><p className="hint">演示使用本机语音，供体验播放器，不代表 Seed Audio 的生成效果。</p></Dialog>;
 }

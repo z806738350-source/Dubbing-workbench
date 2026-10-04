@@ -1,0 +1,6501 @@
+{
+  "manifestVersion": 1,
+  "sourceCommit": "ae96c84cb2c7c6ae209e428010faa289a0b9e181",
+  "scope": "M0 existing behavior inventory plus implemented assistant adapters; not permission to forward arbitrary HTTP/action",
+  "capabilities": [
+    {
+      "id": "project.create",
+      "version": 1,
+      "description": "新建项目及旁白角色",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "projects"
+      ],
+      "action": "project.create",
+      "target": "projects",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "chapter": false,
+      "help": "projects"
+    },
+    {
+      "id": "project.rename",
+      "version": 1,
+      "description": "重命名当前项目及其文件夹",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "projects"
+      ],
+      "action": "project.rename",
+      "target": "projects",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "chapter": false,
+      "help": "projects"
+    },
+    {
+      "id": "project.delete",
+      "version": 1,
+      "description": "删除已单独确认范围的项目",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "destructive",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "delete"
+      ],
+      "action": "project.delete",
+      "target": "projects",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "chapter": false,
+      "help": "delete"
+    },
+    {
+      "id": "chapter.create",
+      "version": 1,
+      "description": "从授权文字新建章节",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 150
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 1000000
+          },
+          "segment": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "title",
+          "source"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "import"
+      ],
+      "action": "chapter.create",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "chapter": false,
+      "help": "import"
+    },
+    {
+      "id": "chapter.update",
+      "version": 1,
+      "description": "修改章节标题或片段间隔",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 150
+          },
+          "gap": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10
+          }
+        },
+        "required": []
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "export"
+      ],
+      "action": "chapter.update",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "export"
+    },
+    {
+      "id": "chapter.move",
+      "version": 1,
+      "description": "将当前章向前或向后移动一章",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "enum": [
+              -1,
+              1
+            ]
+          }
+        },
+        "required": [
+          "direction"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "projects"
+      ],
+      "action": "chapter.move",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "projects"
+    },
+    {
+      "id": "chapter.repair-structural-decisions",
+      "version": 1,
+      "description": "修复已预览的可证明结构决定",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "structure"
+      ],
+      "action": "chapter.repair-structural-decisions",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "structure"
+    },
+    {
+      "id": "role.create",
+      "version": 1,
+      "description": "添加本项目角色",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "roles"
+      ],
+      "action": "role.create",
+      "target": "roles",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "roles"
+    },
+    {
+      "id": "role.update",
+      "version": 1,
+      "description": "编辑角色名称、本章备注、别名或归档状态",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 3000
+          },
+          "quote": {
+            "type": "string",
+            "maxLength": 3000
+          },
+          "gender": {
+            "enum": [
+              "未知",
+              "女",
+              "男",
+              "其他"
+            ]
+          },
+          "aliasSources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "chapterId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "kind": {
+                  "enum": [
+                    "原文明示",
+                    "上下文推断",
+                    "用户补充"
+                  ]
+                },
+                "sourceQuote": {
+                  "type": "string",
+                  "maxLength": 3000
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 3000
+                },
+                "sourceVersion": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "needsReview": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name",
+                "chapterId",
+                "kind",
+                "sourceVersion"
+              ]
+            },
+            "minItems": 0
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "roles"
+      ],
+      "action": "role.update",
+      "target": "roles",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "roles"
+    },
+    {
+      "id": "segment.create",
+      "version": 1,
+      "description": "添加用户明确要求的新台词",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "editing"
+      ],
+      "action": "segment.create",
+      "target": "segments",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "editing"
+    },
+    {
+      "id": "segment.update",
+      "version": 1,
+      "description": "修改指定台词的表演、参数或明确授权正文",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 10000
+          },
+          "type": {
+            "enum": [
+              "narration",
+              "dialogue",
+              "thought"
+            ]
+          },
+          "roleId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "voiceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "resetVoice": {
+            "type": "boolean"
+          },
+          "performance": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "excluded": {
+            "type": "boolean"
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "speech_rate": {
+                "type": "integer",
+                "minimum": -50,
+                "maximum": 100
+              },
+              "loudness_rate": {
+                "type": "integer",
+                "minimum": -50,
+                "maximum": 100
+              },
+              "pitch_rate": {
+                "type": "integer",
+                "minimum": -12,
+                "maximum": 12
+              }
+            },
+            "required": [
+              "speech_rate",
+              "loudness_rate",
+              "pitch_rate"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "editing"
+      ],
+      "action": "segment.update",
+      "target": "segments",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "editing"
+    },
+    {
+      "id": "segment.rebind",
+      "version": 1,
+      "description": "为所选台词指定本项目角色",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "roleId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "ids",
+          "roleId"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "roles"
+      ],
+      "action": "segment.rebind",
+      "target": "segments",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "roles"
+    },
+    {
+      "id": "segment.confirm",
+      "version": 1,
+      "description": "记录已确定的说话人与声音配置",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "roleOnly": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "roles"
+      ],
+      "action": "segment.confirm",
+      "target": "segments",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "roles"
+    },
+    {
+      "id": "segment.split",
+      "version": 1,
+      "description": "按已预览的逐字边界拆分台词",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 10000
+            },
+            "minItems": 2
+          },
+          "performance": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "minItems": 2
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "structure"
+      ],
+      "action": "segment.split",
+      "target": "segments",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "structure"
+    },
+    {
+      "id": "segment.merge",
+      "version": 1,
+      "description": "合并相邻同角色台词",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "choice": {
+            "enum": [
+              "first",
+              "second"
+            ]
+          },
+          "performance": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "structure"
+      ],
+      "action": "segment.merge",
+      "target": "segments",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "structure"
+    },
+    {
+      "id": "segment.template",
+      "version": 1,
+      "description": "按差异预览切换单句模板",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "template"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "templates"
+      ],
+      "action": "segment.template",
+      "target": "segments",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "templates"
+    },
+    {
+      "id": "segment.restore",
+      "version": 1,
+      "description": "恢复单句上一版或通过版及其设置",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "restoreSettings": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "audioId"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "history"
+      ],
+      "action": "segment.restore",
+      "target": "segments",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "history"
+    },
+    {
+      "id": "segment.review",
+      "version": 1,
+      "description": "记录明确音频的人工听评或返工",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "state": {
+            "enum": [
+              "passed",
+              "rework"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "audioId",
+          "state"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "review"
+      ],
+      "action": "segment.review",
+      "target": "segments",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "review"
+    },
+    {
+      "id": "unit.review",
+      "version": 1,
+      "description": "记录明确音频的人工听评或返工",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "state": {
+            "enum": [
+              "passed",
+              "rework"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "audioId",
+          "state"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "review"
+      ],
+      "action": "unit.review",
+      "target": "units",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "review"
+    },
+    {
+      "id": "voice.update",
+      "version": 1,
+      "description": "修改共享参考声音名称、状态或观察",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "state": {
+            "enum": [
+              "active",
+              "archived",
+              "stopped"
+            ]
+          },
+          "observations": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "tone": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "accent": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "performance": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "volume": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            },
+            "required": []
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "voices"
+      ],
+      "action": "voice.update",
+      "target": "voices",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "chapter": false,
+      "help": "voices"
+    },
+    {
+      "id": "voice.delete",
+      "version": 1,
+      "description": "删除单独确认的参考素材",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "destructive",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "voices"
+      ],
+      "action": "voice.delete",
+      "target": "voices",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "chapter": false,
+      "help": "voices"
+    },
+    {
+      "id": "voice-session.create",
+      "version": 1,
+      "description": "保存一份声音创建描述",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "description"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "voice-create"
+      ],
+      "action": "voice-session.create",
+      "target": "voiceSessions",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "chapter": false,
+      "help": "voice-create"
+    },
+    {
+      "id": "voice-session.update",
+      "version": 1,
+      "description": "修改声音创建描述",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "id",
+          "description"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "voice-create"
+      ],
+      "action": "voice-session.update",
+      "target": "voiceSessions",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "chapter": false,
+      "help": "voice-create"
+    },
+    {
+      "id": "voice-session.abandon",
+      "version": 1,
+      "description": "放弃描述并停止本会话后续请求",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "voice-create"
+      ],
+      "action": "voice-session.abandon",
+      "target": "voiceSessions",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "chapter": false,
+      "help": "voice-create"
+    },
+    {
+      "id": "voice-candidate.discard",
+      "version": 1,
+      "description": "放弃已指定的声音候选",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "sessionId"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "voice-create"
+      ],
+      "action": "voice-candidate.discard",
+      "target": "attempts",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "chapter": false,
+      "help": "voice-create"
+    },
+    {
+      "id": "unit.create",
+      "version": 1,
+      "description": "将连续台词建立为共同演绎组",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "guidance": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "group"
+      ],
+      "action": "unit.create",
+      "target": "units",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "group"
+    },
+    {
+      "id": "unit.update",
+      "version": 1,
+      "description": "保存共同演绎或场景设置",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "guidance": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "backgroundPresence": {
+            "enum": [
+              "clear",
+              "natural",
+              "subtle",
+              "unspecified"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "mode"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "scene"
+      ],
+      "action": "unit.update",
+      "target": "units",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "scene"
+    },
+    {
+      "id": "unit.dissolve",
+      "version": 1,
+      "description": "按照预览取消一起演绎",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "group"
+      ],
+      "action": "unit.dissolve",
+      "target": "units",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "group"
+    },
+    {
+      "id": "unit.switch",
+      "version": 1,
+      "description": "选择已有匹配纯人声或场景版本",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "mode"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "history"
+      ],
+      "action": "unit.switch",
+      "target": "units",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "history"
+    },
+    {
+      "id": "unit.template",
+      "version": 1,
+      "description": "按差异预览切换组或场景模板",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "template"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "templates"
+      ],
+      "action": "unit.template",
+      "target": "units",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "templates"
+    },
+    {
+      "id": "unit.select-result",
+      "version": 1,
+      "description": "采用设置匹配的历史声音",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "audioId"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "history"
+      ],
+      "action": "unit.select-result",
+      "target": "units",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "history"
+    },
+    {
+      "id": "unit.restore",
+      "version": 1,
+      "description": "恢复历史声音和对应设置",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "restoreSettings": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "audioId"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "history"
+      ],
+      "action": "unit.restore",
+      "target": "units",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "history"
+    },
+    {
+      "id": "event.create",
+      "version": 1,
+      "description": "添加场景声音事件",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "kind": {
+            "enum": [
+              "environment",
+              "effect",
+              "music"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1500
+          },
+          "memberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "position": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "startMemberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "startPosition": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "endMemberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "endPosition": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "state": {
+            "enum": [
+              "draft",
+              "adopted",
+              "removed"
+            ]
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "原文明示",
+                  "上下文推断",
+                  "创作建议",
+                  "用户创作选择"
+                ]
+              },
+              "quote": {
+                "type": "string",
+                "maxLength": 3000
+              },
+              "quotes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 3000
+                },
+                "minItems": 1
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 3000
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "transition": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "memberId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "quote": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 3000
+              },
+              "occurrence": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "development": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "volumeChange": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "memberId",
+              "quote",
+              "occurrence",
+              "development"
+            ]
+          }
+        },
+        "required": [
+          "unitId",
+          "kind",
+          "description"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "scene"
+      ],
+      "action": "event.create",
+      "target": "events",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "scene"
+    },
+    {
+      "id": "event.update",
+      "version": 1,
+      "description": "编辑或采用声音事件",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "kind": {
+            "enum": [
+              "environment",
+              "effect",
+              "music"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1500
+          },
+          "memberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "position": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "startMemberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "startPosition": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "endMemberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "endPosition": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "state": {
+            "enum": [
+              "draft",
+              "adopted",
+              "removed"
+            ]
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "原文明示",
+                  "上下文推断",
+                  "创作建议",
+                  "用户创作选择"
+                ]
+              },
+              "quote": {
+                "type": "string",
+                "maxLength": 3000
+              },
+              "quotes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 3000
+                },
+                "minItems": 1
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 3000
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "transition": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "memberId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "quote": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 3000
+              },
+              "occurrence": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "development": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "volumeChange": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "memberId",
+              "quote",
+              "occurrence",
+              "development"
+            ]
+          }
+        },
+        "required": [
+          "unitId",
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "scene"
+      ],
+      "action": "event.update",
+      "target": "events",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "scene"
+    },
+    {
+      "id": "event.remove",
+      "version": 1,
+      "description": "移除声音事件",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "unitId",
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "scene"
+      ],
+      "action": "event.remove",
+      "target": "events",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "scene"
+    },
+    {
+      "id": "event.reconfirm",
+      "version": 1,
+      "description": "重新核对声音事件位置",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "unitId",
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "scene"
+      ],
+      "action": "event.reconfirm",
+      "target": "events",
+      "sourceFile": "server/enhancement.mjs",
+      "handler": "domain.mutate",
+      "help": "scene"
+    },
+    {
+      "id": "job.stop",
+      "version": 1,
+      "description": "只停止指定任务的后续请求",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "tasks"
+      ],
+      "action": "job.stop",
+      "target": "jobs",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "chapter": false,
+      "help": "tasks"
+    },
+    {
+      "id": "operation.prepareChapter",
+      "version": 1,
+      "description": "让AI准备当前章或所选台词",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "analysisKind": {
+            "enum": [
+              "extract",
+              "director",
+              "scene"
+            ]
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "splitOnly": {
+            "type": "boolean"
+          },
+          "autoApply": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 1000000
+          }
+        },
+        "required": []
+      },
+      "access": "paid",
+      "delegation": "allowed-in-mandate",
+      "cost": "analysis-plan.textRequests",
+      "helpRefs": [
+        "analysis"
+      ],
+      "operation": "prepareChapter",
+      "handler": "experience.run",
+      "sourceFile": "server/experience.mjs",
+      "help": "analysis"
+    },
+    {
+      "id": "operation.useVoice",
+      "version": 1,
+      "description": "把声音应用到本章角色或单句，或保存候选到库",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "enum": [
+              "library"
+            ]
+          },
+          "voiceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "roleId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "segmentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "apply": {
+            "type": "boolean"
+          },
+          "updateDefault": {
+            "type": "boolean"
+          }
+        },
+        "required": []
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "voices"
+      ],
+      "operation": "useVoice",
+      "handler": "experience.run",
+      "sourceFile": "server/experience.mjs",
+      "help": "voices"
+    },
+    {
+      "id": "operation.groupAndGenerate",
+      "version": 1,
+      "description": "建立一起演绎组并生成",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "guidance": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "access": "paid",
+      "delegation": "allowed-in-mandate",
+      "cost": "one-audio-request",
+      "helpRefs": [
+        "group"
+      ],
+      "operation": "groupAndGenerate",
+      "handler": "experience.run",
+      "sourceFile": "server/experience.mjs",
+      "help": "group"
+    },
+    {
+      "id": "operation.sceneAndGenerate",
+      "version": 1,
+      "description": "采用所选事件并生成场景版",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "eventIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 0
+          }
+        },
+        "required": [
+          "unitId",
+          "eventIds"
+        ]
+      },
+      "access": "paid",
+      "delegation": "allowed-in-mandate",
+      "cost": "one-audio-request",
+      "helpRefs": [
+        "scene"
+      ],
+      "operation": "sceneAndGenerate",
+      "handler": "experience.run",
+      "sourceFile": "server/experience.mjs",
+      "help": "scene"
+    },
+    {
+      "id": "operation.generateSelection",
+      "version": 1,
+      "description": "生成缺失、更新所选或重做返工",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "actionKind": {
+            "enum": [
+              "fillMissing",
+              "updateSelected",
+              "redoRejected",
+              "forceRegenerate"
+            ]
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "access": "paid",
+      "delegation": "allowed-in-mandate",
+      "cost": "generation-plan.audioRequests",
+      "helpRefs": [
+        "generation"
+      ],
+      "operation": "generateSelection",
+      "handler": "experience.run",
+      "sourceFile": "server/experience.mjs",
+      "help": "generation"
+    },
+    {
+      "id": "operation.voiceCandidate",
+      "version": 1,
+      "description": "生成一个描述声音候选",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "sessionId"
+        ]
+      },
+      "access": "paid",
+      "delegation": "allowed-in-mandate",
+      "cost": "one-audio-request",
+      "helpRefs": [
+        "voice-create"
+      ],
+      "operation": "voiceCandidate",
+      "handler": "experience.run",
+      "sourceFile": "server/experience.mjs",
+      "chapter": false,
+      "help": "voice-create"
+    },
+    {
+      "id": "operation.export",
+      "version": 1,
+      "description": "导出已经人工检查通过的当前成品",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "enum": [
+              "wav",
+              "mp3"
+            ]
+          }
+        },
+        "required": [
+          "format"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "export"
+      ],
+      "operation": "export",
+      "handler": "experience.run",
+      "sourceFile": "server/experience.mjs",
+      "help": "export"
+    },
+    {
+      "id": "generation.plan",
+      "version": 1,
+      "description": "免费核对所选生成范围及请求数",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "actionKind": {
+            "enum": [
+              "fillMissing",
+              "updateSelected",
+              "redoRejected",
+              "forceRegenerate"
+            ]
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "generation"
+      ],
+      "handler": "experience.plan",
+      "help": "generation"
+    },
+    {
+      "id": "analysis.plan",
+      "version": 1,
+      "description": "免费核对分析范围及文本请求数",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "analysisKind": {
+            "enum": [
+              "extract",
+              "director",
+              "scene"
+            ]
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "splitOnly": {
+            "type": "boolean"
+          },
+          "autoApply": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 1000000
+          }
+        },
+        "required": []
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "analysis"
+      ],
+      "handler": "analysis.plan",
+      "help": "analysis"
+    },
+    {
+      "id": "analysis.resume",
+      "version": 1,
+      "description": "继续明确未完成的分析批次",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "batchIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "replace": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "paid",
+      "delegation": "allowed-in-mandate",
+      "cost": "selected-analysis-batches",
+      "helpRefs": [
+        "tasks"
+      ],
+      "target": "suggestions",
+      "handler": "analysis.resume",
+      "help": "tasks"
+    },
+    {
+      "id": "analysis.edit",
+      "version": 1,
+      "description": "校对已有分析中的一条标注",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "batchId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "itemId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "remove": {
+            "type": "boolean"
+          },
+          "item": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              },
+              "to": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              },
+              "segmentId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "roleId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "newRoleKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "newRole": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "type": {
+                "enum": [
+                  "narration",
+                  "dialogue",
+                  "thought"
+                ]
+              },
+              "performance": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "evidence": {
+                "enum": [
+                  "原文明示",
+                  "上下文推断",
+                  "创作建议",
+                  "用户补充"
+                ]
+              },
+              "evidenceRefs": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000
+                },
+                "minItems": 0
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 3000
+              },
+              "uncertain": {
+                "type": "boolean"
+              },
+              "unitId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "kind": {
+                "enum": [
+                  "environment",
+                  "effect",
+                  "music"
+                ]
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1500
+              },
+              "memberId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "position": {
+                "enum": [
+                  "before",
+                  "during",
+                  "after"
+                ]
+              },
+              "startMemberId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "startPosition": {
+                "enum": [
+                  "before",
+                  "during",
+                  "after"
+                ]
+              },
+              "endMemberId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "endPosition": {
+                "enum": [
+                  "before",
+                  "during",
+                  "after"
+                ]
+              }
+            },
+            "required": []
+          }
+        },
+        "required": [
+          "id",
+          "batchId"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "analysis"
+      ],
+      "target": "suggestions",
+      "handler": "analysis.edit",
+      "help": "analysis"
+    },
+    {
+      "id": "analysis.apply",
+      "version": 1,
+      "description": "采用当前有效建议或AI语义拆分",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "selected": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "replaceConfirmed": {
+            "type": "boolean"
+          },
+          "inheritPerformanceConfirmed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "analysis"
+      ],
+      "target": "suggestions",
+      "handler": "analysis.apply",
+      "help": "analysis"
+    },
+    {
+      "id": "analysis.previewReuse",
+      "version": 1,
+      "description": "免费预检历史场景建议",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "unitId"
+        ]
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "suggestions"
+      ],
+      "target": "suggestions",
+      "handler": "analysis.previewReuse",
+      "help": "suggestions"
+    },
+    {
+      "id": "analysis.reuse",
+      "version": 1,
+      "description": "把历史场景建议加入当前场景",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "selected": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id",
+          "unitId",
+          "selected"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "suggestions"
+      ],
+      "target": "suggestions",
+      "handler": "analysis.reuse",
+      "help": "suggestions"
+    },
+    {
+      "id": "experience.undo",
+      "version": 1,
+      "description": "撤销尚未被后续修改的AI安排",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "changeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "changeId"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "drafts"
+      ],
+      "handler": "experience.undo",
+      "help": "drafts"
+    },
+    {
+      "id": "experience.unprotect",
+      "version": 1,
+      "description": "允许AI下一次安排此句表演",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "segmentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "segmentId"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "drafts"
+      ],
+      "handler": "experience.unprotect",
+      "help": "drafts"
+    },
+    {
+      "id": "experience.revoke",
+      "version": 1,
+      "description": "撤回指定任务授权，停止尚未外发的请求",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "grantId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "grantId"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "authorization"
+      ],
+      "chapter": false,
+      "handler": "experience.revoke",
+      "help": "authorization"
+    },
+    {
+      "id": "job.master",
+      "version": 1,
+      "description": "免费准备整章试听母版",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "playback"
+      ],
+      "handler": "worker.submit",
+      "help": "playback"
+    },
+    {
+      "id": "job.voice-test",
+      "version": 1,
+      "description": "用已有参考朗读指定测试文字",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "voiceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "voiceId",
+          "text"
+        ]
+      },
+      "access": "paid",
+      "delegation": "allowed-in-mandate",
+      "cost": "one-audio-request",
+      "helpRefs": [
+        "voices"
+      ],
+      "handler": "worker.submit",
+      "chapter": false,
+      "help": "voices"
+    },
+    {
+      "id": "voice.save-candidate",
+      "version": 1,
+      "description": "免费把合格候选保存到音色库",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "audioId",
+          "name"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "voice-create"
+      ],
+      "chapter": false,
+      "handler": "saveCandidateVoice",
+      "help": "voice-create"
+    },
+    {
+      "id": "export.reveal",
+      "version": 1,
+      "description": "在本机访达中定位已保存成品",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "ui-only",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "export"
+      ],
+      "target": "exports",
+      "handler": "revealExport",
+      "help": "export"
+    },
+    {
+      "id": "audio.tail.repair",
+      "version": 1,
+      "description": "免费预览并清理所选纯人声的尾部异常，保留原件",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "unitIds"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "original-audio"
+      ],
+      "handler": "repairAudio",
+      "help": "original-audio"
+    },
+    {
+      "id": "audio.original.restore",
+      "version": 1,
+      "description": "免费恢复所选处理版对应的真实供应商原件",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "restoreSettings": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "audioId"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "original-audio"
+      ],
+      "target": "units",
+      "handler": "unit.select-result / unit.restore",
+      "help": "original-audio"
+    },
+    {
+      "id": "ui.navigate",
+      "version": 1,
+      "description": "提供已注册功能入口的定位按钮",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "enum": [
+              "voices",
+              "tasks",
+              "export",
+              "history",
+              "scene",
+              "assistant-settings",
+              "project-overview",
+              "segment"
+            ]
+          },
+          "segmentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "access": "ui-only",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "workflow"
+      ],
+      "chapter": false,
+      "handler": "UI action requiring user click",
+      "help": "workflow"
+    },
+    {
+      "id": "ui.play",
+      "version": 1,
+      "description": "提供当前任务授权音频的试听按钮",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "voices",
+              "audios",
+              "masters",
+              "exports"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ]
+      },
+      "access": "ui-only",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "playback"
+      ],
+      "chapter": false,
+      "handler": "playIntent via UI action requiring user click",
+      "help": "playback"
+    },
+    {
+      "id": "read.chapter",
+      "version": 1,
+      "description": "读取当前任务章节和实际声音状态",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "workflow"
+      ],
+      "target": null,
+      "handler": "bounded projection",
+      "chapter": true,
+      "help": "workflow"
+    },
+    {
+      "id": "read.segment",
+      "version": 1,
+      "description": "读取一条完整台词与表演",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "workflow"
+      ],
+      "target": "segments",
+      "handler": "bounded projection",
+      "chapter": true,
+      "help": "workflow"
+    },
+    {
+      "id": "read.voice",
+      "version": 1,
+      "description": "读取一个参考声音",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "workflow"
+      ],
+      "target": "voices",
+      "handler": "bounded projection",
+      "chapter": false,
+      "help": "workflow"
+    },
+    {
+      "id": "read.audio",
+      "version": 1,
+      "description": "读取一个音频的来源与听评",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "workflow"
+      ],
+      "target": "audios",
+      "handler": "bounded projection",
+      "chapter": false,
+      "help": "workflow"
+    },
+    {
+      "id": "read.attempts",
+      "version": 1,
+      "description": "读取指定任务的请求记录",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "tasks"
+      ],
+      "target": "jobs",
+      "handler": "bounded projection",
+      "chapter": false,
+      "help": "tasks"
+    },
+    {
+      "id": "read.operation",
+      "version": 1,
+      "description": "读取原持久操作回执",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "tasks"
+      ],
+      "target": null,
+      "handler": "bounded projection",
+      "chapter": false,
+      "help": "tasks"
+    },
+    {
+      "id": "read.project-deletion-plan",
+      "version": 1,
+      "description": "预览指定项目删除范围",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "workflow"
+      ],
+      "target": "projects",
+      "handler": "bounded projection",
+      "chapter": false,
+      "help": "workflow"
+    },
+    {
+      "id": "read.state",
+      "version": 1,
+      "description": "读取绑定项目的章节、角色、声音和任务摘要",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "workflow"
+      ],
+      "chapter": false,
+      "handler": "bounded snapshot",
+      "help": "workflow"
+    },
+    {
+      "id": "help.search",
+      "version": 1,
+      "description": "查询当前工具用法与准确入口",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "capabilityId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "pageId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "errorCode": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        },
+        "required": []
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "workflow"
+      ],
+      "chapter": false,
+      "handler": "getHelp",
+      "help": "workflow"
+    },
+    {
+      "id": "settings.update",
+      "version": 1,
+      "description": "人工修改分析模型、默认间隔与增强功能开关",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "access": "ui-only",
+      "delegation": "human-only",
+      "cost": "local-only",
+      "helpRefs": [
+        "settings"
+      ],
+      "chapter": false,
+      "handler": null,
+      "help": "settings"
+    },
+    {
+      "id": "settings.assistant",
+      "version": 1,
+      "description": "人工独立配置助手模型、接口和凭据；可选多模态模型",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "access": "ui-only",
+      "delegation": "human-only",
+      "cost": "local-only",
+      "helpRefs": [
+        "assistant-settings"
+      ],
+      "chapter": false,
+      "handler": null,
+      "help": "assistant-settings"
+    },
+    {
+      "id": "experience.grant",
+      "version": 1,
+      "description": "用户批准外发素材、用途、路由和请求上限",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "access": "ui-only",
+      "delegation": "human-only",
+      "cost": "local-only",
+      "helpRefs": [
+        "authorization"
+      ],
+      "chapter": false,
+      "handler": null,
+      "help": "authorization"
+    },
+    {
+      "id": "experience.policy",
+      "version": 1,
+      "description": "用户选择AI先安排或先看建议",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "access": "ui-only",
+      "delegation": "human-only",
+      "cost": "local-only",
+      "helpRefs": [
+        "authorization"
+      ],
+      "chapter": false,
+      "handler": null,
+      "help": "authorization"
+    },
+    {
+      "id": "workspace.choose",
+      "version": 1,
+      "description": "本机用户通过文件夹选择器指定工作区",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "access": "ui-only",
+      "delegation": "human-only",
+      "cost": "local-only",
+      "helpRefs": [
+        "workspace"
+      ],
+      "chapter": false,
+      "handler": null,
+      "help": "workspace"
+    },
+    {
+      "id": "workspace.move",
+      "version": 1,
+      "description": "本机用户独立确认完整工作区迁移",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "access": "ui-only",
+      "delegation": "human-only",
+      "cost": "local-only",
+      "helpRefs": [
+        "workspace"
+      ],
+      "chapter": false,
+      "handler": null,
+      "help": "workspace"
+    },
+    {
+      "id": "voice.upload",
+      "version": 1,
+      "description": "用户上传授权参考录音后才能使用，不接受任意磁盘路径",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "access": "ui-only",
+      "delegation": "human-only",
+      "cost": "local-only",
+      "helpRefs": [
+        "voices"
+      ],
+      "chapter": false,
+      "handler": null,
+      "help": "voices"
+    },
+    {
+      "id": "application.maintenance",
+      "version": 1,
+      "description": "安装、更新、整库备份和Git发布只提供本机操作说明",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "access": "ui-only",
+      "delegation": "human-only",
+      "cost": "local-only",
+      "helpRefs": [
+        "settings"
+      ],
+      "chapter": false,
+      "handler": null,
+      "help": "settings"
+    }
+  ],
+  "ordinaryActions": [
+    {
+      "action": "chapter.create",
+      "capabilityId": "chapter.create",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 517,
+        "anchor": "action === \"chapter.create\""
+      },
+      "legacyParameterNames": [
+        "projectId",
+        "title",
+        "source",
+        "importedSource",
+        "sourceFilename",
+        "segment",
+        "operationId"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 150
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 1000000
+          },
+          "segment": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "title",
+          "source"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "章节管理/导入/导出设置"
+      },
+      "versions": [
+        "server-created object; operation receipt where supported"
+      ],
+      "prerequisites": "operationId+完整request幂等；notApplied仅明确导入校验拒绝。原文最多100万字符，标题150。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "chapter.move",
+      "capabilityId": "chapter.move",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 797,
+        "anchor": "action === \"chapter.move\""
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "direction"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "enum": [
+              -1,
+              1
+            ]
+          }
+        },
+        "required": [
+          "direction"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "章节管理/导入/导出设置"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "本章与相邻章必须editable；更改项目contextRevision。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "chapter.repair-structural-decisions",
+      "capabilityId": "chapter.repair-structural-decisions",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 1138,
+        "anchor": "action === 'chapter.repair-structural-decisions'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "scope",
+        "ids"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "delegation": "explicit-proposal",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "章节管理/导入/导出设置"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "仅scope预览中可证明父来源的eligible条；保存ux-change，未知来源要人判断。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "chapter.update",
+      "capabilityId": "chapter.update",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 781,
+        "anchor": "action === \"chapter.update\""
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "title",
+        "gap"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 150
+          },
+          "gap": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10
+          }
+        },
+        "required": []
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "章节管理/导入/导出设置"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "event.create",
+      "capabilityId": "event.create",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 438,
+        "anchor": "action === 'event.create'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "unitId",
+        "entityRevision",
+        "kind",
+        "description",
+        "memberId",
+        "position",
+        "startMemberId",
+        "startPosition",
+        "endMemberId",
+        "endPosition",
+        "state",
+        "transition",
+        "evidence"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "kind": {
+            "enum": [
+              "environment",
+              "effect",
+              "music"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1500
+          },
+          "memberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "position": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "startMemberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "startPosition": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "endMemberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "endPosition": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "state": {
+            "enum": [
+              "draft",
+              "adopted",
+              "removed"
+            ]
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "原文明示",
+                  "上下文推断",
+                  "创作建议",
+                  "用户创作选择"
+                ]
+              },
+              "quote": {
+                "type": "string",
+                "maxLength": 3000
+              },
+              "quotes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 3000
+                },
+                "minItems": 1
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 3000
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "transition": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "memberId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "quote": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 3000
+              },
+              "occurrence": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "development": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "volumeChange": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "memberId",
+              "quote",
+              "occurrence",
+              "development"
+            ]
+          }
+        },
+        "required": [
+          "unitId",
+          "kind",
+          "description"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "环境/音效/音乐；描述最多1500 Unicode字符，总prompt另受3000限制。锚点为成员及before/during/after，音乐转折须逐字quote+occurrence。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "event.reconfirm",
+      "capabilityId": "event.reconfirm",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 444,
+        "anchor": "'event.update','event.remove','event.reconfirm'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "unitId",
+        "entityRevision",
+        "id",
+        "eventId",
+        "eventRevision"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "unitId",
+          "id"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "明确复核当前位置才更新basis；不能用普通编辑绕过。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "event.remove",
+      "capabilityId": "event.remove",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 443,
+        "anchor": "action === 'event.remove'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "unitId",
+        "entityRevision",
+        "id",
+        "eventId",
+        "eventRevision"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "unitId",
+          "id"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "event.update",
+      "capabilityId": "event.update",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 445,
+        "anchor": "action === 'event.update'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "unitId",
+        "entityRevision",
+        "id",
+        "eventId",
+        "eventRevision",
+        "kind",
+        "description",
+        "memberId",
+        "position",
+        "startMemberId",
+        "startPosition",
+        "endMemberId",
+        "endPosition",
+        "state",
+        "transition",
+        "evidence"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "kind": {
+            "enum": [
+              "environment",
+              "effect",
+              "music"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1500
+          },
+          "memberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "position": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "startMemberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "startPosition": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "endMemberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "endPosition": {
+            "enum": [
+              "before",
+              "during",
+              "after"
+            ]
+          },
+          "state": {
+            "enum": [
+              "draft",
+              "adopted",
+              "removed"
+            ]
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "原文明示",
+                  "上下文推断",
+                  "创作建议",
+                  "用户创作选择"
+                ]
+              },
+              "quote": {
+                "type": "string",
+                "maxLength": 3000
+              },
+              "quotes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 3000
+                },
+                "minItems": 1
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 3000
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "transition": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "memberId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "quote": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 3000
+              },
+              "occurrence": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "development": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "volumeChange": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "memberId",
+              "quote",
+              "occurrence",
+              "development"
+            ]
+          }
+        },
+        "required": [
+          "unitId",
+          "id"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "事件revision与unit/chapter revision同查；对needsReview的普通update不会清除复核状态；引用需当前原文逐字依据。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "job.stop",
+      "capabilityId": "job.stop",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 772,
+        "anchor": "action === \"job.stop\""
+      },
+      "legacyParameterNames": [
+        "id"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "delegation": "explicit-proposal",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "任务 → 停止后续请求"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "只设置stop=true；在途调用可能成功，不能承诺取消付费。",
+      "sideEffects": [
+        "停止后续派发"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "project.create",
+      "capabilityId": "project.create",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 481,
+        "anchor": "action === \"project.create\""
+      },
+      "legacyParameterNames": [
+        "name"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "项目管理"
+      },
+      "versions": [
+        "server-created object; operation receipt where supported"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "project.delete",
+      "capabilityId": "project.delete",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 1137,
+        "anchor": "action === 'project.delete'"
+      },
+      "legacyParameterNames": [
+        "id",
+        "entityRevision",
+        "scope"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "delegation": "explicit-proposal",
+      "access": "destructive",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "项目管理"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "deletionPlan.scope事务重验；共享参考/目录归属/活动操作保护，独立确认，删除不是制作委托的一部分。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "project.rename",
+      "capabilityId": "project.rename",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 508,
+        "anchor": "action === \"project.rename\""
+      },
+      "legacyParameterNames": [
+        "id",
+        "entityRevision",
+        "name"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "delegation": "explicit-proposal",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "项目管理"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "entityRevision；index activeRequests/referenceReads保护；真实目录改名可影响文件路径。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "role.create",
+      "capabilityId": "role.create",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 578,
+        "anchor": "action === \"role.create\""
+      },
+      "legacyParameterNames": [
+        "projectId",
+        "chapterId",
+        "name"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "角色资料/选声音"
+      },
+      "versions": [
+        "server-created object; operation receipt where supported"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "role.update",
+      "capabilityId": "role.update",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 598,
+        "anchor": "action === \"role.update\""
+      },
+      "legacyParameterNames": [
+        "id",
+        "entityRevision",
+        "chapterId",
+        "revision",
+        "name",
+        "archived",
+        "aliases",
+        "aliasSources",
+        "note",
+        "quote",
+        "gender",
+        "voiceId",
+        "apply",
+        "chapterOnly",
+        "identityChosen"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 3000
+          },
+          "quote": {
+            "type": "string",
+            "maxLength": 3000
+          },
+          "gender": {
+            "enum": [
+              "未知",
+              "女",
+              "男",
+              "其他"
+            ]
+          },
+          "aliasSources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "chapterId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "kind": {
+                  "enum": [
+                    "原文明示",
+                    "上下文推断",
+                    "用户补充"
+                  ]
+                },
+                "sourceQuote": {
+                  "type": "string",
+                  "maxLength": 3000
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 3000
+                },
+                "sourceVersion": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "needsReview": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name",
+                "chapterId",
+                "kind",
+                "sourceVersion"
+              ]
+            },
+            "minItems": 0
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "角色资料/选声音"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "别名只准在其来源章修改；quote逐字。首次绑定/本章覆盖/默认apply各异。单句override不随默认绑定改变。aliases仅旧值相同可传，不能借此绕aliasSources。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "声音绑定使用operation.useVoice；避免模型自由提交identityChosen"
+    },
+    {
+      "action": "segment.confirm",
+      "capabilityId": "segment.confirm",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 850,
+        "anchor": "action === \"segment.confirm\""
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "ids",
+        "roleOnly"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "roleOnly": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "台词编辑/历史与版本/检查"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "segment.create",
+      "capabilityId": "segment.create",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 814,
+        "anchor": "action === \"segment.create\""
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "text"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "台词编辑/历史与版本/检查"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "segment.merge",
+      "capabilityId": "segment.merge",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 979,
+        "anchor": "action === \"segment.merge\""
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "choice",
+        "performance",
+        "operationId"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "choice": {
+            "enum": [
+              "first",
+              "second"
+            ]
+          },
+          "performance": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "台词编辑/历史与版本/检查"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "相邻同角色同类型有效条；声音/配置不同需choice=first或second，表演需明确；保留双方来源和保护。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用自动撤销；结构来源保留，AI拆分符合条件时experience.undo",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "segment.rebind",
+      "capabilityId": "segment.rebind",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 832,
+        "anchor": "action === \"segment.rebind\""
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "ids",
+        "roleId"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "roleId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "ids",
+          "roleId"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "台词编辑/历史与版本/检查"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "segment.restore",
+      "capabilityId": "segment.restore",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 1064,
+        "anchor": "action === \"segment.restore\""
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "audioId",
+        "restoreSettings"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "restoreSettings": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "audioId"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "台词编辑/历史与版本/检查"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "legacy仅previous/approved；设置差异需restoreSettings；组中成员不能单独恢复。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "segment.review",
+      "capabilityId": "segment.review",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 1043,
+        "anchor": "action === \"segment.review\""
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "state",
+        "audioId",
+        "basis"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "state": {
+            "enum": [
+              "passed",
+              "rework"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "audioId",
+          "state"
+        ]
+      },
+      "delegation": "explicit-proposal",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "台词编辑/历史与版本/检查"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "audioId=current且basis完全匹配；passed来自明确人工决定，不是AI推断。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "segment.split",
+      "capabilityId": "segment.split",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 927,
+        "anchor": "action === \"segment.split\""
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "offset",
+        "parts",
+        "performance",
+        "operationId"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 10000
+            },
+            "minItems": 2
+          },
+          "performance": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "minItems": 2
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/SegmentSplitDialog.tsx",
+        "entry": "台词编辑顶部 → 拆分这条"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "parts顺序拼接必须与原文逐字相等，offset按Unicode字符计；有表演须明确分配。退休父条，新子条无current。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用自动撤销；结构来源保留，AI拆分符合条件时experience.undo",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "segment.template",
+      "capabilityId": "segment.template",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 870,
+        "anchor": "action === \"segment.template\""
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "template",
+        "confirm"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "template"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "台词编辑/历史与版本/检查"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "segment.update",
+      "capabilityId": "segment.update",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 880,
+        "anchor": "action === \"segment.update\""
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "text",
+        "type",
+        "roleConfirmed",
+        "identityConfirmed",
+        "performance",
+        "excluded",
+        "config",
+        "roleId",
+        "voiceId",
+        "resetVoice",
+        "autosave",
+        "identityChosen"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 10000
+          },
+          "type": {
+            "enum": [
+              "narration",
+              "dialogue",
+              "thought"
+            ]
+          },
+          "roleId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "voiceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "resetVoice": {
+            "type": "boolean"
+          },
+          "performance": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "excluded": {
+            "type": "boolean"
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "speech_rate": {
+                "type": "integer",
+                "minimum": -50,
+                "maximum": 100
+              },
+              "loudness_rate": {
+                "type": "integer",
+                "minimum": -50,
+                "maximum": 100
+              },
+              "pitch_rate": {
+                "type": "integer",
+                "minimum": -12,
+                "maximum": 12
+              }
+            },
+            "required": [
+              "speech_rate",
+              "loudness_rate",
+              "pitch_rate"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "台词编辑/历史与版本/检查"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "正文默认保真；数值仅speech_rate/loudness_rate[-50,100]整数及pitch_rate[-12,12]整数。template变更须专用操作。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "settings.update",
+      "capabilityId": "settings.update",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 454,
+        "anchor": "action === \"settings.update\""
+      },
+      "legacyParameterNames": [
+        "entityRevision",
+        "textModel",
+        "defaultGap",
+        "features"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "delegation": "human-only",
+      "access": "ui-only",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "台词编辑/历史与版本/检查"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "解释并引导安全人工设置，助手不能改自己的权限、模型路由或凭据"
+    },
+    {
+      "action": "unit.create",
+      "capabilityId": "unit.create",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 433,
+        "anchor": "action === 'unit.create'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "ids",
+        "guidance"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "guidance": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "同章至少两条真实顺序连续有效成员，不重叠active/pending组；pending创建不立即替换旧编排。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "历史声音/restore或dissolve，须当前版本与冲突校验",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "unit.dissolve",
+      "capabilityId": "unit.dissolve",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 451,
+        "anchor": "action === 'unit.dissolve'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "unitId",
+        "entityRevision",
+        "arrangement"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "先dissolvePlan；旧单句切dry恢复，不保证把组音频无损切开；停止关联后续请求。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "历史声音/restore或dissolve，须当前版本与冲突校验",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "unit.restore",
+      "capabilityId": "unit.restore",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 486,
+        "anchor": "action === 'unit.restore'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "unitId",
+        "entityRevision",
+        "mode",
+        "audioId",
+        "restoreSettings",
+        "baseRevisions"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "restoreSettings": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "audioId"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "restorePlan当前冲突为空、baseRevisions绑定预览；保护草稿事件；恢复原配置和历史模板身份，不改旧prompt。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "历史声音/restore或dissolve，须当前版本与冲突校验",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "unit.review",
+      "capabilityId": "unit.review",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 464,
+        "anchor": "action === 'unit.review'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "unitId",
+        "entityRevision",
+        "mode",
+        "state",
+        "audioId",
+        "basis"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "state": {
+            "enum": [
+              "passed",
+              "rework"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "audioId",
+          "state"
+        ]
+      },
+      "delegation": "explicit-proposal",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "匹配音频ID/basis绑定人工听评，按整个声音单元评；index实际文件校验不可丢。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "历史声音/restore或dissolve，须当前版本与冲突校验",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "unit.select-result",
+      "capabilityId": "unit.select-result",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 478,
+        "anchor": "action === 'unit.select-result'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "unitId",
+        "entityRevision",
+        "mode",
+        "audioId"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "audioId"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "当前requestIdentity匹配才可选；选择后pending，已有rework保留；unknown账本不清空。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "历史声音/restore或dissolve，须当前版本与冲突校验",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "unit.switch",
+      "capabilityId": "unit.switch",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 460,
+        "anchor": "action === 'unit.switch'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "unitId",
+        "entityRevision",
+        "mode"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "mode"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "历史声音/restore或dissolve，须当前版本与冲突校验",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "unit.template",
+      "capabilityId": "unit.template",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 470,
+        "anchor": "action === 'unit.template'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "unitId",
+        "entityRevision",
+        "mode",
+        "template",
+        "confirm"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "template"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "历史声音/restore或dissolve，须当前版本与冲突校验",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "unit.update",
+      "capabilityId": "unit.update",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 447,
+        "anchor": "action === 'unit.update'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "id",
+        "unitId",
+        "entityRevision",
+        "mode",
+        "guidance",
+        "backgroundPresence"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "guidance": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "backgroundPresence": {
+            "enum": [
+              "clear",
+              "natural",
+              "subtle",
+              "unspecified"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "mode"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/UnitPanel.tsx",
+        "entry": "一起演绎/声音背景 → 事件、当前版本、历史或高级操作"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "单句dry表演用segment.update；存在感仅scene；只作用下次生成。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "历史声音/restore或dissolve，须当前版本与冲突校验",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "voice-candidate.discard",
+      "capabilityId": "voice-candidate.discard",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 415,
+        "anchor": "action === 'voice-candidate.discard'"
+      },
+      "legacyParameterNames": [
+        "id",
+        "audioId",
+        "sessionId",
+        "entityRevision"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "sessionId"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/VoiceCreation.tsx",
+        "entry": "选声音 → 描述创建/候选历史"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "候选必须属该会话；标discarded、停止关联活动任务，保留历史。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "voice-session.abandon",
+      "capabilityId": "voice-session.abandon",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 428,
+        "anchor": "action === 'voice-session.abandon'"
+      },
+      "legacyParameterNames": [
+        "id",
+        "entityRevision"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "delegation": "explicit-proposal",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/VoiceCreation.tsx",
+        "entry": "选声音 → 描述创建/候选历史"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "voice-session.create",
+      "capabilityId": "voice-session.create",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 424,
+        "anchor": "action === 'voice-session.create'"
+      },
+      "legacyParameterNames": [
+        "description"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "description"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/VoiceCreation.tsx",
+        "entry": "选声音 → 描述创建/候选历史"
+      },
+      "versions": [
+        "server-created object; operation receipt where supported"
+      ],
+      "prerequisites": "对象归属、功能开关、真实版本和现有领域校验；同章活动job期间editable拒写。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "voice-session.update",
+      "capabilityId": "voice-session.update",
+      "handler": "domain.mutate → enhancement.mutate",
+      "source": {
+        "file": "server/enhancement.mjs",
+        "line": 427,
+        "anchor": "action === 'voice-session.update'"
+      },
+      "legacyParameterNames": [
+        "id",
+        "entityRevision",
+        "description"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "id",
+          "description"
+        ]
+      },
+      "delegation": "allowed-in-mandate",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/VoiceCreation.tsx",
+        "entry": "选声音 → 描述创建/候选历史"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "revision保护；描述变更递增contentRevision，候选迟到不能抢新会话。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "voice.delete",
+      "capabilityId": "voice.delete",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 722,
+        "anchor": "action === \"voice.delete\""
+      },
+      "legacyParameterNames": [
+        "id",
+        "entityRevision",
+        "confirm"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "delegation": "explicit-proposal",
+      "access": "destructive",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "音色库"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "先标stopped/deletePending，等referenceReads释放才删除文件；检查使用范围。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "voice.update",
+      "capabilityId": "voice.update",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 732,
+        "anchor": "action === \"voice.update\""
+      },
+      "legacyParameterNames": [
+        "id",
+        "entityRevision",
+        "name",
+        "observations",
+        "inspection",
+        "state"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "state": {
+            "enum": [
+              "active",
+              "archived",
+              "stopped"
+            ]
+          },
+          "observations": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "tone": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "accent": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "performance": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "volume": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            },
+            "required": []
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "delegation": "explicit-proposal",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "音色库"
+      },
+      "versions": [
+        "entityRevision or explicit plan scope; see handler"
+      ],
+      "prerequisites": "全局共享声音；检查通过须人工决定和文件解码，不能自动伪造inspection.checked。",
+      "sideEffects": [
+        "修改该业务对象；源数据、编排或上下文变化按领域touch/context更新"
+      ],
+      "undo": "无通用撤销；按对应历史或业务恢复处理",
+      "assistantAdaptation": "inspection为人工听评专门入口，模型不允许自由写checked=true"
+    }
+  ],
+  "operations": [
+    {
+      "kind": "save",
+      "route": "POST /api/operations",
+      "handler": "experience.run",
+      "parameters": [
+        "operationId",
+        "action",
+        "data"
+      ],
+      "capabilityId": null,
+      "delegation": "never expose generic save",
+      "idempotency": "operationId + exact request; step receipts and partial completion survive",
+      "notes": "ordinary autosave reuses this, model uses fixed action-specific capability only"
+    },
+    {
+      "kind": "prepareChapter",
+      "route": "POST /api/operations",
+      "handler": "experience.run",
+      "parameters": [
+        "operationId",
+        "chapterId",
+        "revision",
+        "analysisKind",
+        "ids",
+        "unitId",
+        "unitRevision",
+        "sceneEnabled",
+        "model",
+        "source",
+        "splitOnly",
+        "autoApply",
+        "grantId"
+      ],
+      "capabilityId": "operation.prepareChapter",
+      "delegation": "see capability",
+      "idempotency": "operationId + exact request; step receipts and partial completion survive",
+      "notes": "inherit every underlying domain/worker guard"
+    },
+    {
+      "kind": "useVoice",
+      "route": "POST /api/operations",
+      "handler": "experience.run",
+      "parameters": [
+        "operationId",
+        "chapterId",
+        "revision",
+        "roleId",
+        "segmentId",
+        "entityRevision",
+        "scope",
+        "voiceId",
+        "audioId",
+        "name",
+        "apply",
+        "updateDefault"
+      ],
+      "capabilityId": "operation.useVoice",
+      "delegation": "see capability",
+      "idempotency": "operationId + exact request; step receipts and partial completion survive",
+      "notes": "chapterOnly UI value currently is not read by experience; handler uses updateDefault!==true. Default safely stays chapter-specific."
+    },
+    {
+      "kind": "groupAndGenerate",
+      "route": "POST /api/operations",
+      "handler": "experience.run",
+      "parameters": [
+        "operationId",
+        "chapterId",
+        "revision",
+        "ids",
+        "guidance",
+        "grantId",
+        "resumeRoute"
+      ],
+      "capabilityId": "operation.groupAndGenerate",
+      "delegation": "see capability",
+      "idempotency": "operationId + exact request; step receipts and partial completion survive",
+      "notes": "inherit every underlying domain/worker guard"
+    },
+    {
+      "kind": "sceneAndGenerate",
+      "route": "POST /api/operations",
+      "handler": "experience.run",
+      "parameters": [
+        "operationId",
+        "chapterId",
+        "revision",
+        "unitId",
+        "entityRevision",
+        "eventIds",
+        "grantId",
+        "retryUnknown",
+        "acknowledgedAttemptIds",
+        "resumeRoute"
+      ],
+      "capabilityId": "operation.sceneAndGenerate",
+      "delegation": "see capability",
+      "idempotency": "operationId + exact request; step receipts and partial completion survive",
+      "notes": "inherit every underlying domain/worker guard"
+    },
+    {
+      "kind": "generateSelection",
+      "route": "POST /api/operations",
+      "handler": "experience.run",
+      "parameters": [
+        "operationId",
+        "chapterId",
+        "revision",
+        "arrangement",
+        "ids",
+        "unitId",
+        "mode",
+        "actionKind",
+        "regenerate",
+        "grantId",
+        "retryUnknown",
+        "acknowledgedAttemptIds",
+        "resumeRoute"
+      ],
+      "capabilityId": "operation.generateSelection",
+      "delegation": "see capability",
+      "idempotency": "operationId + exact request; step receipts and partial completion survive",
+      "notes": "inherit every underlying domain/worker guard"
+    },
+    {
+      "kind": "voiceCandidate",
+      "route": "POST /api/operations",
+      "handler": "experience.run",
+      "parameters": [
+        "operationId",
+        "projectId",
+        "chapterId",
+        "revision",
+        "sessionId",
+        "entityRevision",
+        "grantId",
+        "retryUnknown",
+        "resumeRoute"
+      ],
+      "capabilityId": "operation.voiceCandidate",
+      "delegation": "see capability",
+      "idempotency": "operationId + exact request; step receipts and partial completion survive",
+      "notes": "inherit every underlying domain/worker guard"
+    },
+    {
+      "kind": "export",
+      "route": "POST /api/operations",
+      "handler": "experience.run",
+      "parameters": [
+        "operationId",
+        "chapterId",
+        "revision",
+        "arrangement",
+        "reviewItems",
+        "confirm",
+        "format"
+      ],
+      "capabilityId": "operation.export",
+      "delegation": "see capability",
+      "idempotency": "operationId + exact request; step receipts and partial completion survive",
+      "notes": "ordinary confirm=true means human confirms actual reviewItems; assistant export must force false"
+    }
+  ],
+  "jobKinds": [
+    {
+      "kind": "generate",
+      "route": "POST /api/jobs",
+      "handler": "worker.submit",
+      "idempotency": "commandId + exact request",
+      "cost": "per dispatched audio attempt",
+      "preferredCapability": "operation.generateSelection",
+      "guards": [
+        "FFmpeg available",
+        "references actual decode WAV/MP3 <=30s <=10MB",
+        "final dispatch grant/route/model/unknown/stop validation",
+        "master matched; export exact arrangement/reviewItems and human passed"
+      ]
+    },
+    {
+      "kind": "unit-generate",
+      "route": "POST /api/jobs",
+      "handler": "worker.submit",
+      "idempotency": "commandId + exact request",
+      "cost": "per dispatched audio attempt",
+      "preferredCapability": "operation.generateSelection",
+      "guards": [
+        "FFmpeg available",
+        "references actual decode WAV/MP3 <=30s <=10MB",
+        "final dispatch grant/route/model/unknown/stop validation",
+        "master matched; export exact arrangement/reviewItems and human passed"
+      ]
+    },
+    {
+      "kind": "voice-create",
+      "route": "POST /api/jobs",
+      "handler": "worker.submit",
+      "idempotency": "commandId + exact request",
+      "cost": "per dispatched audio attempt",
+      "preferredCapability": "operation.voiceCandidate",
+      "guards": [
+        "FFmpeg available",
+        "references actual decode WAV/MP3 <=30s <=10MB",
+        "final dispatch grant/route/model/unknown/stop validation",
+        "master matched; export exact arrangement/reviewItems and human passed"
+      ]
+    },
+    {
+      "kind": "voice-test",
+      "route": "POST /api/jobs",
+      "handler": "worker.submit",
+      "idempotency": "commandId + exact request",
+      "cost": "per dispatched audio attempt",
+      "preferredCapability": "job.voice-test",
+      "guards": [
+        "FFmpeg available",
+        "references actual decode WAV/MP3 <=30s <=10MB",
+        "final dispatch grant/route/model/unknown/stop validation",
+        "master matched; export exact arrangement/reviewItems and human passed"
+      ]
+    },
+    {
+      "kind": "master",
+      "route": "POST /api/jobs",
+      "handler": "worker.submit",
+      "idempotency": "commandId + exact request",
+      "cost": "local-only",
+      "preferredCapability": "job.master",
+      "guards": [
+        "FFmpeg available",
+        "references actual decode WAV/MP3 <=30s <=10MB",
+        "final dispatch grant/route/model/unknown/stop validation",
+        "master matched; export exact arrangement/reviewItems and human passed"
+      ]
+    },
+    {
+      "kind": "export",
+      "route": "POST /api/jobs",
+      "handler": "worker.submit",
+      "idempotency": "commandId + exact request",
+      "cost": "local-only",
+      "preferredCapability": "operation.export",
+      "guards": [
+        "FFmpeg available",
+        "references actual decode WAV/MP3 <=30s <=10MB",
+        "final dispatch grant/route/model/unknown/stop validation",
+        "master matched; export exact arrangement/reviewItems and human passed"
+      ]
+    }
+  ],
+  "analysisMethods": [
+    {
+      "method": "plan",
+      "handler": "analysis.plan",
+      "route": "POST /api/operations/plan kind=prepareChapter",
+      "capabilityId": "analysis.plan",
+      "cost": "local-only",
+      "versions": [
+        "chapter.revision",
+        "project.contextRevision",
+        "draftVersion for existing draft",
+        "unit/scene revisions for scene"
+      ],
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+    },
+    {
+      "method": "start",
+      "handler": "analysis.start",
+      "route": "POST /api/analysis",
+      "capabilityId": "operation.prepareChapter",
+      "cost": "per dispatched text batch",
+      "versions": [
+        "chapter.revision",
+        "project.contextRevision",
+        "draftVersion for existing draft",
+        "unit/scene revisions for scene"
+      ],
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+    },
+    {
+      "method": "edit",
+      "handler": "analysis.edit",
+      "route": "POST /api/analysis/edit",
+      "capabilityId": "analysis.edit",
+      "cost": "local-only",
+      "versions": [
+        "chapter.revision",
+        "project.contextRevision",
+        "draftVersion for existing draft",
+        "unit/scene revisions for scene"
+      ],
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+    },
+    {
+      "method": "apply",
+      "handler": "analysis.apply",
+      "route": "POST /api/analysis/apply",
+      "capabilityId": "analysis.apply",
+      "cost": "local-only",
+      "versions": [
+        "chapter.revision",
+        "project.contextRevision",
+        "draftVersion for existing draft",
+        "unit/scene revisions for scene"
+      ],
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+    },
+    {
+      "method": "resume",
+      "handler": "analysis.resume",
+      "route": "POST /api/analysis/resume",
+      "capabilityId": "analysis.resume",
+      "cost": "per dispatched text batch",
+      "versions": [
+        "chapter.revision",
+        "project.contextRevision",
+        "draftVersion for existing draft",
+        "unit/scene revisions for scene"
+      ],
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+    },
+    {
+      "method": "previewReuse",
+      "handler": "analysis.previewReuse",
+      "route": "GET /api/analysis/reuse-preview",
+      "capabilityId": "analysis.previewReuse",
+      "cost": "local-only",
+      "versions": [
+        "chapter.revision",
+        "project.contextRevision",
+        "draftVersion for existing draft",
+        "unit/scene revisions for scene"
+      ],
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+    },
+    {
+      "method": "reuse",
+      "handler": "analysis.reuse",
+      "route": "POST /api/analysis/reuse",
+      "capabilityId": "analysis.reuse",
+      "cost": "local-only",
+      "versions": [
+        "chapter.revision",
+        "project.contextRevision",
+        "draftVersion for existing draft",
+        "unit/scene revisions for scene"
+      ],
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+    }
+  ],
+  "enhancementPreviewKinds": [
+    "group",
+    "dissolve",
+    "restore",
+    "template"
+  ],
+  "readRoutes": [
+    {
+      "route": "GET /api/state",
+      "handler": "domain.snapshot + safe settings",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    },
+    {
+      "route": "GET /api/chapters/:id",
+      "handler": "domain.chapter + validateStoredAudio",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    },
+    {
+      "route": "GET /api/voices/:id",
+      "handler": "store.get voices",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    },
+    {
+      "route": "GET /api/voices/:id/usage",
+      "handler": "domain.voiceUsage",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    },
+    {
+      "route": "GET /api/attempts/:jobId",
+      "handler": "store.all attempts",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    },
+    {
+      "route": "GET /api/audio-record/:id",
+      "handler": "store.get audios",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    },
+    {
+      "route": "GET /api/projects/:id/experience",
+      "handler": "experience.project",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    },
+    {
+      "route": "GET /api/operations/:id",
+      "handler": "experience.get",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    },
+    {
+      "route": "GET /api/projects/:id/deletion-plan",
+      "handler": "domain.deletionPlan",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    },
+    {
+      "route": "GET /api/chapters/:id/structural-repair-plan",
+      "handler": "domain.structuralRepairPlan",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    },
+    {
+      "route": "GET /api/workspace/diagnostics",
+      "handler": "workspaceDiagnostics",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    },
+    {
+      "route": "GET /api/diagnostics/compiler-compatibility",
+      "handler": "enhancement.compilerCompatibility",
+      "scope": "assistant must project bound project/chapter, not forward global raw snapshot or paths/prompts"
+    }
+  ],
+  "otherEntrypoints": [
+    {
+      "route": "POST /api/voices",
+      "handler": "uploadVoice",
+      "parameters": [
+        "uploadId",
+        "name",
+        "filename",
+        "data(base64)"
+      ],
+      "assistant": "user-authorized upload handle only, no arbitrary local path",
+      "idempotency": "uploadId + exact name/filename/bytes"
+    },
+    {
+      "route": "POST /api/voices/candidate",
+      "handler": "saveCandidateVoice",
+      "parameters": [
+        "audioId",
+        "name"
+      ],
+      "assistant": "voice.save-candidate / operation.useVoice",
+      "idempotency": "voice primary key equals candidate audioId"
+    },
+    {
+      "route": "POST /api/templates/preview",
+      "handler": "domain.previewTemplate",
+      "parameters": [
+        "chapterId",
+        "revision",
+        "id",
+        "template"
+      ]
+    },
+    {
+      "route": "POST /api/enhancement-preview",
+      "handler": "enhancement.preview",
+      "parameters": [
+        "kind(group|dissolve|restore|template)",
+        "chapterId",
+        "revision",
+        "ids/id",
+        "entityRevision",
+        "mode",
+        "audioId/template/guidance as appropriate"
+      ]
+    },
+    {
+      "route": "POST /api/exports/:id/reveal",
+      "handler": "revealExport",
+      "parameters": [
+        "registered export id only"
+      ],
+      "assistant": "export.reveal; realpath within workspace; fixed Finder executable, no arbitrary shell"
+    },
+    {
+      "route": "POST /api/workspace/choose",
+      "handler": "chooseWorkspaceDirectory",
+      "assistant": "human-only local picker; no write until move"
+    },
+    {
+      "route": "POST /api/workspace/move",
+      "handler": "copyWorkspace + reopen store/worker/analysis",
+      "parameters": [
+        "source",
+        "directory"
+      ],
+      "assistant": "human-only selected directory; independent decision; idle/drain/reference readers; keep original workspace"
+    },
+    {
+      "route": "POST /api/experience/:method",
+      "handler": "experience.policy/grant/revoke/undo/unprotect",
+      "parameters": {
+        "policy": [
+          "projectId",
+          "revision",
+          "mode(smart|review)"
+        ],
+        "grant": [
+          "grantId",
+          "projectId",
+          "chapterId",
+          "steps",
+          "materials",
+          "voiceIds",
+          "textModel",
+          "textLimit",
+          "audioLimit",
+          "expiresAt"
+        ],
+        "revoke": [
+          "grantId"
+        ],
+        "undo": [
+          "changeId",
+          "revision"
+        ],
+        "unprotect": [
+          "chapterId",
+          "revision",
+          "segmentId",
+          "field(performance)"
+        ]
+      },
+      "assistant": "grant/policy human-only; revoke scoped; undo checks later edits; unprotect specific user-approved field"
+    }
+  ],
+  "mediaKinds": [
+    {
+      "kind": "voices",
+      "route": "GET /api/media/voices/:id",
+      "handler": "serveFile + range",
+      "guard": "reference read lease/deletionPending",
+      "assistant": "ui.play returns click-required bounded media action, never arbitrary URL"
+    },
+    {
+      "kind": "audios",
+      "route": "GET /api/media/audios/:id",
+      "handler": "serveFile + range",
+      "guard": "validateStoredAudio",
+      "assistant": "ui.play returns click-required bounded media action, never arbitrary URL"
+    },
+    {
+      "kind": "masters",
+      "route": "GET /api/media/masters/:id",
+      "handler": "serveFile + range",
+      "guard": "registered file existence",
+      "assistant": "ui.play returns click-required bounded media action, never arbitrary URL"
+    },
+    {
+      "kind": "exports",
+      "route": "GET /api/media/exports/:id",
+      "handler": "serveFile + range",
+      "guard": "registered file existence",
+      "assistant": "ui.play returns click-required bounded media action, never arbitrary URL"
+    }
+  ],
+  "uiOnly": [
+    {
+      "id": "ui.navigate",
+      "targets": [
+        "voices",
+        "tasks",
+        "export",
+        "history",
+        "scene",
+        "assistant-settings",
+        "project-overview",
+        "segment"
+      ]
+    },
+    {
+      "id": "ui.play",
+      "targets": [
+        "voices",
+        "audios",
+        "masters",
+        "exports"
+      ]
+    },
+    {
+      "id": "ui.seek",
+      "ordinary": "App.seekPlayback +/-5; keyboard does not intercept editors",
+      "assistant": "explain existing player; no need server mutation"
+    },
+    {
+      "id": "ui.drafts",
+      "ordinary": "WorkspaceExperience DraftRecovery + autosave.withSavedDrafts",
+      "assistant": "explicit draft context only; never clear all local storage"
+    },
+    {
+      "id": "ui.demo",
+      "ordinary": "App.playDemo speechSynthesis",
+      "assistant": "free local demo is not Seed quality evidence"
+    }
+  ],
+  "newOrPending": [
+    {
+      "id": "audio.original.restore",
+      "status": "implemented adapter after AE-H01",
+      "handler": "retained originalAudioId -> enhancement history/restore preview -> unit.select-result or unit.restore",
+      "notes": "provider original only when originalAvailability=retained; older processed-before repair is not falsely called provider original; fresh human review required"
+    },
+    {
+      "id": "audio.tail.repair",
+      "status": "implemented bounded explicit-proposal maintenance adapter",
+      "handler": "repairAudio -> shared previewTailRepair/applyTailRepair with fixed approved scope; partial outcomes retain original scope"
+    },
+    {
+      "id": "settings.assistant",
+      "status": "user-configurable independent model/endpoint/credential safety form",
+      "notes": "do not hardcode model or inherit audio/text settings; model cannot reconfigure its own route or key"
+    },
+    {
+      "id": "ui.maintenance",
+      "status": "explain + human local handling",
+      "notes": "install/update/Git publication/whole-workspace backup are not generic shell tools"
+    }
+  ],
+  "sharedBoundaries": [
+    {
+      "id": "actions",
+      "implementation": "server/actions.mjs createActionExecutor",
+      "reason": "index-only real-audio validation and project occupancy checks also needed by assistant paths"
+    },
+    {
+      "id": "trusted-actor",
+      "implementation": "domain.mutate third executionContext; experience/analysis propagate",
+      "reason": "assistant changes record policy_ai with run/step source, do not fabricate human field protection or review"
+    },
+    {
+      "id": "durable-write",
+      "implementation": "assistantMutation -> settings assistant-operation:<operationId> in same transaction; experience ux-operation unchanged",
+      "reason": "successful business write before step-record crash must replay without duplicate effect; own approved project deletion retains a content-free archived result"
+    },
+    {
+      "id": "safe-context",
+      "implementation": "server/assistant/context.mjs bounded projection + versioned help",
+      "reason": "raw snapshot includes paths, unrelated project text, prompts; drafts/current view are not task ownership"
+    },
+    {
+      "id": "workflow-scope",
+      "implementation": "capability preview requiredWorkflows + run.workflowKinds + exact approved manual overrides",
+      "reason": "one approved scene/group mandate must continue without repeated button prompts; manual guidance/events/group structure remain protected"
+    }
+  ],
+  "coverage": {
+    "actionNames": [
+      "chapter.create",
+      "chapter.move",
+      "chapter.repair-structural-decisions",
+      "chapter.update",
+      "event.create",
+      "event.reconfirm",
+      "event.remove",
+      "event.update",
+      "job.stop",
+      "project.create",
+      "project.delete",
+      "project.rename",
+      "role.create",
+      "role.update",
+      "segment.confirm",
+      "segment.create",
+      "segment.merge",
+      "segment.rebind",
+      "segment.restore",
+      "segment.review",
+      "segment.split",
+      "segment.template",
+      "segment.update",
+      "settings.update",
+      "unit.create",
+      "unit.dissolve",
+      "unit.restore",
+      "unit.review",
+      "unit.select-result",
+      "unit.switch",
+      "unit.template",
+      "unit.update",
+      "voice-candidate.discard",
+      "voice-session.abandon",
+      "voice-session.create",
+      "voice-session.update",
+      "voice.delete",
+      "voice.update"
+    ],
+    "operationKinds": [
+      "save",
+      "prepareChapter",
+      "useVoice",
+      "groupAndGenerate",
+      "sceneAndGenerate",
+      "generateSelection",
+      "voiceCandidate",
+      "export"
+    ],
+    "jobKinds": [
+      "generate",
+      "unit-generate",
+      "voice-create",
+      "voice-test",
+      "master",
+      "export"
+    ],
+    "analysisMethods": [
+      "plan",
+      "start",
+      "edit",
+      "apply",
+      "resume",
+      "previewReuse",
+      "reuse"
+    ],
+    "mediaKinds": [
+      "voices",
+      "audios",
+      "masters",
+      "exports"
+    ],
+    "nonActions": [
+      "chapter.source",
+      "chapter.resegment"
+    ],
+    "notes": "chapter.source/resegment appear only in structural guards; not implemented mutate handlers. Lifecycle internals tick/recover/close/register are not general model actions."
+  }
+}

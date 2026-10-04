@@ -5,6 +5,7 @@ import { fail, same, text, uid } from './store.mjs';
 import { compile, templateOf, resolveCompiler, sceneContract, validEventDescription, assertQuoteAnchor, sceneIntentConflicts, scenePresenceConflicts, inspectScenePresence } from './templates.mjs';
 import { storedAudioUnavailable } from './audio.mjs';
 import { configurationDecided } from './experience.mjs';
+import { hasNewerAttempt } from './scheduler.mjs';
 
 export const sampleText = '清晨的风吹过窗边，我把桌上的书合上，准备出门。';
 export const defaultFeatures = { voiceCreation: true, groups: true, scenes: true };
@@ -40,11 +41,15 @@ export function createEnhancement(store, d) {
   const syncLegacy = () => { for (const s of store.all('segments')) syncLegacySegment(s); };
   store.transaction(() => {
     const schema = store.maybe('settings', 'data-schema');
-    if (schema && schema.version > 3) fail('数据模式高于此版本，请使用匹配版本或恢复对应备份');
+    if (schema && schema.version > 4) fail('数据模式高于此版本，请使用匹配版本或恢复对应备份');
     syncLegacy();
     invalidateEvents();
     if (!schema || schema.version < 3) store.put('settings', { id: 'data-schema', version: 3, migratedAt: stamp(), migrations: [...(schema?.migrations || []), { version: 3, at: stamp(), singleUnits: store.all('units').length, capabilities:['immutable-scene-compiler','candidate-content-revision','scoped-unknown-decision','idempotent-chapter-create','structural-decisions'] }] });
     store.protectSchema();
+    if (!schema || schema.version < 4) {
+      const previous = store.get('settings', 'data-schema');
+      store.put('settings', { ...previous, version: 4, migratedAt: stamp(), migrations: [...(previous.migrations || []), { version: 4, at: stamp(), capabilities: ['sealed-audio-delivery', 'recoverable-audio-processing', 'bounded-concurrent-attempts', 'assistant-delegation'] }] });
+    }
   });
   function getUnit(id) { return store.get('units', id); }
   function members(u) {
@@ -361,7 +366,7 @@ export function createEnhancement(store, d) {
       return active(job) && s.state === 'active' && !(store.maybe('attempts',a.id) || a).discarded && contentRevision(s) === (job.sessionContentRevision ?? job.sessionRevision);
     }
     const u = getUnit(a.unitId || a.targetId), c = store.get('chapters', u.chapterId);
-    const history = store.all('attempts'), later = history.slice(history.findIndex(v => v.id === a.id) + 1).some(v => v.targetKind === 'unit' && (v.unitId || v.targetId) === u.id && v.mode === a.mode);
+    const later = hasNewerAttempt(store.all('attempts'), a, v => v.targetKind === 'unit' && (v.unitId || v.targetId) === u.id && v.mode === a.mode);
     if (!active(job) || ['dissolved','retired'].includes(u.state) || later || c.revision !== job.revision || u.revision !== a.unitRevision || !same(basis(u, a.mode), a.basis)) return false;
     const v = u.variants[a.mode], old = v.current;
     if (a.mode === 'scene' && !v.template && !v.resolvedCompilerId && a.input.template === 'scene-v4-presence-1') v.template = a.input.template;

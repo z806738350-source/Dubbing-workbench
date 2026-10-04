@@ -1,7 +1,7 @@
 import { templateCatalog, templateOf, sceneContract, validEventDescription, scenePresenceConflicts, inspectScenePresence } from "./templates.mjs";
 import { textModel, knownRoles } from "./domain.mjs";
 import { fail, uid, same } from "./store.mjs";
-import { policyOf, decide, reserveGrant, settleGrant } from './experience.mjs';
+import { policyOf, decide, reserveGrant, settleGrant, assistantActor, assistantChanges, assistantMutation } from './experience.mjs';
 import { longSegment, segmentLimit, semanticBlocks, shortRanges, partsAfter } from './semantic.mjs';
 import { storedAudioUnavailable } from './audio.mjs';
 
@@ -105,12 +105,12 @@ export function createAnalysis(store, domain, config) {
     }
     return '';
   }
-  function splitItem(c, draft, item, p = {}) {
+  function splitItem(c, draft, item, p = {}, executionContext) {
     const parent = store.get('segments',item.segmentId), blocked = splitProtection(parent);
     if (blocked) fail(blocked,409);
     if (positionPerformance(parent) && p.inheritPerformanceConfirmed !== true) fail('原表演包含位置要求，请先明确确认拆分后沿用原表演；原指导不会清空');
     if (!item.splitParts || item.splitParts.length < 2 || item.splitParts.join('') !== parent.text) fail('语义拆分结果无效或正文已变化',409);
-    const children = domain.mutate('segment.split',{chapterId:c.id,revision:c.revision,id:parent.id,parts:item.splitParts,performance:item.splitParts.map(() => parent.performance)});
+    const children = domain.mutate('segment.split',{chapterId:c.id,revision:c.revision,id:parent.id,parts:item.splitParts,performance:item.splitParts.map(() => parent.performance)},executionContext);
     Object.assign(c,store.get('chapters',c.id));
     const result = {segmentId:parent.id,itemId:item.id,childIds:children.map(s => s.id)};
     draft.splitResults = [...(draft.splitResults || []),result];
@@ -410,7 +410,8 @@ export function createAnalysis(store, domain, config) {
     void task.finally(() => pending.delete(task));
     return r;
   }
-  async function start(p) {
+  async function start(p, executionContext) {
+    const actor = assistantActor(executionContext);
     if (p.operationId) {
       const previous = store.all('suggestions').find(r => r.operationId === p.operationId);
       if (previous) { if (!same(previous.operationRequest,p)) fail('同一分析操作的范围不同',409); return previous; }
@@ -439,6 +440,7 @@ export function createAnalysis(store, domain, config) {
       if (sceneUnit.chapterId !== c.id || sceneUnit.state === "dissolved" || sceneUnit.revision !== p.unitRevision) fail("生成单元已改变，请刷新后分析", 409);
     }
     const source = p.source === undefined ? c.source : p.source;
+    if (actor && source !== c.source && executionContext.textMutationPolicy !== 'explicitSpecifiedEdit') fail('本次任务要求保留原文，不能替换章节正文',403);
     if (
       typeof source !== "string" ||
       source.length > 1000000 ||
@@ -464,6 +466,7 @@ export function createAnalysis(store, domain, config) {
     const chunks = chunksOf(rows,kind);
     const r = {
       id: uid(),
+      ...(actor ? {executionContext:{...actor,textMutationPolicy:executionContext.textMutationPolicy || 'preserveExact',namedOverrides:[...(executionContext.namedOverrides || [])]}} : {}),
       ...(p.operationId ? {operationId:p.operationId,operationRequest:JSON.parse(JSON.stringify(p))} : {}),
       grantId:p.grantId,requireGrant:p.requireGrant,autoApply:p.splitOnly !== true && p.autoApply === true,
       policyRef:policyOf(store,c.projectId).revision,
@@ -524,7 +527,9 @@ export function createAnalysis(store, domain, config) {
       r.batches.map((b) => b.id),
     );
   }
-  function resume(p) {
+  function resume(p,executionContext) {
+    const actor=assistantActor(executionContext), prior=actor && p.operationId && store.get('suggestions',p.id).assistantResumes?.find(op=>op.operationId===p.operationId);
+    if(prior){if(!same(prior.request,p))fail('同一助手分析续跑参数不同',409);return store.get('suggestions',p.id);}
     if (!config.key || closing) fail("请检查密钥与服务状态");
     const r = editableDraft(p);
     if (p.grantId) r.grantId = p.grantId;
@@ -545,13 +550,12 @@ export function createAnalysis(store, domain, config) {
     const first = Math.min(...targets.map((b) => r.batches.indexOf(b)));
     for (const b of r.batches.slice(first + 1))
       if (!targets.includes(b) && b.status !== "unknown") b.status = "stale";
-    return launch(
-      r,
-      targets.map((b) => b.id),
-    );
+    if(actor && p.operationId) {r.assistantResumes=[...(r.assistantResumes||[]),{operationId:p.operationId,request:JSON.parse(JSON.stringify(p)),executionSource:actor}];r.executionContext={...actor,textMutationPolicy:executionContext.textMutationPolicy,namedOverrides:executionContext.namedOverrides||[]};save(r);}
+    return launch(r,targets.map((b) => b.id));
   }
-  function edit(p) {
-    return store.transaction(() => {
+  function edit(p, executionContext) {
+    const actor = assistantActor(executionContext);
+    return assistantMutation(store,'analysis.edit',p,executionContext,()=>store.transaction(() => {
       const r = editableDraft(p),
         b = r.batches.find((b) => b.id === p.batchId);
       if (!b) fail("批次不存在");
@@ -578,7 +582,7 @@ export function createAnalysis(store, domain, config) {
           ...(r.kind === "scene" ? ["unitId", "kind", "description", "memberId", "position", "startMemberId", "endMemberId", "startPosition", "endPosition"] : []),
         ];
         const old = b.items[index] || {},
-          next = { ...old, id: old.id || uid(), userEdited: true };
+          next = { ...old, id: old.id || uid(), ...(actor ? {assistantEdited:actor} : {userEdited:true}) };
         for (const key of allowed)
           if (p.item && Object.hasOwn(p.item, key)) next[key] = p.item[key];
         if (JSON.stringify(next).length > 15000) fail("单条草稿过长");
@@ -604,7 +608,7 @@ export function createAnalysis(store, domain, config) {
       r.draftVersion++;
       inspectDraft(r);
       return save(r);
-    });
+    }));
   }
   const lowRisk = value => !value || value.trim().length <= 40 && /^(?:(?:自然|中性|平静|正常|清晰|清楚|平稳|缓和|克制|朗读|语气|表达|说话|叙述|地)|[、，,。.\s])+$/u.test(value.trim());
   function applySmart(r) {
@@ -613,7 +617,7 @@ export function createAnalysis(store, domain, config) {
     if (r.status !== 'ready') { r.automation = {applied:0,needsDecision:r.items.length + r.gaps.length,error:'分析仍有无效或缺失标注，请处理后采用'}; return save(r); }
     if (r.kind === 'extract') {
       if (domain.list(c.id).length) fail('已有章节保留原剧本，请使用现有片段的建议流程',409);
-      return apply({id:r.id,revision:c.revision,draftVersion:r.draftVersion,replaceConfirmed:true},true);
+      return apply({id:r.id,revision:c.revision,draftVersion:r.draftVersion,replaceConfirmed:true},true,r.executionContext ? {...r.executionContext,receiptOwner:'analysis-auto'} : undefined);
     }
     if (r.kind !== 'director') { r.automation = {applied:0,needsDecision:r.items.length}; return save(r); }
     const working = JSON.parse(JSON.stringify(r));
@@ -631,7 +635,7 @@ export function createAnalysis(store, domain, config) {
           if (item.uncertain || item.evidence !== '原文明示' || !lowRisk(item.performance)) pendingItems.push(item.id);
           else {
             s.performance = item.performance;
-            s.decisions = {...s.decisions,performance:{source:'policy_ai',at:new Date().toISOString(),values:s.performance,policyVersion:policy.revision,draftId:r.id,inputRevision:r.revision}};
+            s.decisions = {...s.decisions,performance:{source:'policy_ai',at:new Date().toISOString(),values:s.performance,policyVersion:policy.revision,draftId:r.id,inputRevision:r.revision,...assistantActor(r.executionContext)}};
             performanceChanged = true; store.put('segments',s,c.id);
           }
         }
@@ -639,7 +643,7 @@ export function createAnalysis(store, domain, config) {
           const blocked = splitProtection(parent,true);
           if (blocked) { item.splitIssue = blocked; pendingItems.push(item.id); }
           else {
-            const split = splitItem(c,r,item);
+            const split = splitItem(c,r,item,{},r.executionContext ? {...r.executionContext,receiptOwner:'analysis-auto'} : undefined);
             split.parent = parent; splits.push(split);
             continue;
           }
@@ -704,8 +708,8 @@ export function createAnalysis(store, domain, config) {
     const result = inspectReuse(reuseTarget(p));
     return {...result,items:result.items.map(({definition,validationError,...item})=>item)};
   }
-  function reuse(p) {
-    return store.transaction(() => {
+  function reuse(p, executionContext) {
+    return assistantMutation(store,'analysis.reuse',p,executionContext,()=>store.transaction(() => {
       const target = reuseTarget(p), {draft,c,u} = target;
       if (!Array.isArray(p.selected) || !p.selected.length || p.selected.some(id => !draft.items.some(i => i.id === id))) fail('请勾选需要加入的历史声音事件');
       const selected = inspectReuse(target).items.filter(i => p.selected.includes(i.itemId));
@@ -722,10 +726,12 @@ export function createAnalysis(store, domain, config) {
       });
       const added = additions.length ? domain.enhancement.addEvents(u.id,additions,p.unitRevision) : [];
       return {id:draft.id,unitId:u.id,chapterRevision:store.get('chapters',c.id).revision,unitRevision:store.get('units',u.id).revision,addedEventIds:added.map(e => e.id),addedCount:added.length,skippedItemIds};
-    });
+    }));
   }
-  function apply(p, automatic = false) {
-    return store.transaction(() => {
+  function apply(p, automatic = false, executionContext) {
+    const actor = assistantActor(executionContext);
+    const childContext = actor ? {...executionContext,receiptOwner:'analysis'} : executionContext;
+    return assistantMutation(store,'analysis.apply',p,executionContext,()=>store.transaction(() => {
       const draft = store.get("suggestions", p.id),
         c = domain.editable(draft.chapterId, p.revision),
         project = store.get("projects", c.projectId);
@@ -753,6 +759,7 @@ export function createAnalysis(store, domain, config) {
           draft.replacementSource !== undefined &&
           draft.replacementSource !== c.source
         ) {
+          if (actor && executionContext.textMutationPolicy !== 'explicitSpecifiedEdit') fail('本次任务要求保留原文，不能替换章节正文',403);
           c.sourceHistory = [
             ...(c.sourceHistory || []),
             { version: oldSourceVersion, text: c.source },
@@ -819,10 +826,10 @@ export function createAnalysis(store, domain, config) {
               review: null,
               latest: "none",
             };
-            if (automatic) {
-              decide(s,'role','policy_ai',{policyVersion:draft.policyRef,draftId:draft.id,inputRevision:draft.revision,sourceSpan:item.span});
+            if (automatic || actor) {
+              decide(s,'role','policy_ai',{policyVersion:draft.policyRef,draftId:draft.id,inputRevision:draft.revision,sourceSpan:item.span,...actor});
               decide(s,'identity','inherited',{roleId:r.id,draftId:draft.id});
-              s.decisions.performance = {source:lowRisk(item.performance) ? 'policy_ai' : 'system',values:s.performance,policyVersion:draft.policyRef,draftId:draft.id,at:new Date().toISOString()};
+              s.decisions.performance = {source:lowRisk(item.performance) || actor ? 'policy_ai' : 'system',values:s.performance,policyVersion:draft.policyRef,draftId:draft.id,at:new Date().toISOString(),...actor};
               const before = {roleId:narrator.id,type:'narration',voiceId:narrator.voiceId || null,voiceSource:'default',roleConfirmed:false,identityConfirmed:true,performance:'',decisions:{}};
               automaticChanges.push({id:s.id,before,after:Object.fromEntries(Object.keys(before).map(key => [key,s[key]]))});
             } else if (policyOf(store,c.projectId).revision) {
@@ -839,7 +846,7 @@ export function createAnalysis(store, domain, config) {
           store.put("segments", s, c.id);
         }
         next.forEach((s) => store.put("segments", s, c.id));
-        if (automatic) {
+        if (automatic || actor) {
           store.put('settings',{id:`ux-change:${draft.id}`,changeId:draft.id,projectId:c.projectId,chapterId:c.id,items:automaticChanges,policyVersion:draft.policyRef,at:new Date().toISOString()});
           draft.automation = {applied:next.filter(s => s.roleConfirmed).length,needsDecision:draft.items.filter((item,index) => !next[index]?.roleConfirmed || !lowRisk(item.performance)).length,pendingItemIds:draft.items.filter((item,index) => !next[index]?.roleConfirmed || !lowRisk(item.performance)).map(i => i.id)};
         }
@@ -857,10 +864,12 @@ export function createAnalysis(store, domain, config) {
         )) {
           const s = store.get("segments", item.segmentId);
           if (s.retired) fail("片段已改变", 409);
-          if (item.splitParts?.length > 1) { splits.push(splitItem(c,draft,item,p)); continue; }
+          if (item.splitParts?.length > 1) { splits.push(splitItem(c,draft,item,p,childContext)); continue; }
           if (draft.splitOnly) fail('AI本次没有可应用的语义拆分建议，原文保持完整');
+          const previous = actor ? structuredClone(s) : null;
           s.performance = item.performance;
-          if (s.decisions || policyOf(store,c.projectId).revision) {
+          if (actor) assistantChanges(previous,s,'segment.update',{},executionContext);
+          else if (s.decisions || policyOf(store,c.projectId).revision) {
             s.protectedFields = [...new Set([...(s.protectedFields || []),'performance'])];
             s.decisions = {...s.decisions,performance:{source:'human',values:s.performance,draftId:draft.id,at:new Date().toISOString()}};
           }
@@ -879,7 +888,7 @@ export function createAnalysis(store, domain, config) {
       draft.appliedAt = new Date().toISOString();
       store.put("suggestions", draft, c.id);
       return draft;
-    });
+    }));
   }
   return {
     plan(p) {

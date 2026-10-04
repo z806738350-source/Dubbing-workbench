@@ -81,3 +81,10 @@ test('计划失效后隐藏旧长段提示，只保留免费重核对，不再�
   assert.equal(nodes(tree).some(node=>node.props.role==='note'),false);assert.equal(button(tree,'返回编辑'),undefined);
   assert.ok(button(tree,'重新核对生成范围'));assert.equal(generated,1);assert.equal(edited,0);
 });
+
+
+test('生成确认范围内显示共用并发入口，纯复用与失效计划不显示',async()=>{
+ const concurrency={type:'ConcurrencySettings',props:{children:['同时制作：3 段']}},f=await setup({concurrency,onGenerate:async()=>{throw Object.assign(Error('旧计划'),{status:409});}});
+ assert.ok(nodes(f.tree()).includes(concurrency));await press(f.tree(),'开始生成');assert.ok(!nodes(f.tree()).includes(concurrency));
+ const reused=await setup({concurrency});reused.update({plan:{...reused.plan,audioRequests:0}});assert.ok(!nodes(reused.tree()).includes(concurrency));
+});

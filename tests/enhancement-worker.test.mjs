@@ -633,3 +633,19 @@ test("恢复结束后的组请求迟到，只记历史且不覆盖新版或复�
     assert.equal(store.get("settings", "audio-usage:group-late").used, calls);
   });
 });
+
+test('候选在原件封存后或网络异常前放弃，异步进度不会抹去用户决定',async t=>{
+  for(const stage of ['rawSealed','networkError'])await t.test(stage,async t=>{
+    const {store,domain,worker}=setup(t),session=domain.mutate('voice-session.create',{description:'只验证本地候选状态'});
+    const job=worker.enqueue({kind:'voice-create',sessionId:session.id,entityRevision:session.revision,commandId:uid()}),id=store.all('attempts',job.id)[0].id;
+    const discard=()=>domain.mutate('voice-candidate.discard',{id,sessionId:session.id,entityRevision:store.get('voiceSessions',session.id).revision});
+    if(stage==='rawSealed'){
+      const put=store.put.bind(store);let discarded=false;
+      t.mock.method(store,'put',(table,value,...rest)=>{const result=put(table,value,...rest);if(!discarded&&table==='attempts'&&value.id===id&&value.phase==='rawSealed'){discarded=true;discard();}return result;});
+    }
+    t.mock.method(globalThis,'fetch',async()=>{if(stage==='networkError'){discard();throw Error('connection closed after send');}return new Response(wav(),{headers:{'content-type':'audio/wav'}});});
+    await worker.tick();const attempt=store.get('attempts',id);assert.equal(attempt.discarded,true);
+    if(stage==='rawSealed'){assert.equal(attempt.adopted,false);assert.equal(attempt.status,'success');assert.ok(store.get('audios',id));}
+    else assert.equal(attempt.status,'unknown');
+  });
+});

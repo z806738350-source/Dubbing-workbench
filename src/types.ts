@@ -1,3 +1,4 @@
+import type { SchedulerStatus } from "./ConcurrencySettings";
 export interface Voice {
   observations?: {tone: string; accent: string; performance: string; volume: string};
   inspection?: {target: "reference" | "sample"; audioId: string | null; checked: boolean; at: string};
@@ -170,7 +171,16 @@ export interface GenerationPlan {
   textRequests:number;
   audioRequests:number;
 }
-export interface AudioRecord {
+export interface AudioProvenanceMetadata {
+  originalAudioId?: string;
+  originalAvailability?: "retained" | "not-saved";
+  provenance?: "provider-original" | "processed";
+  processing?: {version?:string;profile?:string;reason?:string};
+}
+export interface AudioHistoryRecord extends AudioProvenanceMetadata {
+  id:string;prompt:string;matched:boolean;selected:boolean;available?:boolean;createdAt?:string;duration?:number;
+}
+export interface AudioRecord extends AudioProvenanceMetadata {
   id: string;
   duration: number;
   input: Pick<
@@ -203,9 +213,13 @@ export interface ExportRecord {
   createdAt: string;
 }
 export interface Job {
+  counts?: {queued:number;preparing:number;inFlight:number;local:number;success:number;failed:number;unknown:number;stopped:number};
+  attempts?: {id:string;ordinal:number;segmentId?:string;unitId?:string;mode?:string;memberNumbers:number[];phase:string;status:string;submitted:boolean|null}[];
   commandId?: string;
   resultAudioId?: string;
   resultNotSelected?: boolean;
+  localRecoveryAttemptIds?: string[];
+  localRecoveredAudioIds?: string[];
   ids?: string[];
   failed?: number;
   stopped?: number;
@@ -251,7 +265,7 @@ export interface UnitVariant {
   resolvedCompilerId?: string;
   backgroundPresence?: "clear"|"natural"|"subtle"|"unspecified";
   outstandingAttemptIds?: string[];
-  history?: {id:string;prompt:string;matched:boolean;selected:boolean;available?:boolean;createdAt?:string;duration?:number}[];
+  history?: AudioHistoryRecord[];
   guidance?: string;
   current: string | null;
   previous: string | null;
@@ -309,6 +323,7 @@ export interface State {
   voiceSessions?: VoiceSession[];
   jobs: Job[];
   settings: {
+    scheduler?: SchedulerStatus;
     workspaceIdentity?: string;
     workspaceDirectory: string;
     projectFolders: boolean;

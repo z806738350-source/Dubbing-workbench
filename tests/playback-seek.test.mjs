@@ -60,7 +60,7 @@ test('没有当前音频、媒体未就绪或时长不可用时不定位也不�
 });
 
 test('输入文字、选择选项和其他交互控件的方向键不改变播放器',()=>{
-  for(const selector of ['input','textarea','select','[contenteditable]:not([contenteditable="false"])',...['textbox','combobox','slider','spinbutton','listbox','tablist','menu'].map(role=>'[role="'+role+'"]')]){
+  for(const selector of ['input','textarea','select','.select','[contenteditable]:not([contenteditable="false"])',...['textbox','combobox','slider','spinbutton','listbox','tablist','menu'].map(role=>'[role="'+role+'"]')]){
     for(const nested of [false,true]){
       const f=fixture();f.mount();const control=new Target([selector]),target=nested?new Target([],control):control;
       assert.equal(f.key('ArrowRight',{target}).defaultPrevented,false,selector);assert.equal(f.media.currentTime,12.5,selector);assert.deepEqual(f.writes,[]);

@@ -3,10 +3,10 @@ import { join, dirname, basename } from "node:path";
 import { fail, same, text, uid } from "./store.mjs";
 import { storedAudioUnavailable } from "./audio.mjs";
 import { compile, templateOf, templateCatalog, listTemplates, listUnitTemplates } from "./templates.mjs";
-import { createProjectFolder, renameProjectFolder, stageProjectDeletion, recoverProjectDeletions, projectFile } from './workspace.mjs';
+import { createProjectFolder, renameProjectFolder, stageProjectDeletion, recoverProjectDeletions, projectFile, recordFiles } from './workspace.mjs';
 export { compile } from "./templates.mjs";
 import { createEnhancement, defaultFeatures } from "./enhancement.mjs";
-import { configurationDecided, decide, humanChanges, inheritStructure, outstandingAttempts, policyOf } from './experience.mjs';
+import { configurationDecided, decide, humanChanges, assistantActor, assistantChanges, assistantOverride, assistantMutation, inheritStructure, outstandingAttempts, policyOf } from './experience.mjs';
 import { shortRanges } from './semantic.mjs';
 import { importProblems } from './import-validation.mjs';
 
@@ -212,12 +212,13 @@ export function createDomain(store) {
       const project=store.get('projects',id),chapters=store.all('chapters',id),related=table=>chapters.flatMap(c=>store.all(table,c.id));
       const jobs=related('jobs'),attempts=jobs.flatMap(j=>store.all('attempts',j.id)),products=Object.fromEntries(['audios','masters','exports'].map(table=>[table,related(table)]));
       const snapshot=(rows,fields)=>rows.map(row=>Object.fromEntries(['id',...fields].map(field=>[field,row[field]??null]))).sort((a,b)=>a.id.localeCompare(b.id));
-      const scope={project:{id,revision:project.revision??1,contextRevision:project.contextRevision??0},chapters:snapshot(chapters,['revision','arrangement']),products:Object.fromEntries(Object.entries(products).map(([table,rows])=>[table,snapshot(rows,['path'])])),jobs:snapshot(jobs,['status','stop']),attempts:snapshot(attempts,['status','path']),suggestions:snapshot(related('suggestions'),['draftVersion','status'])};
+      const scope={project:{id,revision:project.revision??1,contextRevision:project.contextRevision??0},chapters:snapshot(chapters,['revision','arrangement']),products:Object.fromEntries(Object.entries(products).map(([table,rows])=>[table,snapshot(rows,['path','delivery','processing'])])),jobs:snapshot(jobs,['status','stop']),attempts:snapshot(attempts,['status','path','deliveryVersion','delivery','processing']),suggestions:snapshot(related('suggestions'),['draftVersion','status'])};
+      scope.assistant = store.all('assistantSessions',id).map(s=>({id:s.id,revision:s.revision,state:s.state,attachments:store.all('assistantAttachments',s.id).map(a=>({id:a.id,path:a.path,sourcePath:a.sourcePath})),runs:store.all('assistantRuns',s.id).map(r=>({id:r.id,revision:r.revision,state:r.state}))}));
       const audioIds=new Set(products.audios.map(a=>a.id)),sharedVoiceIds=store.all('voices').filter(v=>audioIds.has(v.sampleAudioId)||audioIds.has(v.sourceAudioId)).map(v=>v.id);
       return {projectId:id,name:project.name,scope,chapters:chapters.map(c=>({id:c.id,title:c.title,revision:c.revision,arrangement:c.arrangement})),counts:{chapters:chapters.length,...Object.fromEntries(Object.entries(products).map(([table,rows])=>[table,rows.length]))},sharedVoiceIds,blockers:sharedVoiceIds.length?[{code:'shared-voice-reference',message:'共用音色仍引用本项目音频，请先处理引用后再删除。'}]:[]};
     });
   }
-  function deleteProject(p) {
+  function deleteProject(p, executionContext) {
     text(p.id, '项目标识', 100);
     let files;
     let result;
@@ -240,10 +241,14 @@ export function createDomain(store) {
           store.all('attempts').some(a => a.status === 'sending' && jobIds.has(a.jobId) || a.grantReservation?.state === 'reserved' && grantIds.has(a.grantReservation.grantId)) ||
           attempts.some(a => a.quota?.state === 'reserved'))
         fail('本项目仍有任务或请求额度正在处理，请等待完成或停止后续任务再删除', 409);
+      const assistantSessions=store.all('assistantSessions',project.id), assistantRuns=assistantSessions.flatMap(s=>store.all('assistantRuns',s.id));
+      const deletingRun = assistantActor(executionContext) && executionContext.actorKind === 'human_approved_proposal' && assistantRuns.find(r => r.id === executionContext.runId);
+      if(assistantRuns.some(r=>r.id !== deletingRun?.id && ['planning','executing','waitingJobs'].includes(r.state))) fail('助手仍在处理此项目，请先暂停并等当前步骤保存后再删除',409);
       const records = {
+        assistantSessions, assistantRuns, assistantMessages:assistantSessions.flatMap(s=>store.all('assistantMessages',s.id)), assistantAttachments:assistantSessions.flatMap(s=>store.all('assistantAttachments',s.id)), assistantSteps:assistantRuns.flatMap(r=>store.all('assistantSteps',r.id)), assistantDecisions:assistantRuns.flatMap(r=>store.all('assistantDecisions',r.id)),
         projects:[project],chapters,roles,segments:related('segments'),units,events,suggestions,jobs,attempts,
         audios:related('audios'),masters:related('masters'),exports:related('exports'),
-        settings:store.all('settings').filter(s => s.id.startsWith('ux-') && (owns(s) || owns(s.request) || owns(s.request?.data) || chapterIds.has(s.dependencies?.chapterId) ||
+        settings:store.all('settings').filter(s => (s.id.startsWith('ux-') || s.id.startsWith('assistant-operation:') || s.id.startsWith('assistant-call:') || s.id.startsWith('tail-maintenance:')) && (owns(s) || owns(s.request) || owns(s.request?.data) || chapterIds.has(s.dependencies?.chapterId) ||
           s.dependencies?.roleIds?.some(id => roleIds.has(id)) || typeof s.request?.action === 'string' && (s.request.action.startsWith('role.') && roleIds.has(s.request.data?.id) ||
           s.request.action.startsWith('project.') && s.request.data?.id === project.id))),
       };
@@ -251,11 +256,12 @@ export function createDomain(store) {
       const audioIds = deletedIds('audios');
       if (store.all('voices').some(v => audioIds.has(v.sampleAudioId) || audioIds.has(v.sourceAudioId)))
         fail('共用音色仍引用本项目音频，未删除任何资料', 409);
-      const sharedPaths = [...store.all('voices'), ...['audios','masters','exports'].flatMap(table => {
+      const sharedPaths = [...store.all('voices'), ...store.all('assistantAttachments').filter(a=>a.projectId!==project.id), ...['audios','masters','exports'].flatMap(table => {
         const ids = deletedIds(table); return store.all(table).filter(row => !ids.has(row.id));
-      }), ...store.all('attempts').filter(a => !jobIds.has(a.jobId))].map(row => row.path).filter(Boolean);
-      const paths = [...records.audios,...records.masters,...records.exports].map(row => row.path).filter(Boolean)
-        .concat(attempts.map(a => a.path || `audio/${a.id}.wav`));
+      })].flatMap(row => recordFiles(row)).concat(store.all('attempts').filter(a => !jobIds.has(a.jobId)).flatMap(a => recordFiles(a, true)));
+      sharedPaths.push(...sharedPaths.map(path => path + '.part'));
+      const paths = [...records.audios,...records.masters,...records.exports,...records.assistantAttachments].flatMap(row => recordFiles(row))
+        .concat(attempts.flatMap(a => recordFiles(a, true)));
       paths.push(...paths.map(path => path + '.part'));
       for (const master of records.masters.filter(m => m.path?.startsWith('masters/'))) {
         const stem = basename(master.path).replace(/\.wav$/, '');
@@ -264,6 +270,13 @@ export function createDomain(store) {
       }
       files = stageProjectDeletion(store, project, paths, sharedPaths);
       for (const [table, rows] of Object.entries(records)) for (const row of rows) store.remove(table, row.id);
+      if (deletingRun) {
+        const stamp = new Date().toISOString();
+        // Keep only a content-free receipt so the approved deletion can finish
+        // and be read without recreating the deleted conversation or materials.
+        store.put('assistantSessions', { id: deletingRun.sessionId, projectId: null, chapterId: null, title: '已删除项目的操作记录', state: 'archived', revision: 1, createdAt: stamp });
+        store.put('assistantRuns', { id: deletingRun.id, sessionId: deletingRun.sessionId, binding: { projectId: null, chapterId: null }, state: 'completed', revision: deletingRun.revision + 1, mode: deletingRun.mode, objective: '项目已删除', summary: '项目及关联资料已删除。', budget: deletingRun.budget, createdAt: stamp, updatedAt: stamp }, deletingRun.sessionId);
+      }
       return {id:project.id,deleted:true};
     }); } catch (error) { files?.undo(); throw error; }
     return {...result,cleanupPending:result.alreadyDeleted ? recoverProjectDeletions(store, p.id) : files?.finish() || false};
@@ -413,7 +426,13 @@ export function createDomain(store) {
             failed: attempts.filter(a => a.status === "failed").length,
             stopped: attempts.filter(a => a.status === "stopped").length,
             unknown: attempts.filter(a => a.status === "unknown").length,
+            localRecoveryAttemptIds: attempts.filter(a => a.phase === 'localRecoveryPending').map(a => a.id),
+            localRecoveredAudioIds: attempts.filter(a => a.phase === 'registered' && a.status !== 'success' && store.maybe('audios', a.id)).map(a => a.id),
             currentSegmentId: attempts.find(a => a.status === "sending")?.segmentId,
+            attempts: attempts.map((a,index) => ({ id:a.id, ordinal:a.ordinal ?? index, segmentId:a.segmentId, unitId:a.unitId, mode:a.mode, phase:a.phase || a.status, status:a.status,
+              submitted: !!a.deliveryVersion || a.quota?.state === 'used' || ['sending','success','unknown'].includes(a.status) ? true : ['queued','stopped'].includes(a.status) ? false : null,
+              memberNumbers: (a.input?.members?.map(m=>m.id) || (a.segmentId?[a.segmentId]:[])).map(id=>store.maybe('segments',id)?.order).filter(n=>Number.isInteger(n)).map(n=>n+1),
+            })).sort((a,b)=>a.ordinal-b.ordinal),
           } : {}), elapsedSeconds: j.finishedAt || active(j) ? Math.max(0, Math.floor((Date.parse(j.finishedAt || new Date().toISOString()) - Date.parse(j.createdAt)) / 1000)) : undefined };
         }),
       };
@@ -1134,7 +1153,11 @@ export function createDomain(store) {
     return {outstandingAttemptIds,generate:{allowed:!generate.length,blockers:generate,warnings:[]},play:{allowed:!play.length,blockers:play,warnings},export:{allowed:!exported.length,blockers:exported,warnings}};
   };
   const originalMutate = api.mutate, originalSnapshot = api.snapshot, originalChapter = api.chapter;
-  api.mutate = (action, p) => action === 'project.delete' ? deleteProject(p) : store.transaction(() => {
+  api.mutate = (action, p, executionContext) => {
+    const actor = assistantActor(executionContext);
+    if (actor && action === 'segment.create' && executionContext.textMutationPolicy !== 'explicitSpecifiedEdit') fail('本次任务要求保留原文，不能新增朗读正文',403);
+    if (actor && ['segment.review','unit.review'].includes(action) && p.state === 'passed' && !executionContext.humanReview?.audioIds?.includes(p.audioId)) fail('未取得用户对这份声音的人工听评决定',403);
+    return action === 'project.delete' ? deleteProject(p, executionContext) : assistantMutation(store,action,p,executionContext,()=>store.transaction(() => {
     if (action === 'chapter.repair-structural-decisions') {
       const c=editable(p.chapterId,p.revision),plan=api.structuralRepairPlan({chapterId:c.id});
       if (!p.scope || !same(p.scope,plan.scope)) fail('结构修复预览范围已变化，请重新核对；未修改任何决定',409);
@@ -1148,15 +1171,39 @@ export function createDomain(store) {
     }
     if (['segment.split','segment.merge'].includes(action)) p={...p,operationId:p.operationId || uid()};
     const before = p.chapterId && (/^segment\./.test(action) || action === 'role.update') ? api.list(p.chapterId) : [];
+    const previousUnit = actor && /^(unit|event)\./.test(action) && (p.unitId || action.startsWith('unit.') && p.id) ? store.maybe('units',p.unitId || p.id) : null;
+    const protectedEvents=actor&&action==='unit.restore'?store.all('events',p.id).filter(e=>e.state==='adopted'&&(!e.source?.kind||['user','inherited_user'].includes(e.source.kind))):[];
+    if(actor&&action==='unit.dissolve'&&!previousUnit?.creationSource&&!assistantOverride(executionContext,p.id,'state'))fail('这项人工一起演绎设置受保护，请先核对具体修改',409);
+    const previousEvent = actor && action.startsWith('event.') && p.id ? store.maybe('events',p.id) : null;
     const result = /^(voice-session|voice-candidate|unit|event)\./.test(action) ? enhancement.mutate(action,p) : originalMutate(action,p);
     for (const previous of before) {
       const current = store.get('segments',previous.id);
-      if (p.identityChosen !== true && !previous.decisions && !policyOf(store,store.get('chapters',current.chapterId).projectId).revision) continue;
-      if (humanChanges(previous,current,action,p)) store.put('segments',current,current.chapterId);
+      if (!actor && p.identityChosen !== true && !previous.decisions && !policyOf(store,store.get('chapters',current.chapterId).projectId).revision) continue;
+      if ((actor ? assistantChanges(previous,current,action,p,executionContext) : humanChanges(previous,current,action,p))) store.put('segments',current,current.chapterId);
+    }
+    for(const old of protectedEvents){const current=store.get('events',old.id);if(['kind','description','memberId','position','startMemberId','endMemberId','startPosition','endPosition','transition','evidence','state'].some(field=>!same(old[field],current[field]))&&!assistantOverride(executionContext,old.id,'state'))fail('这项人工声音事件受保护，请先核对具体修改',409);}
+    if (actor && ['unit.create','unit.update','unit.restore'].includes(action)) {
+      const unit = store.get('units',result.id), mode = p.mode || unit.mode, variant = unit.variants[mode], previous = previousUnit?.variants[mode];
+      for (const field of ['guidance','backgroundPresence']) if ((p[field] !== undefined || action === 'unit.restore') && !same(previous?.[field],variant[field])) {
+        const source = previous?.[field+'Source']?.kind, manual = previous?.[field] && (!source || ['user','inherited_user'].includes(source));
+        if (manual && !assistantOverride(executionContext,unit.id,field)) fail('这项人工声音设置受保护，请先核对具体修改',409);
+        variant[field+'Source'] = {kind:'policy_ai',at:new Date().toISOString(),...actor};
+      }
+      if(action==='unit.create')unit.creationSource=actor;unit.executionSource = actor; store.put('units',unit,unit.chapterId);
+    }
+    if(actor && action==='voice-session.create' && p.projectId){store.get('projects',p.projectId);result.projectId=p.projectId;result.executionSource=actor;store.put('voiceSessions',result);}
+    if (actor && action.startsWith('event.')) {
+      const event = store.get('events',result.id);
+      const changed = ['kind','description','memberId','position','startMemberId','endMemberId','startPosition','endPosition','transition','evidence'].filter(field=>!same(previousEvent?.[field],event[field]));
+      if(previousEvent?.state==='adopted'&&event.state!=='adopted')changed.push('state');
+      if (previousEvent && (!previousEvent.source?.kind || ['user','inherited_user'].includes(previousEvent.source.kind))) for (const field of changed) if (!assistantOverride(executionContext,event.id,field)) fail('这项人工声音事件受保护，请先核对具体修改',409);
+      if (changed.length) event.source = {kind:'policy_ai',...actor};
+      if (previousEvent?.state !== event.state) event.adoptionSource = actor;
+      store.put('events',event,event.unitId);
     }
     if (result.id && /^segment\./.test(action) && store.maybe('segments',result.id)) return {...store.get('segments',result.id),...(result.chapterRevision ? {chapterRevision:result.chapterRevision} : {})};
     return result;
-  });
+  })); };
   api.snapshot = () => {
     enhancement.syncLegacy();
     const result = originalSnapshot();

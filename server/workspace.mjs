@@ -53,21 +53,75 @@ export async function saveWorkspaceLocation(directory, config = workspaceConfig)
   } finally { await rm(temp, { force: true }); }
 }
 
+// All local files held by a record, including a received result not yet registered.
+// Planned files may not exist; retaining them never proves provider completion.
+export function recordFiles(item, attempt = false) {
+  const path = item.path || (attempt ? `audio/${item.id}.wav` : null);
+  return [...new Set([path, item.sourcePath, item.delivery?.rawPath, item.delivery?.manifestPath, item.processing?.resultPath,
+    ...(attempt && item.deliveryVersion ? [`${path}.delivery.json`, `${path.slice(0, -4)}.processed.wav`] : [])].filter(Boolean))];
+}
+function mapRecordFiles(item, map) {
+  if (item.path) item.path = map(item.path);
+  if (item.sourcePath) item.sourcePath = map(item.sourcePath);
+  if (item.delivery) item.delivery = { ...item.delivery, rawPath: map(item.delivery.rawPath), manifestPath: map(item.delivery.manifestPath) };
+  if (item.processing?.resultPath) item.processing = { ...item.processing, resultPath: map(item.processing.resultPath) };
+}
+export async function verifyWorkspaceDeliveries(directory, attempts) {
+  const { verifyAudioDelivery } = await import('./audio-delivery.mjs');
+  for (const attempt of attempts) {
+    if (!attempt.delivery && !attempt.deliveryVersion) continue;
+    const path = attempt.path || `audio/${attempt.id}.wav`, manifest = `${path}.delivery.json`;
+    if (!attempt.delivery && !existsSync(join(directory, manifest))) continue;
+    for (const file of recordFiles(attempt, true).flatMap(path => [path, `${path}.part`])) deletionPath({ directory }, file);
+    await verifyAudioDelivery({ directory }, attempt);
+  }
+}
+
+// Attachment IDs and byte counts cannot detect same-length file corruption. The
+// hashes already stored at upload bind both the received image and its derivative.
+export async function verifyWorkspaceAttachments(directory, attachments) {
+  const { audioDigest } = await import('./audio-delivery.mjs');
+  const unverifiedSources = [];
+  for (const item of attachments.filter(item => item.state !== 'deleted')) {
+    for (const [path, bytes, hash, original] of [[item.path, item.bytes, item.hash, false], [item.sourcePath, item.sourceBytes, item.sourceHash, true]]) {
+      if (!path) { if (original) unverifiedSources.push(item.id); continue; }
+      const file = deletionPath({ directory }, path), actual = await audioDigest(file);
+      if (!Number.isSafeInteger(bytes) || actual.bytes !== bytes || (hash && actual.sha256 !== hash) || (!original && !hash))
+        fail(`助手截图${original ? '原件' : '处理版'}完整性校验失败：${item.id}`);
+      if (original && !hash) unverifiedSources.push(item.id);
+    }
+  }
+  return { unverifiedSources };
+}
+
 // Read-only inventory: original recordings and historical exports are not caches.
 export function workspaceDiagnostics(store) {
-  const counts = {}, bytes = {}, missing = [], root = realpathSync(store.directory);
-  const available = item => {
-    if (!item?.path) return false;
-    const path = resolve(root, item.path), rel = relative(root, path);
-    return rel && !rel.startsWith('..') && !isAbsolute(rel) && existsSync(path) && lstatSync(path).isFile() && !lstatSync(path).isSymbolicLink();
+  const counts = {}, bytes = {}, missing = [], root = realpathSync(store.directory), counted = new Set();
+  const available = path => {
+    if (!path) return false;
+    try { const file = deletionPath(store, path); return lstatSync(file).isFile(); } catch { return false; }
   };
-  for (const kind of ['voices','audios','masters','exports']) {
+  const account = (kind, path) => {
+    if (!counted.has(path)) { counted.add(path); bytes[kind] += lstatSync(resolve(root, path)).size; }
+  };
+  for (const kind of ['voices','audios','masters','exports','assistantAttachments']) {
     const rows = store.all(kind).filter(item => item.path && item.state !== 'deleted');
     counts[kind] = rows.length; bytes[kind] = 0;
-    for (const item of rows) {
-      if (available(item)) { bytes[kind] += lstatSync(resolve(root,item.path)).size; continue; }
-      const repairable = kind === 'masters' && Array.isArray(item.mapping) && item.mapping.length > 0 && Number.isSafeInteger(item.frames) && Number.isSafeInteger(item.gapFrames) && item.gapFrames >= 0 && item.processing === 'pcm_s16le-48000-mono' && item.mapping.every(m => available(store.maybe('audios',m.audioId)));
-      missing.push({kind,id:item.id,path:item.path,repairable:!!repairable});
+    for (const item of rows) for (const path of recordFiles(item)) {
+      if (available(path)) { account(kind, path); continue; }
+      const repairable = kind === 'masters' && path === item.path && Array.isArray(item.mapping) && item.mapping.length > 0 && Number.isSafeInteger(item.frames) && Number.isSafeInteger(item.gapFrames) && item.gapFrames >= 0 && item.processing === 'pcm_s16le-48000-mono' && item.mapping.every(m => available(store.maybe('audios',m.audioId)?.path));
+      missing.push({kind,id:item.id,path,repairable:!!repairable});
+    }
+  }
+  const deliveries = store.all('attempts').filter(a => a.delivery || a.deliveryVersion && existsSync(join(root, `${a.path || `audio/${a.id}.wav`}.delivery.json`)));
+  counts.deliveries = deliveries.length; bytes.deliveries = 0;
+  for (const attempt of deliveries) {
+    const raw = attempt.delivery?.rawPath || attempt.path || `audio/${attempt.id}.wav`;
+    const required = new Set([raw, attempt.delivery?.manifestPath || `${raw}.delivery.json`, attempt.processing?.resultPath].filter(Boolean));
+    for (const path of recordFiles(attempt, true)) {
+      if (available(path)) { account('deliveries', path); continue; }
+      if (path === raw && available(`${raw}.part`)) { account('deliveries', `${raw}.part`); continue; }
+      if (required.has(path)) missing.push({kind:'deliveries',id:attempt.id,path,repairable:false});
     }
   }
   return {scope:'current-workspace',counts,bytes,missing,primaryAvailable:missing.every(item=>item.kind === 'masters' && item.repairable),totalReferencedBytes:Object.values(bytes).reduce((a,b)=>a+b,0)};
@@ -89,9 +143,11 @@ export async function copyWorkspace(store, requested) {
     fail('目标文件夹不为空，请选择空文件夹或新位置，避免覆盖资料');
   const staging = await mkdtemp(join(parent, '.dubbing-move-'));
   try {
+    await verifyWorkspaceDeliveries(source, store.all('attempts'));
+    await verifyWorkspaceAttachments(source, store.all('assistantAttachments'));
     // SQLite creates a consistent database copy including committed WAL contents.
     store.db.exec(`VACUUM INTO '${join(staging, 'workbench.sqlite').replaceAll("'", "''")}'`);
-    for (const folder of new Set(['voices', 'audio', 'masters', 'exports', 'output', ...store.all('projects').map(p => p.folder).filter(Boolean)])) {
+    for (const folder of new Set(['voices', 'audio', 'masters', 'exports', 'output', 'assistant', ...store.all('projects').map(p => p.folder).filter(Boolean)])) {
       if (!existsSync(join(source, folder))) continue;
       await cp(join(source, folder), join(staging, folder), {
         recursive: true, force: false, errorOnExist: true,
@@ -105,18 +161,23 @@ export async function copyWorkspace(store, requested) {
     const db = new DatabaseSync(join(staging, 'workbench.sqlite'), { readOnly: true });
     try {
       if (Object.values(db.prepare('PRAGMA integrity_check').get())[0] !== 'ok') fail('新位置的数据库校验失败');
-      for (const table of ['voices', 'audios', 'masters', 'exports']) {
+      for (const table of ['voices', 'audios', 'masters', 'exports', 'attempts', 'assistantAttachments']) {
         for (const { data } of db.prepare(`SELECT data FROM ${table}`).all()) {
           const item = JSON.parse(data);
-          if (!item.path || item.state === 'deleted') continue;
-          const path = resolve(staging, item.path);
-          if (!inside(staging, path)) fail(`素材路径无效：${item.path}，未切换保存位置`);
-          if (!existsSync(path)) {
-            if (table === 'masters') { missingMasters.push(item); continue; }
-            fail(`原始素材或历史导出缺失：${item.path}，请恢复文件后再迁移`);
+          if (item.state === 'deleted') continue;
+          const required = new Set(recordFiles(item));
+          if (table === 'attempts') required.delete(item.path);
+          for (const file of recordFiles(item, table === 'attempts')) {
+            const path = resolve(staging, file);
+            if (!inside(staging, path)) fail(`素材路径无效：${file}，未切换保存位置`);
+            if (!existsSync(path)) {
+              if (table === 'masters' && file === item.path) { missingMasters.push(item); continue; }
+              if (table === 'attempts' && (!required.has(file) || file === item.delivery?.rawPath && existsSync(path + '.part'))) continue;
+              fail(`原始素材或历史导出缺失：${file}，请恢复文件后再迁移`);
+            }
+            const a = await lstat(resolve(source, file)), b = await lstat(path);
+            if (!a.isFile() || !b.isFile() || a.size !== b.size) fail('新位置的素材校验失败');
           }
-          const a = await lstat(resolve(source, item.path)), b = await lstat(path);
-          if (!a.isFile() || !b.isFile() || a.size !== b.size) fail('新位置的素材校验失败');
         }
       }
     } finally { db.close(); }
@@ -138,6 +199,8 @@ export async function copyWorkspace(store, requested) {
         }
       }
       organizeProjects(copy);
+      await verifyWorkspaceDeliveries(staging, copy.all('attempts'));
+      await verifyWorkspaceAttachments(staging, copy.all('assistantAttachments'));
     } finally { copy.close(); }
     await rename(staging, target);
     return target;
@@ -176,9 +239,13 @@ export async function revealExport(store, id, run = promisify(execFile)) {
   return { path: file };
 }
 
+function validateFolderSegment(name) {
+  if (typeof name !== 'string' || !name || name === '.' || name === '..' || /[/\\\x00-\x1f]/.test(name))
+    fail('项目名称不能包含斜杠、控制字符或与工作区系统目录重名');
+}
 function validateFolderName(name) {
-  if (!name || name === '.' || name === '..' || /[/\\\x00-\x1f]/.test(name) ||
-      ['voices', 'audio', 'masters', 'exports', 'output', 'workbench.sqlite', 'runtime.json'].includes(name.toLowerCase()))
+  validateFolderSegment(name);
+  if (['voices', 'audio', 'masters', 'exports', 'output', 'assistant', 'workbench.sqlite', 'runtime.json'].includes(name.toLowerCase()))
     fail('项目名称不能包含斜杠、控制字符或与工作区系统目录重名');
 }
 export function createProjectFolder(store, project) {
@@ -193,10 +260,10 @@ export function createProjectFolder(store, project) {
 }
 
 function projectRecords(store, project) {
-  return store.all('chapters', project.id).flatMap(c => [
+  return [...store.all('chapters', project.id).flatMap(c => [
     ...['audios', 'masters', 'exports'].flatMap(table => store.all(table, c.id).map(row => [table, row, c.id])),
     ...store.all('jobs', c.id).flatMap(j => store.all('attempts', j.id).map(row => ['attempts', row, j.id])),
-  ]);
+  ]), ...store.all('assistantAttachments').filter(a => a.projectId === project.id).map(a => ['assistantAttachments', a, a.sessionId])];
 }
 
 function organizeProjects(store) {
@@ -205,16 +272,18 @@ function organizeProjects(store) {
       if (!project.folder) createProjectFolder(store, project);
       store.put('projects', project);
       for (const [table, row, parent] of projectRecords(store, project)) {
-        const old = row.path || (table === 'attempts' ? `audio/${row.id}.wav` : null);
-        if (!old) continue;
-        const kind = table === 'attempts' || table === 'audios' ? 'audio' : table === 'exports' && dirname(old).split('/').at(-1) === 'output' ? 'output' : table;
-        const next = join(project.folder, kind, basename(old));
-        mkdirSync(join(store.directory, project.folder, kind), { recursive: true });
-        for (const suffix of ['', '.part']) {
-          if (old !== next && existsSync(join(store.directory, old + suffix)))
-            renameSync(join(store.directory, old + suffix), join(store.directory, next + suffix));
+        if (table === 'attempts' && !row.path) row.path = `audio/${row.id}.wav`;
+        const kind = table === 'assistantAttachments' ? 'assistant/attachments' : table === 'attempts' || table === 'audios' ? 'audio' : table === 'exports' && dirname(row.path || '').split('/').at(-1) === 'output' ? 'output' : table;
+        const destination = path => join(project.folder, kind, basename(path));
+        for (const old of recordFiles(row, table === 'attempts')) {
+          const next = destination(old);
+          mkdirSync(join(store.directory, project.folder, kind), { recursive: true });
+          for (const suffix of ['', '.part']) {
+            if (old !== next && existsSync(join(store.directory, old + suffix)))
+              renameSync(join(store.directory, old + suffix), join(store.directory, next + suffix));
+          }
         }
-        row.path = next;
+        mapRecordFiles(row, destination);
         store.put(table, row, parent);
       }
     }
@@ -233,7 +302,8 @@ export function renameProjectFolder(store, project, name) {
   try {
     renameSync(join(store.directory, old), dest);
     for (const [table, row, parent] of projectRecords(store, project)) {
-      if (row.path?.startsWith(old + '/')) { row.path = name + row.path.slice(old.length); store.put(table, row, parent); }
+      mapRecordFiles(row, path => path?.startsWith(old + '/') ? name + path.slice(old.length) : path);
+      store.put(table, row, parent);
     }
     project.folder = name;
     return () => renameSync(dest, join(store.directory, old));
@@ -246,7 +316,7 @@ export function renameProjectFolder(store, project, name) {
 // Filesystem renames cannot join a SQLite transaction. Keep their original paths
 // until the outer commit so an interrupted delete can restore or finish on restart.
 const deleteManifest = '.project-delete.json';
-function deletionPath(store, path) {
+export function deletionPath(store, path) {
   if (typeof path !== 'string' || !path || isAbsolute(path) || /[\\\x00-\x1f]/.test(path)) fail('项目素材路径无效，未删除任何资料', 409);
   const target = resolve(store.directory, path), inside = relative(resolve(store.directory), target);
   if (!inside || inside === '..' || inside.startsWith('../') || isAbsolute(inside) || inside !== path) fail('项目素材路径越出工作区或未规范化，未删除任何资料', 409);
@@ -283,7 +353,8 @@ export function stageProjectDeletion(store, project, paths, sharedPaths = []) {
     const file = resolve(root, path); return relative(root, existsSync(file) ? realpathSync(file) : file);
   });
   if (folder) {
-    validateFolderName(folder);
+    // Existing folders are identified by ownership below, not today's naming rules.
+    validateFolderSegment(folder);
     const directory = deletionPath(store, folder);
     if (existsSync(directory)) {
       const marker = join(directory, '.project-id');
@@ -296,7 +367,7 @@ export function stageProjectDeletion(store, project, paths, sharedPaths = []) {
   const shared = new Set(sharedPaths.map(path => resolve(store.directory, path)));
   const files = [...new Set(paths)].filter(Boolean).filter(path => !shared.has(resolve(store.directory, path)));
   for (const path of files) {
-    if (!['audio', 'masters', 'exports', 'output'].some(kind => path.startsWith(kind + '/')) && !(folder && path.startsWith(folder + '/')))
+    if (!['audio', 'masters', 'exports', 'output', 'assistant/attachments'].some(kind => path.startsWith(kind + '/')) && !(folder && path.startsWith(folder + '/')))
       fail('项目素材不在本项目或系统素材目录，未删除任何资料', 409);
     deletionPath(store, path);
   }

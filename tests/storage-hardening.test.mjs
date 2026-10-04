@@ -17,13 +17,16 @@ function fixture(t) {
   return { root, store, domain: createDomain(store) };
 }
 
-test('新语义库拒绝旧v2写入器，只读备份仍能读取且旧记录不被重写', t => {
+test('新语义库拒绝旧v2和v3写入器，只读备份仍能读取且旧记录不被重写', t => {
   const { store } = fixture(t), record = { id: uid(), prompt: '历史提示保持原样', input: { template: 'scene-v3-native' } };
   store.put('audios', record);
-  assert.equal(store.get('settings', 'data-schema').version, 3);
+  assert.equal(store.get('settings', 'data-schema').version, 4);
   const old = new DatabaseSync(join(store.directory, 'workbench.sqlite'));
   t.after(() => old.close()); old.function('workbench_schema_version', () => 2);
   assert.throws(() => old.prepare('UPDATE audios SET data=? WHERE id=?').run(JSON.stringify({ ...record, prompt: 'old writer' }), record.id), /Unsupported/);
+  assert.throws(() => old.prepare('DELETE FROM audios WHERE id=?').run(record.id), /Unsupported/);
+  old.function('workbench_schema_version', () => 3);
+  assert.throws(() => old.prepare('UPDATE audios SET data=? WHERE id=?').run(JSON.stringify({ ...record, prompt: 'v3 writer' }), record.id), /Unsupported/);
   assert.throws(() => old.prepare('DELETE FROM audios WHERE id=?').run(record.id), /Unsupported/);
   assert.deepEqual(store.get('audios', record.id), record);
   const reader = new DatabaseSync(join(store.directory, 'workbench.sqlite'), { readOnly: true });
@@ -102,5 +105,6 @@ test('升级中断回滚DDL及连接写入资格，不把旧库留在半升级�
   store.put('settings',{id:'data-schema',version:2,rollbackVerified:true});
   assert.ok(store.db.prepare("SELECT name FROM sqlite_master WHERE name='schema_v2_settings_UPDATE'").get());
   assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name='schema_v3_settings_UPDATE'").get(),undefined);
-  createDomain(store); assert.equal(store.get('settings','data-schema').version,3);
+  assert.equal(store.db.prepare("SELECT name FROM sqlite_master WHERE name='schema_v4_settings_UPDATE'").get(),undefined);
+  createDomain(store); assert.equal(store.get('settings','data-schema').version,4);
 });

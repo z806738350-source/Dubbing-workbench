@@ -1,0 +1,988 @@
+{
+  "generatedAt": "2026-10-04",
+  "scope": "audio_delivery_m0 subagent actual evidence; parent must merge delegated verification",
+  "notAcceptanceClaims": [
+    "No paid provider calls",
+    "No real user workspace changes",
+    "No manual voice-content listening acceptance",
+    "Power loss guarantees not tested"
+  ],
+  "benchmark": {
+    "medianMs": {
+      "1": 1950.2322090000007,
+      "2": 979.9814999999999,
+      "3": 701.0130410000002
+    },
+    "runs": 12,
+    "requestsPerRun": 12,
+    "maxInFlightByN": [
+      1,
+      2,
+      3
+    ],
+    "localPeak": 1,
+    "latestAfterSharedMediaProcessPool": true
+  },
+  "items": [
+    {
+      "id": "T01",
+      "title": "原件与派生音频分离",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/audio-delivery.test.mjs :: AE-H01 完整供应商原件与带版本配方的处理版分别保留"
+        ],
+        "logs": [
+          "data/m1-concurrency/discard-and-delivery.log"
+        ]
+      },
+      "note": "验证为合成PCM与Mock完整响应逐字节对照，不代表真人台词语义听评。"
+    },
+    {
+      "id": "T02",
+      "title": "登记失败与处理崩溃恢复",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/audio-delivery.test.mjs :: AE-H01-R 登记失败后重开仅本地恢复，清理来源不丢，旧批次不复活",
+          "tests/audio-delivery.test.mjs :: 封存、配方、派生与登记各边界中断",
+          "tests/audio-crash-recovery.test.mjs"
+        ],
+        "logs": [
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m0-audio-delivery/real-process-crash.log"
+        ]
+      },
+      "note": "包括7个真正SIGKILL子进程边界；只声明进程崩溃恢复，不声明断电持久性。"
+    },
+    {
+      "id": "T03",
+      "title": "既有output目录兼容",
+      "status": "已实现未验证",
+      "evidence": {
+        "tests": [],
+        "logs": []
+      },
+      "note": "由workspace专项agent实施和验证，合并报告须使用该agent证据；此清单不冒称本人复跑。"
+    },
+    {
+      "id": "T04",
+      "title": "当前业务能力和调用依赖清单",
+      "status": "已实现未验证",
+      "evidence": {
+        "tests": [],
+        "logs": []
+      },
+      "note": "由capability agent提供完整注册表和真实handler覆盖；本agent仅交付有界audio.tail.repair适配。"
+    },
+    {
+      "id": "T05",
+      "title": "attempt执行器串行等价重构",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/worker.test.mjs",
+          "tests/enhancement-worker.test.mjs"
+        ],
+        "logs": [
+          "data/m1-concurrency/n1-equivalence.log",
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "先单执行器N1等价125项；最终原回归连同delivery182项通过。两套集合有重复，不相加为不同测试数。"
+    },
+    {
+      "id": "T06",
+      "title": "资源池与单章并发",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "可控barrier验证3个真实Mock fetch同时在途，第4个等待；释放一槽立即补位。"
+    },
+    {
+      "id": "T07",
+      "title": "乱序登记与job最终收束",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位，乱序不改变朗读顺序或丢计数",
+          "tests/concurrency.test.mjs :: 恢复未收束混合结果从attempt重建持久done及阶段计数，已关闭批次保持历史",
+          "tests/concurrency.test.mjs :: 新generationEpoch优先于物理插入顺序；无epoch历史仍保留原先顺序判断"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "3/1/2等乱序回执保存事实，选中顺序保持单元顺序；母版实际构建由既有worker/enhancement回归覆盖。"
+    },
+    {
+      "id": "T08",
+      "title": "费用、路由和停止矩阵",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC13/16/19",
+          "tests/concurrency.test.mjs :: VC17",
+          "tests/concurrency.test.mjs :: VC18",
+          "tests/concurrency.test.mjs :: VC21",
+          "tests/concurrency.test.mjs :: VC22",
+          "tests/enhancement-worker.test.mjs :: 调用额度在两工作进程间原子预留",
+          "tests/concurrency.test.mjs :: 独立upstream期限失败保留unknown和已发次数，不重发也不提升part",
+          "tests/concurrency.test.mjs :: 独立receiving期限失败保留unknown和已发次数，不重发也不提升part",
+          "tests/concurrency.test.mjs :: 响应头与接收体使用独立预算，完整响应后的本地处理不继续消费网络时限",
+          "tests/media-resource.test.mjs :: hung native child has a bounded lifetime and releases the shared slot before queued work starts"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "明确401/403/429/502、unknown与本地恢复，全部为模拟供应商状态。真实账号限额仍默认1。"
+    },
+    {
+      "id": "T09",
+      "title": "关机、重启、维护与新语义兼容",
+      "status": "已实现未验证",
+      "evidence": {
+        "tests": [
+          "tests/audio-crash-recovery.test.mjs",
+          "tests/concurrency-integration.test.mjs :: 三段在途时迁移被拒；服务器关闭等待回执及本地整理"
+        ],
+        "logs": [
+          "data/m0-audio-delivery/real-process-crash.log",
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "强杀、优雅drain和在途迁移阻断已验证；schema升级、旧writer拒写、整套备份恢复由root/workspace agent证据补齐。"
+    },
+    {
+      "id": "T10",
+      "title": "跨章与候选公平调度",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC05/06/27 两章和试音共池",
+          "tests/concurrency.test.mjs :: VC05/08/09 候选、组合与场景共池",
+          "tests/concurrency.test.mjs :: 已有后台请求很慢时，持续新试音不能绕过两次交互后补后台的约束"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "唯一服务worker内共享池，交互连续最多2次后让后台；含已在途慢后台不被永久挤出反例。"
+    },
+    {
+      "id": "T11",
+      "title": "参考缓存、处理反压与性能",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC28 原件封存后释放网络槽，本地处理池1及积压数量共同反压",
+          "tests/concurrency.test.mjs :: VC29 参考共享只核验一次",
+          "data/m1-concurrency/run-benchmark.mjs",
+          "tests/concurrency.test.mjs :: 独立upstream期限失败保留unknown和已发次数，不重发也不提升part",
+          "tests/concurrency.test.mjs :: 独立receiving期限失败保留unknown和已发次数，不重发也不提升part",
+          "tests/concurrency.test.mjs :: 响应头与接收体使用独立预算，完整响应后的本地处理不继续消费网络时限",
+          "tests/media-resource.test.mjs :: hung native child has a bounded lifetime and releases the shared slot before queued work starts"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/benchmark-shared-media.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "最新12轮基准在root统一媒体进程池后执行；CPU/RSS/临时盘为采样峰值，非OS级硬限制测量。媒体全服务进程上限由root检查补充。"
+    },
+    {
+      "id": "T12",
+      "title": "并发任务UI",
+      "status": "已实现未验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency-client.test.mjs",
+          "tests/concurrency-integration.test.mjs"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log"
+        ]
+      },
+      "note": "本agent组件和HTTP测试已通过；截至补写时生成确认入口、每个并行对象phase/已发未发/停止收束说明由UI agent补齐中，需合并其实现与宽窄屏浏览器证据，不能仅凭全局阶段数认为完成。"
+    },
+    {
+      "id": "VH01",
+      "title": "dry正常尾部清理",
+      "requirement": "原件hash可找；选用派生有版本/来源/帧数；正文不动",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/audio-delivery.test.mjs :: AE-H01 完整供应商原件与带版本配方的处理版分别保留"
+        ],
+        "logs": [
+          "data/m1-concurrency/discard-and-delivery.log"
+        ]
+      },
+      "note": "验证为合成PCM与Mock完整响应逐字节对照，不代表真人台词语义听评。"
+    },
+    {
+      "id": "VH02",
+      "title": "登记失败后重启",
+      "requirement": "原件与清理记录恢复；0模型重发；旧job不复活",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/audio-delivery.test.mjs :: AE-H01-R 登记失败后重开仅本地恢复，清理来源不丢，旧批次不复活",
+          "tests/audio-delivery.test.mjs :: 封存、配方、派生与登记各边界中断",
+          "tests/audio-crash-recovery.test.mjs"
+        ],
+        "logs": [
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m0-audio-delivery/real-process-crash.log"
+        ]
+      },
+      "note": "包括7个真正SIGKILL子进程边界；只声明进程崩溃恢复，不声明断电持久性。"
+    },
+    {
+      "id": "VH03",
+      "title": "处理前/中/后崩溃",
+      "requirement": "临时与封存区分，幂等本地重放，半截不提升",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/audio-delivery.test.mjs :: AE-H01-R 登记失败后重开仅本地恢复，清理来源不丢，旧批次不复活",
+          "tests/audio-delivery.test.mjs :: 封存、配方、派生与登记各边界中断",
+          "tests/audio-crash-recovery.test.mjs"
+        ],
+        "logs": [
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m0-audio-delivery/real-process-crash.log"
+        ]
+      },
+      "note": "包括7个真正SIGKILL子进程边界；只声明进程崩溃恢复，不声明断电持久性。"
+    },
+    {
+      "id": "VH04",
+      "title": "弱尾音/有意末端事件",
+      "requirement": "不冒称语义静音；有原件和可逆选择",
+      "status": "已实现未验证",
+      "evidence": {
+        "tests": [
+          "tests/tail-audio.test.mjs :: long quiet uses both channels and preserves leading/inter-word pauses and a quiet final syllable"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log"
+        ]
+      },
+      "note": "已有合成波形保护与原件保留；有限振幅阈值不能判定语义人声，本agent未做真实弱尾音/有意声效人工听评。"
+    },
+    {
+      "id": "VH05",
+      "title": "scene/参考/候选",
+      "requirement": "dry清理不得误处理，原native输出留存",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/worker.test.mjs:137 :: 自动尾清理不改变正常音频、参考试音或有意的场景音效",
+          "tests/enhancement-worker.test.mjs :: E1候选生成、并发幂等保存"
+        ],
+        "logs": [
+          "data/m1-concurrency/discard-and-delivery.log"
+        ]
+      },
+      "note": "纯人声profile才启用清理，scene/试音/候选保持raw profile；参考文件未写入处理。"
+    },
+    {
+      "id": "VH06",
+      "title": "无尾部/不支持格式",
+      "requirement": "不擅自转格式剪裁，正常保留",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/tail-audio.test.mjs :: unsupported encodings and malformed PCM cannot produce a trim candidate",
+          "tests/worker.test.mjs:137 :: 自动尾清理不改变正常音频、参考试音或有意的场景音效"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/discard-and-delivery.log"
+        ]
+      },
+      "note": "不支持编码不作为裁剪候选；不擅自转码。"
+    },
+    {
+      "id": "VH07",
+      "title": "算法升级与旧产物",
+      "requirement": "旧结果配方不重写，派生ID独立",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/audio-delivery.test.mjs :: 已保存配方无需再次分析；损坏原件拒绝恢复且保留历史",
+          "tests/audio-delivery.test.mjs :: 旧算法未完成配方不借用新算法重剪"
+        ],
+        "logs": [
+          "data/m1-concurrency/discard-and-delivery.log"
+        ]
+      },
+      "note": "已完成旧配方原字节验证；未完成但算法不兼容者停在本地恢复，绝不重新付费生成。"
+    },
+    {
+      "id": "VH08",
+      "title": "用户选择恢复原件",
+      "requirement": "免费可听可选，音频review与选版按现有保护",
+      "status": "已实现未验证",
+      "evidence": {
+        "tests": [],
+        "logs": []
+      },
+      "note": "parent已接原件试听/选用入口；本agent交付metadata与free recover，但未独立执行该UI选择验收。"
+    },
+    {
+      "id": "VH09",
+      "title": "旧output项目",
+      "requirement": "真实旧writer建立，当前合法读写/导出/删除",
+      "status": "已实现未验证",
+      "evidence": {
+        "tests": [],
+        "logs": []
+      },
+      "note": "由workspace专项agent负责，等待其当前日志合入，不用旧输出保留名代码观察冒充复测。"
+    },
+    {
+      "id": "VH10",
+      "title": "新output命名",
+      "requirement": "新建保留名依然拒绝，不放开所有目录",
+      "status": "已实现未验证",
+      "evidence": {
+        "tests": [],
+        "logs": []
+      },
+      "note": "由workspace专项agent负责，等待其当前日志合入，不用旧输出保留名代码观察冒充复测。"
+    },
+    {
+      "id": "VH11",
+      "title": "假标记/软链/共享目录",
+      "requirement": "拒绝危险删除，原范围外数据不变",
+      "status": "已实现未验证",
+      "evidence": {
+        "tests": [],
+        "logs": []
+      },
+      "note": "由workspace专项agent负责，等待其当前日志合入，不用旧输出保留名代码观察冒充复测。"
+    },
+    {
+      "id": "VH12",
+      "title": "原件备份迁移删除",
+      "requirement": "引用完整，删除只处理明确所有权/授权范围",
+      "status": "已实现未验证",
+      "evidence": {
+        "tests": [
+          "tests/attachment-integrity.test.mjs"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log"
+        ]
+      },
+      "note": "附件原件/派生备份迁移同大小篡改已核验；音频封存引用、项目删除、迁移完整验收需合并workspace agent证据。"
+    },
+    {
+      "id": "VC01",
+      "title": "N1等价",
+      "requirement": "正常模式与原串行回归相同，0新增逻辑请求",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/worker.test.mjs",
+          "tests/enhancement-worker.test.mjs"
+        ],
+        "logs": [
+          "data/m1-concurrency/n1-equivalence.log",
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "先单执行器N1等价125项；最终原回归连同delivery182项通过。两套集合有重复，不相加为不同测试数。"
+    },
+    {
+      "id": "VC02",
+      "title": "N3并发屏障",
+      "requirement": "先有3次在途，第4次等待",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "可控barrier验证3个真实Mock fetch同时在途，第4个等待；释放一槽立即补位。"
+    },
+    {
+      "id": "VC03",
+      "title": "释放一槽",
+      "requirement": "立即补1，不超过目标N",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "可控barrier验证3个真实Mock fetch同时在途，第4个等待；释放一槽立即补位。"
+    },
+    {
+      "id": "VC04",
+      "title": "上调/下调",
+      "requirement": "上调只补授权待发；下调不杀在途",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC04 降并发不取消在途，上调只使用原计划待发目标"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "VC05",
+      "title": "多入口合计",
+      "requirement": "普通/组/scene/候选共用上限",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC05/06/27 两章和试音共池",
+          "tests/concurrency.test.mjs :: VC05/08/09 候选、组合与场景共池",
+          "tests/concurrency.test.mjs :: 已有后台请求很慢时，持续新试音不能绕过两次交互后补后台的约束"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "唯一服务worker内共享池，交互连续最多2次后让后台；含已在途慢后台不被永久挤出反例。"
+    },
+    {
+      "id": "VC06",
+      "title": "不同路由同账户",
+      "requirement": "配置共享资源组，不各自越账号限额",
+      "status": "已实现未验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC05/06/27 两章和试音共池"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log"
+        ]
+      },
+      "note": "当前部署只有一个可信音频route配置，全入口受该唯一资源组上限约束；没有配置两条不同URL同账号做独立实测，不冒称双路由账号映射已验收。"
+    },
+    {
+      "id": "VC07",
+      "title": "正文3/1/2完成",
+      "requirement": "最终编排1/2/3，参考映射正确",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位，乱序不改变朗读顺序或丢计数",
+          "tests/concurrency.test.mjs :: 恢复未收束混合结果从attempt重建持久done及阶段计数，已关闭批次保持历史",
+          "tests/concurrency.test.mjs :: 新generationEpoch优先于物理插入顺序；无epoch历史仍保留原先顺序判断"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "3/1/2等乱序回执保存事实，选中顺序保持单元顺序；母版实际构建由既有worker/enhancement回归覆盖。"
+    },
+    {
+      "id": "VC08",
+      "title": "组与单句混合",
+      "requirement": "每个成员只覆盖一次，组不拆成多请求",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC05/08/09 候选、组合与场景共池，组仍只发一次，同章不能另开竞争任务"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "同章唯一活动job沿用；dry/scene重叠目标不可另开任务争用，旧闭批迟到由existing enhancement-worker保护。"
+    },
+    {
+      "id": "VC09",
+      "title": "同目标dry/scene竞争",
+      "requirement": "不能同时争用选版，新旧epoch不覆盖",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC05/08/09 候选、组合与场景共池，组仍只发一次，同章不能另开竞争任务"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "同章唯一活动job沿用；dry/scene重叠目标不可另开任务争用，旧闭批迟到由existing enhancement-worker保护。"
+    },
+    {
+      "id": "VC10",
+      "title": "兄弟结果使编排增加",
+      "requirement": "其他原计划合法成员仍能发送，不自我过期",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位，乱序不改变朗读顺序或丢计数"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "3/1/2等乱序回执保存事实，选中顺序保持单元顺序；母版实际构建由既有worker/enhancement回归覆盖。"
+    },
+    {
+      "id": "VC11",
+      "title": "外部真实改动",
+      "requirement": "守卫正确拒绝，不把所有变化当兄弟完成",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC11 外部真实单元改动仍阻断该发送，合法兄弟可完成"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "VC12",
+      "title": "同时成功计数",
+      "requirement": "done与DB事实一致，不丢增量",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位，乱序不改变朗读顺序或丢计数",
+          "tests/concurrency.test.mjs :: 恢复未收束混合结果从attempt重建持久done及阶段计数，已关闭批次保持历史",
+          "tests/concurrency.test.mjs :: 新generationEpoch优先于物理插入顺序；无epoch历史仍保留原先顺序判断"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "3/1/2等乱序回执保存事实，选中顺序保持单元顺序；母版实际构建由既有worker/enhancement回归覆盖。"
+    },
+    {
+      "id": "VC13",
+      "title": "一个失败其他在途",
+      "requirement": "保留成功，job待全体收束后终结",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC13/16/19 502未知只停未发送项，兄弟合法回执照常登记直到全体收束",
+          "tests/worker.test.mjs:388 :: 传输中断不自动重试，结束批次并停止余下项"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "502/断流没有确定未执行证据时保留unknown，不自动重发。"
+    },
+    {
+      "id": "VC14",
+      "title": "停止于reference检查",
+      "requirement": "尚未发送项0请求",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC14/15/30 停止领取后等待在途和本地写入完成",
+          "tests/enhancement-worker.test.mjs :: 多人全部参考预检；异步校验期间停止或关闭不发送"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "VC15",
+      "title": "停止于领取/发送边界",
+      "requirement": "有确切资格界线，已发和未发如实分开",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC14/15/30 停止领取后等待在途和本地写入完成",
+          "tests/enhancement-worker.test.mjs :: 多人全部参考预检；异步校验期间停止或关闭不发送"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "VC16",
+      "title": "停止后合法回执",
+      "requirement": "照常落原任务，不丢原件",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC13/16/19 502未知只停未发送项，兄弟合法回执照常登记直到全体收束",
+          "tests/worker.test.mjs:388 :: 传输中断不自动重试，结束批次并停止余下项"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "502/断流没有确定未执行证据时保留unknown，不自动重发。"
+    },
+    {
+      "id": "VC17",
+      "title": "401/403/额度",
+      "requirement": "资源组停止新派发，已有回执保留",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC17 403暂停共享路由，已有回执不丢，其他章未发停止",
+          "tests/enhancement-worker.test.mjs :: TR07 路由阻断在工作进程间共享"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "VC18",
+      "title": "429/RetryAfter",
+      "requirement": "不无依据自动重发原POST；限流与余额不混",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC18 429记录重试提示但暂停后续，不自动重发也不声称余额确定耗尽"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "VC19",
+      "title": "502/断流/超时",
+      "requirement": "可能费用和unknown保留，不误称未执行",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC13/16/19 502未知只停未发送项，兄弟合法回执照常登记直到全体收束",
+          "tests/worker.test.mjs:388 :: 传输中断不自动重试，结束批次并停止余下项",
+          "tests/concurrency.test.mjs :: 独立upstream期限失败保留unknown和已发次数，不重发也不提升part",
+          "tests/concurrency.test.mjs :: 独立receiving期限失败保留unknown和已发次数，不重发也不提升part",
+          "tests/concurrency.test.mjs :: 响应头与接收体使用独立预算，完整响应后的本地处理不继续消费网络时限",
+          "tests/media-resource.test.mjs :: hung native child has a bounded lifetime and releases the shared slot before queued work starts"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "502/断流没有确定未执行证据时保留unknown，不自动重发。"
+    },
+    {
+      "id": "VC20",
+      "title": "完整原件本地失败",
+      "requirement": "进入本地恢复，不重复收费",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/audio-delivery.test.mjs :: 有完整原件的本地失败不能通过 retryUnknown 重发，免费恢复可以重复调用"
+        ],
+        "logs": [
+          "data/m1-concurrency/discard-and-delivery.log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "VC21",
+      "title": "授权剩余少于并发",
+      "requirement": "最终事务不超额度，未发预留释放",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC21 并发不会扩增授权请求，低于计划额度整批零入队",
+          "tests/enhancement-worker.test.mjs :: 调用额度在两工作进程间原子预留"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "整批计划不足则零入队；最终事务原子预留/消费，未发释放，unknown保留可能用量。"
+    },
+    {
+      "id": "VC22",
+      "title": "授权撤回/过期",
+      "requirement": "preparing也被最后守卫阻断",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC22 准备参考时撤回授权，所有未发槽最终校验阻断且预留全部释放",
+          "tests/concurrency.test.mjs :: VC22 授权在参考准备期间自然到期，最终派发事务停止全部未发槽"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/expired-grant.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "撤回与自然到期分别覆盖；时间替身只前移Date.now，不修改授权record或伪造revoked状态，3个preparing槽均零发送并释放预留。"
+    },
+    {
+      "id": "VC23",
+      "title": "相同command双提交",
+      "requirement": "同job/attempt集合，无双倍并发",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC23 同命令重复提交和tick重入只领取原先的attempt一次"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "VC24",
+      "title": "tick重入",
+      "requirement": "只有同一owner能领取同attempt",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC23 同命令重复提交和tick重入只领取原先的attempt一次"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "VC25",
+      "title": "强杀进程恢复",
+      "requirement": "未发停止，在途未知，完成原件补登记",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/audio-crash-recovery.test.mjs"
+        ],
+        "logs": [
+          "data/m0-audio-delivery/real-process-crash.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "7次真实SIGKILL，包含未发、已发、半截流及4种完整回执/处理边界；不是普通throw假装强杀。"
+    },
+    {
+      "id": "VC26",
+      "title": "closed旧job原件发现",
+      "requirement": "只历史补回，不覆盖后来选用",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/audio-delivery.test.mjs :: AE-H01-R 登记失败后重开仅本地恢复",
+          "tests/enhancement-worker.test.mjs :: 恢复结束后的组请求迟到，只记历史且不覆盖新版或复活解组"
+        ],
+        "logs": [
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "VC27",
+      "title": "候选优先与长章",
+      "requirement": "交互可进、背景不永久饥饿",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC05/06/27 两章和试音共池",
+          "tests/concurrency.test.mjs :: VC05/08/09 候选、组合与场景共池",
+          "tests/concurrency.test.mjs :: 已有后台请求很慢时，持续新试音不能绕过两次交互后补后台的约束"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "唯一服务worker内共享池，交互连续最多2次后让后台；含已在途慢后台不被永久挤出反例。"
+    },
+    {
+      "id": "VC28",
+      "title": "FFmpeg与磁盘反压",
+      "requirement": "受限进程/字节，不能无限起子进程",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC28 原件封存后释放网络槽，本地处理池1及积压数量共同反压",
+          "tests/concurrency.test.mjs :: VC29 参考共享只核验一次",
+          "data/m1-concurrency/run-benchmark.mjs",
+          "tests/concurrency.test.mjs :: 独立upstream期限失败保留unknown和已发次数，不重发也不提升part",
+          "tests/concurrency.test.mjs :: 独立receiving期限失败保留unknown和已发次数，不重发也不提升part",
+          "tests/concurrency.test.mjs :: 响应头与接收体使用独立预算，完整响应后的本地处理不继续消费网络时限",
+          "tests/media-resource.test.mjs :: hung native child has a bounded lifetime and releases the shared slot before queued work starts"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/benchmark-shared-media.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "最新12轮基准在root统一媒体进程池后执行；CPU/RSS/临时盘为采样峰值，非OS级硬限制测量。媒体全服务进程上限由root检查补充。"
+    },
+    {
+      "id": "VC29",
+      "title": "参考缓存停用/删除",
+      "requirement": "租约保护读取，发送前资格仍重查",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC29 参考共享只核验一次，停用仍在最终发送守卫中生效",
+          "tests/worker.test.mjs:833 :: 参考删除等待本地读取和在途任务，删除后保留已有音频并阻断再生成"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "参考缓存按内容核验共享；删除preparing租约的路由集成由parent最新audio/index修改补充。"
+    },
+    {
+      "id": "VC30",
+      "title": "维护/关闭drain",
+      "requirement": "等所有适用任务和文件写入结束才关DB",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/concurrency.test.mjs :: VC14/15/30 停止领取后等待在途和本地写入完成",
+          "tests/concurrency-integration.test.mjs :: 三段在途时迁移被拒；服务器关闭等待回执及本地整理"
+        ],
+        "logs": [
+          "data/m1-concurrency/final-owned-regression.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "id": "VC31",
+      "title": "母版构建和导出",
+      "requirement": "无未收束新成员的假完成，按选中结果一次构建",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "tests/enhancement-worker.test.mjs :: F2 scene单条成组后解除严格恢复预览干声，缺干声阻断母版和导出且零补生成",
+          "tests/enhancement-worker.test.mjs:498 :: EX07/EX08 组与单条混排双格式同母版，删除参考和母版只本地重建"
+        ],
+        "logs": [
+          "data/m1-concurrency/discard-and-delivery.log",
+          "data/m1-concurrency/final-recovery-timeout-epoch.log"
+        ]
+      },
+      "note": "既有实际FFmpeg母版/双格式导出回归通过；生成job收束前render仍受chapter活动任务保护。"
+    },
+    {
+      "id": "VC32",
+      "title": "受控时延基准",
+      "requirement": "固定请求数，记录N1/2/3耗时/峰值/资源，不预填加速比",
+      "status": "已实现并验证",
+      "evidence": {
+        "tests": [
+          "data/m1-concurrency/run-benchmark.mjs"
+        ],
+        "logs": [
+          "data/m1-concurrency/benchmark-shared-media.log",
+          "data/m1-concurrency/benchmark.json"
+        ]
+      },
+      "note": "固定12段，每N热身1次+测量3次；无真实模型调用和费用。"
+    }
+  ],
+  "documents": [
+    "doc/concurrency-assistant/scheduler-recovery-contract.md",
+    "doc/concurrency-assistant/human-acceptance.md"
+  ],
+  "engineeringFollowups": [
+    {
+      "requirement": "T12 / 7.1",
+      "status": "实施中，交UI agent",
+      "remaining": "生成确认页同时制作入口；任务详情按正文顺序显示每个并行对象与phase、已发/未发和停止后的在途说明；完成后运行组件和真实浏览器宽窄屏验证。"
+    },
+    {
+      "requirement": "T03/T04/T09/VH08-VH12跨代理验证",
+      "status": "需要根合并已有证据",
+      "remaining": "不是已知代码缺失；本人未复跑的workspace、能力注册、原件UI、升级和生命周期证据须使用各负责人真实结果补齐。"
+    }
+  ],
+  "closedEngineeringGaps": [
+    {
+      "requirement": "6.3 / T07",
+      "fix": "恢复活动任务共用updateCounts重算持久done/counts；已关闭任务保持原终态",
+      "evidence": "data/m1-concurrency/final-recovery-timeout-epoch.log"
+    },
+    {
+      "requirement": "5.5 / T11",
+      "fix": "独立响应头与接收体期限；本地媒体子进程有界，超时终止实际子进程再释放槽；提前拒绝响应也清理下载",
+      "evidence": "data/m1-concurrency/final-recovery-timeout-epoch.log"
+    },
+    {
+      "requirement": "6.1 / T07",
+      "fix": "新attempt采用generationEpoch比较；旧记录保留原插入顺序兼容",
+      "evidence": "data/m1-concurrency/final-recovery-timeout-epoch.log"
+    }
+  ],
+  "nonEngineeringBoundaries": [
+    "VH04真实弱尾音与有意声效听评、真人用户研究、干净Mac安装需人和设备参与，不是代码缺失。",
+    "真实供应商账号并发、真正模型视觉问答须获准的素材与请求预算；当前默认cap1，Mock验证不替代供应商验证。",
+    "VC06当前只有一个配置音频连接；不存在用户可配置的第二条route，不为虚构双路由验收而新增多路由框架。后续若开放多个route，必须明确账号资源组映射。"
+  ]
+}

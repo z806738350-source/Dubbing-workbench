@@ -1,6 +1,7 @@
 export async function api<T = unknown>(
   path: string,
   body?: unknown,
+  method?: "POST" | "PUT" | "DELETE",
 ): Promise<T> {
   const payload=body && typeof body==='object' ? body as Record<string,unknown> : {},target=payload.data && typeof payload.data==='object' ? payload.data as Record<string,unknown> : payload;
   const scope:Record<string,unknown>={kind:'request',path:'/api'+path};
@@ -11,10 +12,10 @@ export async function api<T = unknown>(
   let response:Response;
   try { response = await fetch(
     "/api" + path,
-    body === undefined
+    body === undefined && !method
       ? undefined
       : {
-          method: "POST",
+          method: method || "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         },
@@ -28,7 +29,7 @@ export async function api<T = unknown>(
     throw Object.assign(new Error(message),{status:response.status,code:data.code||code,scope:{...scope,...(data.scope&&typeof data.scope==='object'?data.scope:{})},retryClass:retry,...(data.notApplied===true?{outcome:data.outcome,notApplied:true,fieldErrors:data.fieldErrors}:{})});
   }
   if(data?.error || data?.outcome==='unknown')data.scope={...scope,...(data.scope&&typeof data.scope==='object'?data.scope:{})};
-  if (body !== undefined) {
+  if (body !== undefined || method) {
     // Cross-tab notification carries no content or credentials; polling remains the fallback.
     try { localStorage.setItem("workbench-change", crypto.randomUUID()); } catch { /* Polling still works when browser storage is unavailable. */ }
   }

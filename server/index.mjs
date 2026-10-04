@@ -3,7 +3,7 @@ import { readFile, stat, writeFile, rm, mkdir } from "node:fs/promises";
 import { existsSync, createReadStream } from "node:fs";
 import { join, resolve, extname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openStore, fail } from "./store.mjs";
+import { openStore, fail, same } from "./store.mjs";
 import { createDomain, textModel } from "./domain.mjs";
 import { createWorker } from "./worker.mjs";
 import {
@@ -16,6 +16,9 @@ import {
 } from "./audio.mjs";
 import { createAnalysis } from "./analysis.mjs";
 import { createExperience } from './experience.mjs';
+import { createActionExecutor } from './actions.mjs';
+import { createAssistant } from './assistant/service.mjs';
+import { previewTailRepair, applyTailRepair } from './tail-maintenance.mjs';
 import { workspaceDirectory, workspaceIdentity, workspaceConfig as defaultWorkspaceConfig, copyWorkspace, saveWorkspaceLocation, recoverProjectFolders, chooseWorkspaceDirectory, readRuntime, workspaceDiagnostics, revealExport } from './workspace.mjs';
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -32,6 +35,10 @@ export function settings() {
     audioUrl: base.replace(/\/v1$/, "") + "/v1/audio/speech",
     baseUrl: base.replace(/\/v1$/, "") + "/v1",
     model: process.env.KUNPO_TTS_MODEL || "seed-audio-1.0",
+    assistantModel: process.env.ASSISTANT_MODEL,
+    assistantBaseUrl: process.env.ASSISTANT_BASE_URL,
+    audioConcurrency: Number(process.env.AUDIO_CONCURRENCY || 1),
+    routeConcurrencyCap: Number(process.env.AUDIO_ROUTE_CONCURRENCY_CAP || 1),
     ...(process.env.KUNPO_AUDIO_CALL_LIMIT ? { callLimit: Number(process.env.KUNPO_AUDIO_CALL_LIMIT) } : {}),
     usageScope: process.env.KUNPO_AUDIO_USAGE_SCOPE || "audio-calls-v1",
   };
@@ -41,6 +48,7 @@ export async function startServer({
   directory = workspaceDirectory(),
   config = settings(),
   workspaceConfig = defaultWorkspaceConfig,
+  assistantFetchImpl,
 } = {}) {
   directory = resolve(directory);
   await mkdir(directory, { recursive: true });
@@ -58,7 +66,7 @@ export async function startServer({
   await writeFile(runtime, JSON.stringify({ pid: process.pid, port }), {
     flag: "wx",
   });
-  let store, domain, worker, analysis, experience, audioTools;
+  let store, domain, worker, analysis, experience, audioTools, assistant, executeAction;
   try {
     store = openStore(directory);
     domain = createDomain(store);
@@ -116,7 +124,29 @@ export async function startServer({
     }
   }
   const referenceReads = new Map();
-  let activeRequests = 0, moving = false, closing = false, movePromise = null, choosingDirectory = false;
+  let activeRequests = 0, moving = false, closing = false, movePromise = null, audioMaintenance = null, choosingDirectory = false;
+  async function repairAudio(p) {
+    if (closing || moving || audioMaintenance) fail('本地维护正在进行，请等当前处理完成', 409);
+    if (p.phase === 'preview') {
+      const preview = await previewTailRepair(store, domain, p);
+      store.put('settings', { id: 'tail-maintenance:' + preview.scope.id, projectId: p.projectId, chapterId: p.chapterId, preview });
+      return preview;
+    }
+    if (p.phase !== 'apply') fail('尾部维护操作无效');
+    const retained = store.get('settings', 'tail-maintenance:' + (p.scope?.id || p.scopeId));
+    if (retained.projectId !== p.projectId || retained.chapterId !== p.chapterId || p.scope && !same(p.scope, retained.preview.scope)) fail('维护范围与已查看的预览不一致', 409);
+    if (worker.running || store.all('jobs').some(j => ['running','queued'].includes(j.status)) || store.all('suggestions').some(s => s.status === 'running') || assistant.attachments.active || referenceReads.size || activeRequests > 1 || assistant.active > 1) fail('请等当前生成、上传或读取结束后再维护音频', 409);
+    audioMaintenance = applyTailRepair(store, domain, { projectId: p.projectId, chapterId: p.chapterId, scope: retained.preview.scope });
+    try { const result = await audioMaintenance; store.put('settings', { ...retained, result }); return result; }
+    finally { audioMaintenance = null; }
+  }
+  function connectAssistant() {
+    executeAction = createActionExecutor({ store, domain, experience, audioTools,
+      activity: (_action, payload) => ({ activeRequests: Math.max(1, activeRequests + (assistant?.active || 0)), referenceReads: referenceReads.size, attachmentWrites: assistant?.attachments.busy(payload.id) }) });
+    assistant = createAssistant({ store, domain, worker, analysis, experience, config, executeAction, repairAudio, fetchImpl: assistantFetchImpl });
+    assistant.recover();
+  }
+  connectAssistant();
   async function serveFile(req, res, file, type) {
     const info = await stat(file);
     const headers = {
@@ -163,8 +193,14 @@ export async function startServer({
         fail("跨站请求已拒绝", 403);
       const path = new URL(req.url, `http://${host}`).pathname;
       if (moving || closing) fail('工作区正在迁移或停止，请稍后重试；未保存内容请保留', 503);
+      if (audioMaintenance && req.method !== 'GET' && !/\/assistant\/runs\/[^/]+\/control$/.test(path)) fail('音频维护正在保存，请稍后操作；已有编辑请保留', 409);
       activeRequests++;
       counted = true;
+      if (req.method === 'POST' && ['/api/audio-tail/preview', '/api/audio-tail/apply'].includes(path)) {
+        const p = await body(req);
+        if (Object.keys(p).some(k => !['projectId','chapterId','unitIds','scopeId'].includes(k))) fail('尾部维护参数无效');
+        return send(res, 200, await repairAudio({ ...p, phase: path.endsWith('/preview') ? 'preview' : 'apply' }));
+      }
       if (req.method === 'POST' && path === '/api/workspace/choose') {
         if (choosingDirectory) fail('文件夹选择窗口已打开，请先完成选择', 409);
         choosingDirectory = true;
@@ -174,16 +210,18 @@ export async function startServer({
       if (req.method === 'POST' && path === '/api/workspace/move') {
         const p = await body(req);
         if (p.source !== directory) fail('保存位置已改变，请重新打开设置后再操作', 409);
-        if (activeRequests !== 1 || referenceReads.size || worker.running ||
+        if (activeRequests !== 1 || referenceReads.size || worker.running || assistant.active ||
+            store.all('assistantRuns').some(r => ['planning', 'executing', 'waitingJobs'].includes(r.state)) ||
             store.all('jobs').some(j => ['queued', 'running'].includes(j.status)) ||
             store.all('suggestions').some(s => s.status === 'running'))
           fail('仍有任务或资料正在处理，请等任务结束、停止试听后再迁移', 409);
         moving = true;
         movePromise = (async () => {
           await analysis.close();
-          const target = await copyWorkspace(store, p.directory);
-          let nextStore;
+          await assistant.close();
+          let target, nextStore;
           try {
+            target = await copyWorkspace(store, p.directory);
             await writeFile(join(target, 'runtime.json'), JSON.stringify({ pid: process.pid, port: server.address().port }), { flag: 'wx' });
             nextStore = openStore(target);
             const nextDomain = createDomain(nextStore), nextWorker = createWorker(nextStore, nextDomain, config), nextAnalysis = createAnalysis(nextStore, nextDomain, config);
@@ -196,16 +234,46 @@ export async function startServer({
             runtime = join(target, 'runtime.json');
             store = nextStore; domain = nextDomain; worker = nextWorker; analysis = nextAnalysis;
             experience = createExperience(store,domain,worker,analysis,config);
+            connectAssistant();
             await rm(oldRuntime, { force: true }).catch(() => console.warn('旧位置运行标记未能移除；原资料仍保留。'));
             return { directory, previousDirectory: p.source };
           } catch (error) {
             nextStore?.close();
-            await rm(target, { recursive: true, force: true });
+            if (target) await rm(target, { recursive: true, force: true });
+            connectAssistant();
             throw error;
           }
         })();
         try { return send(res, 200, await movePromise); }
         finally { moving = false; movePromise = null; }
+      }
+      if (path.startsWith('/api/assistant/')) {
+        const query = new URL(req.url, `http://${host}`).searchParams;
+        const parts = path.split('/').slice(3), [resource, id, action] = parts;
+        if (resource === 'config' && req.method === 'GET') return send(res, 200, assistant.model.publicSettings());
+        if (resource === 'config' && req.method === 'PUT') return send(res, 200, assistant.model.save(await body(req)));
+        if (resource === 'verify' && req.method === 'POST') return send(res, 200, await assistant.verify(await body(req)));
+        if (resource === 'sessions' && !id && req.method === 'GET') return send(res, 200, assistant.list(query.get('projectId')));
+        if (resource === 'sessions' && !id && req.method === 'POST') return send(res, 200, assistant.create(await body(req)));
+        if (resource === 'sessions' && id && !action && req.method === 'GET') return send(res, 200, assistant.get(id));
+        if (resource === 'sessions' && id && !action && req.method === 'DELETE') return send(res, 200, await assistant.archive(id));
+        if (resource === 'sessions' && id && action === 'messages' && req.method === 'POST') return send(res, 200, await assistant.send(id, await body(req)));
+        if (resource === 'runs' && id && action === 'decision' && req.method === 'POST') return send(res, 200, await assistant.approve(id, await body(req)));
+        if (resource === 'runs' && id && action === 'control' && req.method === 'POST') return send(res, 200, await assistant.control(id, await body(req)));
+        if (resource === 'attachments' && !id && req.method === 'POST') return send(res, 200, await assistant.attachments.create(await body(req)));
+        if (resource === 'attachments' && id && req.method === 'GET') {
+          const image = await assistant.attachments.read(id, query.get('sessionId'));
+          res.writeHead(200, { 'Content-Type': image.mime, 'Content-Length': image.data.length, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); return res.end(image.data);
+        }
+        fail('助手入口不存在', 404);
+      }
+      if (path === '/api/scheduler' && req.method === 'GET') return send(res, 200, { ...worker.getActivity(), revision: store.maybe('settings','scheduler')?.revision || 0 });
+      if (path === '/api/scheduler' && req.method === 'PUT') {
+        const p = await body(req), old = store.maybe('settings', 'scheduler') || { revision: 0 };
+        if (p.revision !== old.revision) fail('并发设置已改变，请重新核对', 409);
+        if (!Number.isInteger(p.desiredAudioConcurrency) || p.desiredAudioConcurrency < 1 || p.desiredAudioConcurrency > 4 || Object.keys(p).some(k => !['revision', 'desiredAudioConcurrency'].includes(k))) fail('同时生成段数应为1至4');
+        store.put('settings', { id: 'scheduler', revision: old.revision + 1, desiredAudioConcurrency: p.desiredAudioConcurrency });
+        return send(res, 200, { ...worker.getActivity(), revision: old.revision + 1 });
       }
       if (req.method === "GET" && path === "/api/state")
         return send(res, 200, {
@@ -216,6 +284,8 @@ export async function startServer({
             model: config.model,
             audioTools,
             routeBlocked: worker.routeBlocked,
+            scheduler: { ...worker.getActivity(), revision: store.maybe('settings', 'scheduler')?.revision || 0 },
+            assistant: assistant.model.publicSettings(),
             textModel: textModel(store),
             defaultGap: store.maybe("settings", "models")?.defaultGap ?? 0.5,
             workspaceDirectory: directory,
@@ -247,6 +317,12 @@ export async function startServer({
       }
       if (req.method === "GET" && path.startsWith("/api/attempts/"))
         return send(res, 200, store.all("attempts", path.split("/").pop()));
+      if (req.method === 'POST' && /^\/api\/attempts\/[^/]+\/recover$/.test(path)) {
+        const p = await body(req), id = decodeURIComponent(path.split('/')[3]), attempt = store.get('attempts', id);
+        if (p.jobId !== attempt.jobId || (p.chapterId || '') !== (attempt.chapterId || ''))
+          fail('恢复目标已改变，请重新打开任务记录', 409);
+        return send(res, 200, await worker.recoverLocal(id));
+      }
       if (req.method === "GET" && path.startsWith("/api/audio-record/"))
         return send(res, 200, store.get("audios", path.split("/").pop()));
       if (req.method === 'GET' && /^\/api\/projects\/[^/]+\/experience$/.test(path)) return send(res,200,experience.project(path.split('/')[3]));
@@ -277,27 +353,8 @@ export async function startServer({
         return send(res, 200, analysis.resume(await body(req)));
       if (req.method === "POST" && path === "/api/action") {
         const p = await body(req);
-        if (p.action === 'project.delete' && experience.projectBusy(p.id))
-          fail('这个项目仍有操作正在处理，请等操作结束后再删除', 409);
-        if (p.action === 'project.rename' && store.maybe('projects', p.id)?.folder && (activeRequests !== 1 || referenceReads.size))
-          fail('资料正在读取或保存，请稍后再改项目名称', 409);
-        if (["segment.review", "unit.review", "unit.restore", "unit.select-result"].includes(p.action)) {
-          if (!audioTools) fail("请先配置音频处理程序以核对文件");
-          const a = store.get("audios", p.audioId);
-          if (!await validateStoredAudio(store, a)) fail("音频损坏或缺失，不能记录检查通过");
-        }
-        if (p.action === "voice.update" && p.inspection?.checked) {
-          if (!audioTools) fail("请先配置音频处理程序以核对文件");
-          const v = store.get("voices",p.id);
-          if (p.inspection.target === "sample") {
-            if (!v.sampleAudioId || p.inspection.audioId !== v.sampleAudioId) fail("测试样音已变化，请重新检查",409);
-            if (!await validateStoredAudio(store,store.get("audios",v.sampleAudioId))) fail("测试样音不可用，不能记录已检查");
-          } else {
-            if (!v.path) fail("参考文件已删除");
-            try { await inspect(join(directory,v.path)); } catch { fail("参考文件不可用，不能记录已检查"); }
-          }
-        }
-        const result = domain.mutate(p.action, p);
+        if (['project.delete','project.rename'].includes(p.action) && assistant.busy(p.id)) fail('助手仍在处理此项目，请先暂停并等当前步骤保存后再操作',409);
+        const result = await executeAction(p.action, p);
         return send(res, 200, result);
       }
       if (req.method === "POST" && path === "/api/voices")
@@ -374,8 +431,9 @@ export async function startServer({
     } finally { if (counted) activeRequests--; }
   });
   const interval = setInterval(() => {
-    if (moving || closing) return;
+    if (moving || closing || audioMaintenance) return;
     void worker.tick();
+    void assistant.tick();
     drainReferenceDeletes(store, referenceReads);
   }, 1000);
   try {
@@ -386,6 +444,8 @@ export async function startServer({
   } catch (e) {
     clearInterval(interval);
     worker.close();
+    await assistant.close();
+    await worker.drain();
     await analysis.close();
     store.close();
     await rm(runtime, { force: true });
@@ -396,14 +456,18 @@ export async function startServer({
     get store() { return store; },
     get domain() { return domain; },
     get worker() { return worker; },
+    get assistant() { return assistant; },
     async close() {
       closing = true;
       if (movePromise) await movePromise.catch(() => {});
+      if (audioMaintenance) await audioMaintenance.catch(() => {});
+      assistant.stop();
       worker.close();
       analysis.stop();
       clearInterval(interval);
       await new Promise((r) => server.close(r));
-      while (worker.running) await new Promise((r) => setTimeout(r, 100));
+      await assistant.close();
+      await worker.drain();
       await analysis.close();
       drainReferenceDeletes(store, referenceReads);
       store.close();

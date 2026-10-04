@@ -1,0 +1,3832 @@
+{
+  "spec": "配音工作台-ae96c84隐患修复-多段并发与AI助手执行总规格-v1.0-2026-10-04.md",
+  "baseCommit": "ae96c84cb2c7c6ae209e428010faa289a0b9e181",
+  "tasks": [
+    {
+      "id": "T00",
+      "title": "冻结基线与保护真实资料",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "doc/concurrency-assistant/baseline.md"
+          ],
+          "note": "从 ae96c84 的独立工作树开始，模拟服务和临时工作区完成开发。"
+        }
+      ]
+    },
+    {
+      "id": "T01",
+      "title": "原件与派生音频分离",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T01",
+          "title": "原件与派生音频分离",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/audio-delivery.test.mjs :: AE-H01 完整供应商原件与带版本配方的处理版分别保留"
+            ],
+            "logs": [
+              "data/m1-concurrency/discard-and-delivery.log"
+            ]
+          },
+          "note": "验证为合成PCM与Mock完整响应逐字节对照，不代表真人台词语义听评。"
+        }
+      ]
+    },
+    {
+      "id": "T02",
+      "title": "登记失败与处理崩溃恢复",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T02",
+          "title": "登记失败与处理崩溃恢复",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/audio-delivery.test.mjs :: AE-H01-R 登记失败后重开仅本地恢复，清理来源不丢，旧批次不复活",
+              "tests/audio-delivery.test.mjs :: 封存、配方、派生与登记各边界中断",
+              "tests/audio-crash-recovery.test.mjs"
+            ],
+            "logs": [
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m0-audio-delivery/real-process-crash.log"
+            ]
+          },
+          "note": "包括7个真正SIGKILL子进程边界；只声明进程崩溃恢复，不声明断电持久性。"
+        }
+      ]
+    },
+    {
+      "id": "T03",
+      "title": "既有output目录兼容",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T03",
+          "title": "既有output目录兼容",
+          "status": "已实现未验证",
+          "evidence": {
+            "tests": [],
+            "logs": []
+          },
+          "note": "由workspace专项agent实施和验证，合并报告须使用该agent证据；此清单不冒称本人复跑。"
+        },
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/legacy-output.test.mjs",
+            "data/concurrency-assistant/automation/ae-h02-before.json",
+            "data/concurrency-assistant/automation/ae-h02-after.json"
+          ],
+          "note": "旧 writer 实际复现与现版管理/迁移/导出/删除；新名称及共享引用保护保留。"
+        }
+      ]
+    },
+    {
+      "id": "T04",
+      "title": "当前业务能力和调用依赖清单",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T04",
+          "title": "当前业务能力和调用依赖清单",
+          "status": "已实现未验证",
+          "evidence": {
+            "tests": [],
+            "logs": []
+          },
+          "note": "由capability agent提供完整注册表和真实handler覆盖；本agent仅交付有界audio.tail.repair适配。"
+        },
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T04",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "capability map tracks all accepted actions and every tool has indexed help"
+            }
+          ],
+          "scope": "实际业务能力清单和帮助索引"
+        }
+      ]
+    },
+    {
+      "id": "T05",
+      "title": "attempt执行器串行等价重构",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T05",
+          "title": "attempt执行器串行等价重构",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/worker.test.mjs",
+              "tests/enhancement-worker.test.mjs"
+            ],
+            "logs": [
+              "data/m1-concurrency/n1-equivalence.log",
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "先单执行器N1等价125项；最终原回归连同delivery182项通过。两套集合有重复，不相加为不同测试数。"
+        }
+      ]
+    },
+    {
+      "id": "T06",
+      "title": "资源池与单章并发",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T06",
+          "title": "资源池与单章并发",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "可控barrier验证3个真实Mock fetch同时在途，第4个等待；释放一槽立即补位。"
+        }
+      ]
+    },
+    {
+      "id": "T07",
+      "title": "乱序登记与job最终收束",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T07",
+          "title": "乱序登记与job最终收束",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位，乱序不改变朗读顺序或丢计数",
+              "tests/concurrency.test.mjs :: 恢复未收束混合结果从attempt重建持久done及阶段计数，已关闭批次保持历史",
+              "tests/concurrency.test.mjs :: 新generationEpoch优先于物理插入顺序；无epoch历史仍保留原先顺序判断"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "3/1/2等乱序回执保存事实，选中顺序保持单元顺序；母版实际构建由既有worker/enhancement回归覆盖。"
+        }
+      ]
+    },
+    {
+      "id": "T08",
+      "title": "费用、路由和停止矩阵",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T08",
+          "title": "费用、路由和停止矩阵",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC13/16/19",
+              "tests/concurrency.test.mjs :: VC17",
+              "tests/concurrency.test.mjs :: VC18",
+              "tests/concurrency.test.mjs :: VC21",
+              "tests/concurrency.test.mjs :: VC22",
+              "tests/enhancement-worker.test.mjs :: 调用额度在两工作进程间原子预留",
+              "tests/concurrency.test.mjs :: 独立upstream期限失败保留unknown和已发次数，不重发也不提升part",
+              "tests/concurrency.test.mjs :: 独立receiving期限失败保留unknown和已发次数，不重发也不提升part",
+              "tests/concurrency.test.mjs :: 响应头与接收体使用独立预算，完整响应后的本地处理不继续消费网络时限",
+              "tests/media-resource.test.mjs :: hung native child has a bounded lifetime and releases the shared slot before queued work starts"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "明确401/403/429/502、unknown与本地恢复，全部为模拟供应商状态。真实账号限额仍默认1。"
+        }
+      ]
+    },
+    {
+      "id": "T09",
+      "title": "关机、重启、维护与新语义兼容",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T09",
+          "title": "关机、重启、维护与新语义兼容",
+          "status": "已实现未验证",
+          "evidence": {
+            "tests": [
+              "tests/audio-crash-recovery.test.mjs",
+              "tests/concurrency-integration.test.mjs :: 三段在途时迁移被拒；服务器关闭等待回执及本地整理"
+            ],
+            "logs": [
+              "data/m0-audio-delivery/real-process-crash.log",
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "强杀、优雅drain和在途迁移阻断已验证；schema升级、旧writer拒写、整套备份恢复由root/workspace agent证据补齐。"
+        },
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/audio-delivery-lifecycle.test.mjs",
+            "tests/storage-hardening.test.mjs",
+            "tests/assistant-lifecycle.test.mjs",
+            "tests/attachment-integrity.test.mjs",
+            "tests/concurrency-integration.test.mjs"
+          ],
+          "note": "真实 SQLite、文件、FFmpeg 和临时目录验证；迁移失败恢复、在途上传与删除互锁、旧 writer 拒写。"
+        }
+      ]
+    },
+    {
+      "id": "T10",
+      "title": "跨章与候选公平调度",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T10",
+          "title": "跨章与候选公平调度",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC05/06/27 两章和试音共池",
+              "tests/concurrency.test.mjs :: VC05/08/09 候选、组合与场景共池",
+              "tests/concurrency.test.mjs :: 已有后台请求很慢时，持续新试音不能绕过两次交互后补后台的约束"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "唯一服务worker内共享池，交互连续最多2次后让后台；含已在途慢后台不被永久挤出反例。"
+        }
+      ]
+    },
+    {
+      "id": "T11",
+      "title": "参考缓存、处理反压与性能",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T11",
+          "title": "参考缓存、处理反压与性能",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC28 原件封存后释放网络槽，本地处理池1及积压数量共同反压",
+              "tests/concurrency.test.mjs :: VC29 参考共享只核验一次",
+              "data/m1-concurrency/run-benchmark.mjs",
+              "tests/concurrency.test.mjs :: 独立upstream期限失败保留unknown和已发次数，不重发也不提升part",
+              "tests/concurrency.test.mjs :: 独立receiving期限失败保留unknown和已发次数，不重发也不提升part",
+              "tests/concurrency.test.mjs :: 响应头与接收体使用独立预算，完整响应后的本地处理不继续消费网络时限",
+              "tests/media-resource.test.mjs :: hung native child has a bounded lifetime and releases the shared slot before queued work starts"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/benchmark-shared-media.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "最新12轮基准在root统一媒体进程池后执行；CPU/RSS/临时盘为采样峰值，非OS级硬限制测量。媒体全服务进程上限由root检查补充。"
+        }
+      ]
+    },
+    {
+      "id": "T12",
+      "title": "并发任务UI",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "T12",
+          "title": "并发任务UI",
+          "status": "已实现未验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency-client.test.mjs",
+              "tests/concurrency-integration.test.mjs"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log"
+            ]
+          },
+          "note": "本agent组件和HTTP测试已通过；截至补写时生成确认入口、每个并行对象phase/已发未发/停止收束说明由UI agent补齐中，需合并其实现与宽窄屏浏览器证据，不能仅凭全局阶段数认为完成。"
+        },
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "T12",
+          "status": "已实现并验证",
+          "verifiedScope": "生成确认内1至4段并发设置；任务逐段阶段及已发未发；真实停止接口、收尾和320px布局验收",
+          "browser": [
+            "browser/parallel-progress-results.json",
+            "browser/parallel-plan-320.png",
+            "browser/parallel-tasks-320.png"
+          ],
+          "fixture": [
+            "automation/assistant-ui-final-regression.log",
+            "tests/concurrency-client.test.mjs",
+            "tests/task-progress.test.mjs",
+            "tests/generation-plan.test.mjs",
+            "automation/assistant-ui-final-extended-regression.log"
+          ],
+          "limitations": [
+            "浏览器在途阶段为显式隔离记录，待发送记录持有fixture锁阻止真实调用；实际并发与限流另引用worker回归。"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T13",
+      "title": "助手服务与能力注册执行适配",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T13",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "capability whitelist rejects unknown tools, raw forwarding and server-owned fields"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "cross-project and cross-chapter object IDs cannot write or read another target"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "shared action guard preserves rename/delete occupancy and audio validation before mutation"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "assistant mutations record AI provenance, protect human fields and preserve exact text"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "domain mutation and durable assistant receipt commit together; lost step receipt is replayable"
+            }
+          ],
+          "scope": "共享业务执行适配及可信来源"
+        }
+      ]
+    },
+    {
+      "id": "T14",
+      "title": "助手模型配置与最小传输",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T14",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "ordinary question reads real context and ends without writes; message replay never resends"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "unregistered model action repairs at most once, then executes nothing"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "each assistant call has a durable receipt, including format repair; archive removes response material"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "changing assistant or production route requires the corresponding explicit amendment"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "assistant call journal records only the actual attachment fingerprints and not pixel data"
+            }
+          ],
+          "scope": "本子任务验证独立路由与最小传输调用、账本；真实服务验证另记"
+        },
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/assistant-model.test.mjs",
+            "tests/assistant-vision.test.mjs"
+          ],
+          "note": "默认 claude-sonnet-5-5 可修改；配置/独立密钥/像素链/能力未验证状态已测试，真实模型验证见 T30。"
+        }
+      ]
+    },
+    {
+      "id": "T15",
+      "title": "工具事实上下文与帮助检索",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T15",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "context/help use real scoped facts without local paths, other project text or credentials"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "truncated automatic context is explicitly partial and full segment reads preserve all text"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "draft status is only view metadata; questions use saved facts and never transmit local draft text"
+            }
+          ],
+          "scope": "真实有界上下文与可追溯帮助"
+        }
+      ]
+    },
+    {
+      "id": "T16",
+      "title": "聊天与截图附件端到端",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T16",
+          "status": "已实现未验证",
+          "evidence": [],
+          "scope": "归属附件/UI负责人，本文件不代签"
+        },
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "T16",
+          "status": "已实现并验证",
+          "verifiedScope": "选图/粘贴/拖放/仅图/预览移除/迟到归属/实际像素传输的隔离浏览器路径",
+          "browser": [
+            "browser/assistant-browser-results.json",
+            "browser/assistant-boundary-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-tests.log",
+            "tests/assistant-client.test.mjs"
+          ],
+          "limitations": [
+            "供应商为Mock；真实视觉能力另行授权验收",
+            "服务端格式与存储失败测试由root整合，非本子任务独立实跑"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T17",
+      "title": "会话、消息和任务恢复",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T17",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "paid assistant unknown survives restart without sending again, and closing waits for in-flight receipt"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "consumed proposal response is not re-applied after service recovery"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "message/run publication is atomic; a failed run write cannot swallow an idempotent message"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "recovery resolves a committed local operation with missing step receipt instead of applying it twice"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "malformed persisted assistant rows are isolated from listing, busy checks and other session context"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "keeping an unknown assistant result does not authorize retrying the original message"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "assistant call journal records only the actual attachment fingerprints and not pixel data"
+            }
+          ],
+          "scope": "持久消息、调用账本、任务恢复及坏会话隔离"
+        }
+      ]
+    },
+    {
+      "id": "T18",
+      "title": "具体提案及拒绝闭环",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T18",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "specific proposal requires exact approval, refuses changed targets and persistent rejection"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "duplicate approval returns the same decision and applies a local proposal exactly once"
+            }
+          ],
+          "scope": "具体提案审批、拒绝、重复回执"
+        }
+      ]
+    },
+    {
+      "id": "T19",
+      "title": "有界任务委托与预算",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T19",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "budget amendments keep past usage and require explicit route approval; unknown request needs exact decision"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "an audio unknown requires its exact attempt decision; resumed generation does not reset either budget"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "changing assistant or production route requires the corresponding explicit amendment"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "same task step-limit expansion keeps usage and consumes the saved model reply without resending"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "dry mandate asks once for a concrete group expansion and continues later group work automatically"
+            }
+          ],
+          "scope": "有界授权、三预算与精确unknown决定"
+        }
+      ]
+    },
+    {
+      "id": "T20",
+      "title": "完整制作规划与确定性执行",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T20",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "generation and master run through real worker receipts; waiting ticks spend no assistant calls"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "explicit workflow scope generates a group inside one mandate without repeated approvals"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "authorized existing scene generates directly and preserves manual guidance and sound events"
+            }
+          ],
+          "scope": "模拟助手/音频供应商，真实空项目到试听母版完整执行"
+        }
+      ]
+    },
+    {
+      "id": "T21",
+      "title": "角色选声、表演和人工保护",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T21",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "assistant mutations record AI provenance, protect human fields and preserve exact text"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "analysis application respects human protection and records an atomic AI receipt"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "central voice choices are scoped business operations and do not fake a listened result"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "an approved voice set permits automatic role selection with AI provenance and no further approval"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "group and scene delegation never overwrites manual guidance, adopted events or grouping"
+            }
+          ],
+          "scope": "集中选声、批准集合选择及人工保护"
+        }
+      ]
+    },
+    {
+      "id": "T22",
+      "title": "场景、历史、返工与导出助手能力",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T22",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "automatic export always confirm=false and human-only model settings/grants stay unexecutable"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "review passed requires an explicit human audio decision and never uses model assertion"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "tail maintenance only sends approved scope through shared adapter and cannot acquire its own consent"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "partial maintenance retry keeps original scope and leaves version ownership to maintenance adapter"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "authorized existing scene generates directly and preserves manual guidance and sound events"
+            }
+          ],
+          "scope": "注册场景/历史/返工/原件/尾部维护/导出；不是79个能力逐个真实模型验收"
+        }
+      ]
+    },
+    {
+      "id": "T23",
+      "title": "并发人工编辑与接管",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T23",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "pause while model is in flight keeps reply but dispatches no business action"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "unrelated manual title change does not expire a line performance proposal"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "manual line changes while jobs complete are never rebased as assistant changes"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "a delegated run cannot stop a manual job or revoke a different grant"
+            }
+          ],
+          "scope": "相关变化过期、无关变化保留、暂停和其他任务保护"
+        }
+      ]
+    },
+    {
+      "id": "T24",
+      "title": "聊天空间与任务卡视觉",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "T24",
+          "status": "已实现并验证",
+          "verifiedScope": "共享右侧及窄屏布局；三角色选声与实际参考播放；预算、40至200步骤、对戏与场景范围；各宽度及长消息滚动",
+          "browser": [
+            "browser/assistant-browser-results.json",
+            "browser/assistant-boundary-results.json",
+            "browser/assistant-decision-results.json",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-final-regression.log"
+          ],
+          "limitations": [
+            "试听使用合成WAV；真实声音质量不属于该工程验收。"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T25",
+      "title": "截图指代与UI定位",
+      "status": "模型待验",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "T25",
+          "status": "已实现并验证",
+          "verifiedScope": "已圈注截图按真实像素发送；明确UI回执先到绑定章再定位当前片段；不存在的旧目标明确拒绝",
+          "browser": [
+            "browser/assistant-browser-results.json",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-tests.log"
+          ],
+          "limitations": [
+            "真实模型理解旧截图或模糊指代的效果待授权验证；内置裁剪圈注为规格可选项。"
+          ]
+        },
+        {
+          "source": "root verification",
+          "status": "模型待验",
+          "evidence": [
+            "doc/concurrency-assistant/real-provider-validation.md"
+          ],
+          "note": "真实外发材料、账号并发能力和请求上限需按规格单独授权；本轮 Mock 不能代替真实模型。"
+        }
+      ]
+    },
+    {
+      "id": "T26",
+      "title": "注入、越权与日志安全",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/assistant-capabilities.test.mjs",
+            "tests/assistant-service.test.mjs",
+            "tests/assistant-model.test.mjs"
+          ],
+          "note": "工具名、输入、作用域、来源、假授权和伪听评的服务端拒绝已测；真实图像注入质量另见 T30。"
+        }
+      ]
+    },
+    {
+      "id": "T27",
+      "title": "存储、迁移、删除与助手引用",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/audio-delivery-lifecycle.test.mjs",
+            "tests/storage-hardening.test.mjs",
+            "tests/assistant-lifecycle.test.mjs",
+            "tests/attachment-integrity.test.mjs",
+            "tests/concurrency-integration.test.mjs"
+          ],
+          "note": "真实 SQLite、文件、FFmpeg 和临时目录验证；迁移失败恢复、在途上传与删除互锁、旧 writer 拒写。"
+        }
+      ]
+    },
+    {
+      "id": "T28",
+      "title": "全功能覆盖检查与帮助更新",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "T28",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "capability map tracks all accepted actions and every tool has indexed help"
+            }
+          ],
+          "scope": "实际普通action与schema/help同步检查"
+        }
+      ]
+    },
+    {
+      "id": "T29",
+      "title": "真实路由并发试点",
+      "status": "模型待验",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "模型待验",
+          "evidence": [
+            "doc/concurrency-assistant/real-provider-validation.md"
+          ],
+          "note": "真实外发材料、账号并发能力和请求上限需按规格单独授权；本轮 Mock 不能代替真实模型。"
+        }
+      ]
+    },
+    {
+      "id": "T30",
+      "title": "真实视觉与助手调用验收",
+      "status": "模型待验",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "模型待验",
+          "evidence": [
+            "doc/concurrency-assistant/real-provider-validation.md"
+          ],
+          "note": "真实外发材料、账号并发能力和请求上限需按规格单独授权；本轮 Mock 不能代替真实模型。"
+        }
+      ]
+    },
+    {
+      "id": "T31",
+      "title": "联合全量回归与构建",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "data/concurrency-assistant/automation/full-regression-final.log"
+          ],
+          "note": "原有效断言保留；新增集合和夹具适配见交付记录，子集不重复相加。"
+        }
+      ]
+    },
+    {
+      "id": "T32",
+      "title": "真实浏览器交错场景",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "T32",
+          "status": "已实现并验证",
+          "verifiedScope": "37条隔离Chrome检查记录：输入、图片、布局、任务、选择保护、跨页完成、旧目标和逐段并发停止",
+          "browser": [
+            "browser/assistant-browser-results.json",
+            "browser/assistant-boundary-results.json",
+            "browser/assistant-decision-results.json",
+            "browser/assistant-extended-completed-results.json",
+            "browser/parallel-progress-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-final-regression.log"
+          ],
+          "limitations": [
+            "仅4391隔离Mock与合成WAV；4318升级后检查由主任务单列，真实供应商与真人体验不冒称已通过。"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "T33",
+      "title": "新手任务与熟手效率",
+      "status": "产品待验",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "产品待验",
+          "evidence": [
+            "doc/concurrency-assistant/human-acceptance.md"
+          ],
+          "note": "真人 5 新手/2 熟手、声音/最终视觉签收和干净 Mac 安装尚未执行。"
+        }
+      ]
+    },
+    {
+      "id": "T34",
+      "title": "产品与声音/安装分别签收",
+      "status": "产品待验",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "产品待验",
+          "evidence": [
+            "doc/concurrency-assistant/human-acceptance.md"
+          ],
+          "note": "真人 5 新手/2 熟手、声音/最终视觉签收和干净 Mac 安装尚未执行。"
+        }
+      ]
+    },
+    {
+      "id": "T35",
+      "title": "交付与维护手册",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "doc/concurrency-assistant/user-guide.md",
+            "doc/concurrency-assistant/authorization-contract.md",
+            "doc/concurrency-assistant/scheduler-recovery-contract.md",
+            "doc/concurrency-assistant/release-status.md"
+          ],
+          "note": "交付用户操作、维护恢复、证据及分项边界；模型与产品待验项保持开放。"
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "VH01",
+      "scenario": "dry正常尾部清理",
+      "required": "原件hash可找；选用派生有版本/来源/帧数；正文不动",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH01",
+          "title": "dry正常尾部清理",
+          "requirement": "原件hash可找；选用派生有版本/来源/帧数；正文不动",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/audio-delivery.test.mjs :: AE-H01 完整供应商原件与带版本配方的处理版分别保留"
+            ],
+            "logs": [
+              "data/m1-concurrency/discard-and-delivery.log"
+            ]
+          },
+          "note": "验证为合成PCM与Mock完整响应逐字节对照，不代表真人台词语义听评。"
+        }
+      ]
+    },
+    {
+      "id": "VH02",
+      "scenario": "登记失败后重启",
+      "required": "原件与清理记录恢复；0模型重发；旧job不复活",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH02",
+          "title": "登记失败后重启",
+          "requirement": "原件与清理记录恢复；0模型重发；旧job不复活",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/audio-delivery.test.mjs :: AE-H01-R 登记失败后重开仅本地恢复，清理来源不丢，旧批次不复活",
+              "tests/audio-delivery.test.mjs :: 封存、配方、派生与登记各边界中断",
+              "tests/audio-crash-recovery.test.mjs"
+            ],
+            "logs": [
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m0-audio-delivery/real-process-crash.log"
+            ]
+          },
+          "note": "包括7个真正SIGKILL子进程边界；只声明进程崩溃恢复，不声明断电持久性。"
+        }
+      ]
+    },
+    {
+      "id": "VH03",
+      "scenario": "处理前/中/后崩溃",
+      "required": "临时与封存区分，幂等本地重放，半截不提升",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH03",
+          "title": "处理前/中/后崩溃",
+          "requirement": "临时与封存区分，幂等本地重放，半截不提升",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/audio-delivery.test.mjs :: AE-H01-R 登记失败后重开仅本地恢复，清理来源不丢，旧批次不复活",
+              "tests/audio-delivery.test.mjs :: 封存、配方、派生与登记各边界中断",
+              "tests/audio-crash-recovery.test.mjs"
+            ],
+            "logs": [
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m0-audio-delivery/real-process-crash.log"
+            ]
+          },
+          "note": "包括7个真正SIGKILL子进程边界；只声明进程崩溃恢复，不声明断电持久性。"
+        }
+      ]
+    },
+    {
+      "id": "VH04",
+      "scenario": "弱尾音/有意末端事件",
+      "required": "不冒称语义静音；有原件和可逆选择",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH04",
+          "title": "弱尾音/有意末端事件",
+          "requirement": "不冒称语义静音；有原件和可逆选择",
+          "status": "已实现未验证",
+          "evidence": {
+            "tests": [
+              "tests/tail-audio.test.mjs :: long quiet uses both channels and preserves leading/inter-word pauses and a quiet final syllable"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log"
+            ]
+          },
+          "note": "已有合成波形保护与原件保留；有限振幅阈值不能判定语义人声，本agent未做真实弱尾音/有意声效人工听评。"
+        },
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/audio-delivery.test.mjs",
+            "server/tail-audio.mjs"
+          ],
+          "note": "验证保留弱尾段的完整原件与可逆选版；信号判断不冒称语义判定。真实人声另作听评。"
+        }
+      ]
+    },
+    {
+      "id": "VH05",
+      "scenario": "scene/参考/候选",
+      "required": "dry清理不得误处理，原native输出留存",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH05",
+          "title": "scene/参考/候选",
+          "requirement": "dry清理不得误处理，原native输出留存",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/worker.test.mjs:137 :: 自动尾清理不改变正常音频、参考试音或有意的场景音效",
+              "tests/enhancement-worker.test.mjs :: E1候选生成、并发幂等保存"
+            ],
+            "logs": [
+              "data/m1-concurrency/discard-and-delivery.log"
+            ]
+          },
+          "note": "纯人声profile才启用清理，scene/试音/候选保持raw profile；参考文件未写入处理。"
+        }
+      ]
+    },
+    {
+      "id": "VH06",
+      "scenario": "无尾部/不支持格式",
+      "required": "不擅自转格式剪裁，正常保留",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH06",
+          "title": "无尾部/不支持格式",
+          "requirement": "不擅自转格式剪裁，正常保留",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/tail-audio.test.mjs :: unsupported encodings and malformed PCM cannot produce a trim candidate",
+              "tests/worker.test.mjs:137 :: 自动尾清理不改变正常音频、参考试音或有意的场景音效"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/discard-and-delivery.log"
+            ]
+          },
+          "note": "不支持编码不作为裁剪候选；不擅自转码。"
+        }
+      ]
+    },
+    {
+      "id": "VH07",
+      "scenario": "算法升级与旧产物",
+      "required": "旧结果配方不重写，派生ID独立",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH07",
+          "title": "算法升级与旧产物",
+          "requirement": "旧结果配方不重写，派生ID独立",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/audio-delivery.test.mjs :: 已保存配方无需再次分析；损坏原件拒绝恢复且保留历史",
+              "tests/audio-delivery.test.mjs :: 旧算法未完成配方不借用新算法重剪"
+            ],
+            "logs": [
+              "data/m1-concurrency/discard-and-delivery.log"
+            ]
+          },
+          "note": "已完成旧配方原字节验证；未完成但算法不兼容者停在本地恢复，绝不重新付费生成。"
+        }
+      ]
+    },
+    {
+      "id": "VH08",
+      "scenario": "用户选择恢复原件",
+      "required": "免费可听可选，音频review与选版按现有保护",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH08",
+          "title": "用户选择恢复原件",
+          "requirement": "免费可听可选，音频review与选版按现有保护",
+          "status": "已实现未验证",
+          "evidence": {
+            "tests": [],
+            "logs": []
+          },
+          "note": "parent已接原件试听/选用入口；本agent交付metadata与free recover，但未独立执行该UI选择验收。"
+        },
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/audio-provenance-client.test.mjs",
+            "tests/unit-panel.test.mjs",
+            "tests/audio-delivery.test.mjs"
+          ],
+          "note": "原件试听不采用，匹配原件沿现有选用路径，过期设置先走恢复预览，完整本地恢复零模型调用。"
+        }
+      ]
+    },
+    {
+      "id": "VH09",
+      "scenario": "旧output项目",
+      "required": "真实旧writer建立，当前合法读写/导出/删除",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH09",
+          "title": "旧output项目",
+          "requirement": "真实旧writer建立，当前合法读写/导出/删除",
+          "status": "已实现未验证",
+          "evidence": {
+            "tests": [],
+            "logs": []
+          },
+          "note": "由workspace专项agent负责，等待其当前日志合入，不用旧输出保留名代码观察冒充复测。"
+        },
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/legacy-output.test.mjs",
+            "data/concurrency-assistant/automation/ae-h02-before.json",
+            "data/concurrency-assistant/automation/ae-h02-after.json"
+          ],
+          "note": "旧 writer 实际复现与现版管理/迁移/导出/删除；新名称及共享引用保护保留。"
+        }
+      ]
+    },
+    {
+      "id": "VH10",
+      "scenario": "新output命名",
+      "required": "新建保留名依然拒绝，不放开所有目录",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH10",
+          "title": "新output命名",
+          "requirement": "新建保留名依然拒绝，不放开所有目录",
+          "status": "已实现未验证",
+          "evidence": {
+            "tests": [],
+            "logs": []
+          },
+          "note": "由workspace专项agent负责，等待其当前日志合入，不用旧输出保留名代码观察冒充复测。"
+        },
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/legacy-output.test.mjs",
+            "data/concurrency-assistant/automation/ae-h02-before.json",
+            "data/concurrency-assistant/automation/ae-h02-after.json"
+          ],
+          "note": "旧 writer 实际复现与现版管理/迁移/导出/删除；新名称及共享引用保护保留。"
+        }
+      ]
+    },
+    {
+      "id": "VH11",
+      "scenario": "假标记/软链/共享目录",
+      "required": "拒绝危险删除，原范围外数据不变",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH11",
+          "title": "假标记/软链/共享目录",
+          "requirement": "拒绝危险删除，原范围外数据不变",
+          "status": "已实现未验证",
+          "evidence": {
+            "tests": [],
+            "logs": []
+          },
+          "note": "由workspace专项agent负责，等待其当前日志合入，不用旧输出保留名代码观察冒充复测。"
+        },
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/legacy-output.test.mjs",
+            "data/concurrency-assistant/automation/ae-h02-before.json",
+            "data/concurrency-assistant/automation/ae-h02-after.json"
+          ],
+          "note": "旧 writer 实际复现与现版管理/迁移/导出/删除；新名称及共享引用保护保留。"
+        }
+      ]
+    },
+    {
+      "id": "VH12",
+      "scenario": "原件备份迁移删除",
+      "required": "引用完整，删除只处理明确所有权/授权范围",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VH12",
+          "title": "原件备份迁移删除",
+          "requirement": "引用完整，删除只处理明确所有权/授权范围",
+          "status": "已实现未验证",
+          "evidence": {
+            "tests": [
+              "tests/attachment-integrity.test.mjs"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log"
+            ]
+          },
+          "note": "附件原件/派生备份迁移同大小篡改已核验；音频封存引用、项目删除、迁移完整验收需合并workspace agent证据。"
+        },
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/audio-delivery-lifecycle.test.mjs",
+            "tests/storage-hardening.test.mjs",
+            "tests/assistant-lifecycle.test.mjs",
+            "tests/attachment-integrity.test.mjs",
+            "tests/concurrency-integration.test.mjs"
+          ],
+          "note": "真实 SQLite、文件、FFmpeg 和临时目录验证；迁移失败恢复、在途上传与删除互锁、旧 writer 拒写。"
+        }
+      ]
+    },
+    {
+      "id": "VC01",
+      "scenario": "N1等价",
+      "required": "正常模式与原串行回归相同，0新增逻辑请求",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC01",
+          "title": "N1等价",
+          "requirement": "正常模式与原串行回归相同，0新增逻辑请求",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/worker.test.mjs",
+              "tests/enhancement-worker.test.mjs"
+            ],
+            "logs": [
+              "data/m1-concurrency/n1-equivalence.log",
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "先单执行器N1等价125项；最终原回归连同delivery182项通过。两套集合有重复，不相加为不同测试数。"
+        }
+      ]
+    },
+    {
+      "id": "VC02",
+      "scenario": "N3并发屏障",
+      "required": "先有3次在途，第4次等待",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC02",
+          "title": "N3并发屏障",
+          "requirement": "先有3次在途，第4次等待",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "可控barrier验证3个真实Mock fetch同时在途，第4个等待；释放一槽立即补位。"
+        }
+      ]
+    },
+    {
+      "id": "VC03",
+      "scenario": "释放一槽",
+      "required": "立即补1，不超过目标N",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC03",
+          "title": "释放一槽",
+          "requirement": "立即补1，不超过目标N",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "可控barrier验证3个真实Mock fetch同时在途，第4个等待；释放一槽立即补位。"
+        }
+      ]
+    },
+    {
+      "id": "VC04",
+      "scenario": "上调/下调",
+      "required": "上调只补授权待发；下调不杀在途",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC04",
+          "title": "上调/下调",
+          "requirement": "上调只补授权待发；下调不杀在途",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC04 降并发不取消在途，上调只使用原计划待发目标"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "VC05",
+      "scenario": "多入口合计",
+      "required": "普通/组/scene/候选共用上限",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC05",
+          "title": "多入口合计",
+          "requirement": "普通/组/scene/候选共用上限",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC05/06/27 两章和试音共池",
+              "tests/concurrency.test.mjs :: VC05/08/09 候选、组合与场景共池",
+              "tests/concurrency.test.mjs :: 已有后台请求很慢时，持续新试音不能绕过两次交互后补后台的约束"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "唯一服务worker内共享池，交互连续最多2次后让后台；含已在途慢后台不被永久挤出反例。"
+        }
+      ]
+    },
+    {
+      "id": "VC06",
+      "scenario": "不同路由同账户",
+      "required": "配置共享资源组，不各自越账号限额",
+      "status": "有依据延期",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC06",
+          "title": "不同路由同账户",
+          "requirement": "配置共享资源组，不各自越账号限额",
+          "status": "已实现未验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC05/06/27 两章和试音共池"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log"
+            ]
+          },
+          "note": "当前部署只有一个可信音频route配置，全入口受该唯一资源组上限约束；没有配置两条不同URL同账号做独立实测，不冒称双路由账号映射已验收。"
+        },
+        {
+          "source": "root verification",
+          "status": "有依据延期",
+          "evidence": [
+            "doc/concurrency-assistant/scheduler-recovery-contract.md"
+          ],
+          "note": "本版只有一个音频服务路由，所有音频入口共用一个账号池；未引入额外多 URL 音频连接系统。将来提供多路由时须配置共享账号资源组。"
+        }
+      ]
+    },
+    {
+      "id": "VC07",
+      "scenario": "正文3/1/2完成",
+      "required": "最终编排1/2/3，参考映射正确",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC07",
+          "title": "正文3/1/2完成",
+          "requirement": "最终编排1/2/3，参考映射正确",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位，乱序不改变朗读顺序或丢计数",
+              "tests/concurrency.test.mjs :: 恢复未收束混合结果从attempt重建持久done及阶段计数，已关闭批次保持历史",
+              "tests/concurrency.test.mjs :: 新generationEpoch优先于物理插入顺序；无epoch历史仍保留原先顺序判断"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "3/1/2等乱序回执保存事实，选中顺序保持单元顺序；母版实际构建由既有worker/enhancement回归覆盖。"
+        }
+      ]
+    },
+    {
+      "id": "VC08",
+      "scenario": "组与单句混合",
+      "required": "每个成员只覆盖一次，组不拆成多请求",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC08",
+          "title": "组与单句混合",
+          "requirement": "每个成员只覆盖一次，组不拆成多请求",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC05/08/09 候选、组合与场景共池，组仍只发一次，同章不能另开竞争任务"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "同章唯一活动job沿用；dry/scene重叠目标不可另开任务争用，旧闭批迟到由existing enhancement-worker保护。"
+        }
+      ]
+    },
+    {
+      "id": "VC09",
+      "scenario": "同目标dry/scene竞争",
+      "required": "不能同时争用选版，新旧epoch不覆盖",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC09",
+          "title": "同目标dry/scene竞争",
+          "requirement": "不能同时争用选版，新旧epoch不覆盖",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC05/08/09 候选、组合与场景共池，组仍只发一次，同章不能另开竞争任务"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "同章唯一活动job沿用；dry/scene重叠目标不可另开任务争用，旧闭批迟到由existing enhancement-worker保护。"
+        }
+      ]
+    },
+    {
+      "id": "VC10",
+      "scenario": "兄弟结果使编排增加",
+      "required": "其他原计划合法成员仍能发送，不自我过期",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC10",
+          "title": "兄弟结果使编排增加",
+          "requirement": "其他原计划合法成员仍能发送，不自我过期",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位，乱序不改变朗读顺序或丢计数"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "3/1/2等乱序回执保存事实，选中顺序保持单元顺序；母版实际构建由既有worker/enhancement回归覆盖。"
+        }
+      ]
+    },
+    {
+      "id": "VC11",
+      "scenario": "外部真实改动",
+      "required": "守卫正确拒绝，不把所有变化当兄弟完成",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC11",
+          "title": "外部真实改动",
+          "requirement": "守卫正确拒绝，不把所有变化当兄弟完成",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC11 外部真实单元改动仍阻断该发送，合法兄弟可完成"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "VC12",
+      "scenario": "同时成功计数",
+      "required": "done与DB事实一致，不丢增量",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC12",
+          "title": "同时成功计数",
+          "requirement": "done与DB事实一致，不丢增量",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC02/03/07/10/12 同章三槽真实重叠，释放补位，乱序不改变朗读顺序或丢计数",
+              "tests/concurrency.test.mjs :: 恢复未收束混合结果从attempt重建持久done及阶段计数，已关闭批次保持历史",
+              "tests/concurrency.test.mjs :: 新generationEpoch优先于物理插入顺序；无epoch历史仍保留原先顺序判断"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "3/1/2等乱序回执保存事实，选中顺序保持单元顺序；母版实际构建由既有worker/enhancement回归覆盖。"
+        }
+      ]
+    },
+    {
+      "id": "VC13",
+      "scenario": "一个失败其他在途",
+      "required": "保留成功，job待全体收束后终结",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC13",
+          "title": "一个失败其他在途",
+          "requirement": "保留成功，job待全体收束后终结",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC13/16/19 502未知只停未发送项，兄弟合法回执照常登记直到全体收束",
+              "tests/worker.test.mjs:388 :: 传输中断不自动重试，结束批次并停止余下项"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "502/断流没有确定未执行证据时保留unknown，不自动重发。"
+        }
+      ]
+    },
+    {
+      "id": "VC14",
+      "scenario": "停止于reference检查",
+      "required": "尚未发送项0请求",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC14",
+          "title": "停止于reference检查",
+          "requirement": "尚未发送项0请求",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC14/15/30 停止领取后等待在途和本地写入完成",
+              "tests/enhancement-worker.test.mjs :: 多人全部参考预检；异步校验期间停止或关闭不发送"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "VC15",
+      "scenario": "停止于领取/发送边界",
+      "required": "有确切资格界线，已发和未发如实分开",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC15",
+          "title": "停止于领取/发送边界",
+          "requirement": "有确切资格界线，已发和未发如实分开",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC14/15/30 停止领取后等待在途和本地写入完成",
+              "tests/enhancement-worker.test.mjs :: 多人全部参考预检；异步校验期间停止或关闭不发送"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "VC16",
+      "scenario": "停止后合法回执",
+      "required": "照常落原任务，不丢原件",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC16",
+          "title": "停止后合法回执",
+          "requirement": "照常落原任务，不丢原件",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC13/16/19 502未知只停未发送项，兄弟合法回执照常登记直到全体收束",
+              "tests/worker.test.mjs:388 :: 传输中断不自动重试，结束批次并停止余下项"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "502/断流没有确定未执行证据时保留unknown，不自动重发。"
+        }
+      ]
+    },
+    {
+      "id": "VC17",
+      "scenario": "401/403/额度",
+      "required": "资源组停止新派发，已有回执保留",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC17",
+          "title": "401/403/额度",
+          "requirement": "资源组停止新派发，已有回执保留",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC17 403暂停共享路由，已有回执不丢，其他章未发停止",
+              "tests/enhancement-worker.test.mjs :: TR07 路由阻断在工作进程间共享"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "VC18",
+      "scenario": "429/RetryAfter",
+      "required": "不无依据自动重发原POST；限流与余额不混",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC18",
+          "title": "429/RetryAfter",
+          "requirement": "不无依据自动重发原POST；限流与余额不混",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC18 429记录重试提示但暂停后续，不自动重发也不声称余额确定耗尽"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "VC19",
+      "scenario": "502/断流/超时",
+      "required": "可能费用和unknown保留，不误称未执行",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC19",
+          "title": "502/断流/超时",
+          "requirement": "可能费用和unknown保留，不误称未执行",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC13/16/19 502未知只停未发送项，兄弟合法回执照常登记直到全体收束",
+              "tests/worker.test.mjs:388 :: 传输中断不自动重试，结束批次并停止余下项",
+              "tests/concurrency.test.mjs :: 独立upstream期限失败保留unknown和已发次数，不重发也不提升part",
+              "tests/concurrency.test.mjs :: 独立receiving期限失败保留unknown和已发次数，不重发也不提升part",
+              "tests/concurrency.test.mjs :: 响应头与接收体使用独立预算，完整响应后的本地处理不继续消费网络时限",
+              "tests/media-resource.test.mjs :: hung native child has a bounded lifetime and releases the shared slot before queued work starts"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "502/断流没有确定未执行证据时保留unknown，不自动重发。"
+        }
+      ]
+    },
+    {
+      "id": "VC20",
+      "scenario": "完整原件本地失败",
+      "required": "进入本地恢复，不重复收费",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC20",
+          "title": "完整原件本地失败",
+          "requirement": "进入本地恢复，不重复收费",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/audio-delivery.test.mjs :: 有完整原件的本地失败不能通过 retryUnknown 重发，免费恢复可以重复调用"
+            ],
+            "logs": [
+              "data/m1-concurrency/discard-and-delivery.log"
+            ]
+          },
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "VC21",
+      "scenario": "授权剩余少于并发",
+      "required": "最终事务不超额度，未发预留释放",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC21",
+          "title": "授权剩余少于并发",
+          "requirement": "最终事务不超额度，未发预留释放",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC21 并发不会扩增授权请求，低于计划额度整批零入队",
+              "tests/enhancement-worker.test.mjs :: 调用额度在两工作进程间原子预留"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "整批计划不足则零入队；最终事务原子预留/消费，未发释放，unknown保留可能用量。"
+        }
+      ]
+    },
+    {
+      "id": "VC22",
+      "scenario": "授权撤回/过期",
+      "required": "preparing也被最后守卫阻断",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC22",
+          "title": "授权撤回/过期",
+          "requirement": "preparing也被最后守卫阻断",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC22 准备参考时撤回授权，所有未发槽最终校验阻断且预留全部释放",
+              "tests/concurrency.test.mjs :: VC22 授权在参考准备期间自然到期，最终派发事务停止全部未发槽"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/expired-grant.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "撤回与自然到期分别覆盖；时间替身只前移Date.now，不修改授权record或伪造revoked状态，3个preparing槽均零发送并释放预留。"
+        }
+      ]
+    },
+    {
+      "id": "VC23",
+      "scenario": "相同command双提交",
+      "required": "同job/attempt集合，无双倍并发",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC23",
+          "title": "相同command双提交",
+          "requirement": "同job/attempt集合，无双倍并发",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC23 同命令重复提交和tick重入只领取原先的attempt一次"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "VC24",
+      "scenario": "tick重入",
+      "required": "只有同一owner能领取同attempt",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC24",
+          "title": "tick重入",
+          "requirement": "只有同一owner能领取同attempt",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC23 同命令重复提交和tick重入只领取原先的attempt一次"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "VC25",
+      "scenario": "强杀进程恢复",
+      "required": "未发停止，在途未知，完成原件补登记",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC25",
+          "title": "强杀进程恢复",
+          "requirement": "未发停止，在途未知，完成原件补登记",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/audio-crash-recovery.test.mjs"
+            ],
+            "logs": [
+              "data/m0-audio-delivery/real-process-crash.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "7次真实SIGKILL，包含未发、已发、半截流及4种完整回执/处理边界；不是普通throw假装强杀。"
+        }
+      ]
+    },
+    {
+      "id": "VC26",
+      "scenario": "closed旧job原件发现",
+      "required": "只历史补回，不覆盖后来选用",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC26",
+          "title": "closed旧job原件发现",
+          "requirement": "只历史补回，不覆盖后来选用",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/audio-delivery.test.mjs :: AE-H01-R 登记失败后重开仅本地恢复",
+              "tests/enhancement-worker.test.mjs :: 恢复结束后的组请求迟到，只记历史且不覆盖新版或复活解组"
+            ],
+            "logs": [
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "VC27",
+      "scenario": "候选优先与长章",
+      "required": "交互可进、背景不永久饥饿",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC27",
+          "title": "候选优先与长章",
+          "requirement": "交互可进、背景不永久饥饿",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC05/06/27 两章和试音共池",
+              "tests/concurrency.test.mjs :: VC05/08/09 候选、组合与场景共池",
+              "tests/concurrency.test.mjs :: 已有后台请求很慢时，持续新试音不能绕过两次交互后补后台的约束"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "唯一服务worker内共享池，交互连续最多2次后让后台；含已在途慢后台不被永久挤出反例。"
+        }
+      ]
+    },
+    {
+      "id": "VC28",
+      "scenario": "FFmpeg与磁盘反压",
+      "required": "受限进程/字节，不能无限起子进程",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC28",
+          "title": "FFmpeg与磁盘反压",
+          "requirement": "受限进程/字节，不能无限起子进程",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC28 原件封存后释放网络槽，本地处理池1及积压数量共同反压",
+              "tests/concurrency.test.mjs :: VC29 参考共享只核验一次",
+              "data/m1-concurrency/run-benchmark.mjs",
+              "tests/concurrency.test.mjs :: 独立upstream期限失败保留unknown和已发次数，不重发也不提升part",
+              "tests/concurrency.test.mjs :: 独立receiving期限失败保留unknown和已发次数，不重发也不提升part",
+              "tests/concurrency.test.mjs :: 响应头与接收体使用独立预算，完整响应后的本地处理不继续消费网络时限",
+              "tests/media-resource.test.mjs :: hung native child has a bounded lifetime and releases the shared slot before queued work starts"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/benchmark-shared-media.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "最新12轮基准在root统一媒体进程池后执行；CPU/RSS/临时盘为采样峰值，非OS级硬限制测量。媒体全服务进程上限由root检查补充。"
+        }
+      ]
+    },
+    {
+      "id": "VC29",
+      "scenario": "参考缓存停用/删除",
+      "required": "租约保护读取，发送前资格仍重查",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC29",
+          "title": "参考缓存停用/删除",
+          "requirement": "租约保护读取，发送前资格仍重查",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC29 参考共享只核验一次，停用仍在最终发送守卫中生效",
+              "tests/worker.test.mjs:833 :: 参考删除等待本地读取和在途任务，删除后保留已有音频并阻断再生成"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "参考缓存按内容核验共享；删除preparing租约的路由集成由parent最新audio/index修改补充。"
+        }
+      ]
+    },
+    {
+      "id": "VC30",
+      "scenario": "维护/关闭drain",
+      "required": "等所有适用任务和文件写入结束才关DB",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC30",
+          "title": "维护/关闭drain",
+          "requirement": "等所有适用任务和文件写入结束才关DB",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/concurrency.test.mjs :: VC14/15/30 停止领取后等待在途和本地写入完成",
+              "tests/concurrency-integration.test.mjs :: 三段在途时迁移被拒；服务器关闭等待回执及本地整理"
+            ],
+            "logs": [
+              "data/m1-concurrency/final-owned-regression.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "VC31",
+      "scenario": "母版构建和导出",
+      "required": "无未收束新成员的假完成，按选中结果一次构建",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC31",
+          "title": "母版构建和导出",
+          "requirement": "无未收束新成员的假完成，按选中结果一次构建",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "tests/enhancement-worker.test.mjs :: F2 scene单条成组后解除严格恢复预览干声，缺干声阻断母版和导出且零补生成",
+              "tests/enhancement-worker.test.mjs:498 :: EX07/EX08 组与单条混排双格式同母版，删除参考和母版只本地重建"
+            ],
+            "logs": [
+              "data/m1-concurrency/discard-and-delivery.log",
+              "data/m1-concurrency/final-recovery-timeout-epoch.log"
+            ]
+          },
+          "note": "既有实际FFmpeg母版/双格式导出回归通过；生成job收束前render仍受chapter活动任务保护。"
+        }
+      ]
+    },
+    {
+      "id": "VC32",
+      "scenario": "受控时延基准",
+      "required": "固定请求数，记录N1/2/3耗时/峰值/资源，不预填加速比",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m0-m2-evidence.json",
+          "id": "VC32",
+          "title": "受控时延基准",
+          "requirement": "固定请求数，记录N1/2/3耗时/峰值/资源，不预填加速比",
+          "status": "已实现并验证",
+          "evidence": {
+            "tests": [
+              "data/m1-concurrency/run-benchmark.mjs"
+            ],
+            "logs": [
+              "data/m1-concurrency/benchmark-shared-media.log",
+              "data/m1-concurrency/benchmark.json"
+            ]
+          },
+          "note": "固定12段，每N热身1次+测量3次；无真实模型调用和费用。"
+        }
+      ]
+    },
+    {
+      "id": "VA01",
+      "scenario": "全空项目问答",
+      "required": "读真实初始化状态，不依赖预设角色",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA01",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "empty project can initialize without guessed chapter or inherited model configuration"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "creation from an empty session binds only actual created objects and continues the mandate"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+            }
+          ],
+          "note": "空会话绑定来自实际创建回执；完整空项目到母版使用模拟模型回复、真实SQLite/WAV/工作线程/FFmpeg。"
+        }
+      ]
+    },
+    {
+      "id": "VA02",
+      "scenario": "当前正文问答",
+      "required": "答案必须依赖实际内容和引用范围",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA02",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "context/help use real scoped facts without local paths, other project text or credentials"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "truncated automatic context is explicitly partial and full segment reads preserve all text"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "ordinary question reads real context and ends without writes; message replay never resends"
+            }
+          ],
+          "note": "实际正文与范围进入上下文；尚未评价真实模型回答准确率。"
+        }
+      ]
+    },
+    {
+      "id": "VA03",
+      "scenario": "全部能力覆盖",
+      "required": "普通action变动要求更新注册/帮助/测试",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA03",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "capability map tracks all accepted actions and every tool has indexed help"
+            }
+          ],
+          "note": "38个既有普通action、79个注册能力；采用当前dispatch分支形式的覆盖检查及帮助引用检查。"
+        }
+      ]
+    },
+    {
+      "id": "VA04",
+      "scenario": "未知工具名",
+      "required": "服务端拒绝，不执行任意action",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA04",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "capability whitelist rejects unknown tools, raw forwarding and server-owned fields"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "unregistered model action repairs at most once, then executes nothing"
+            }
+          ],
+          "note": "未知能力和额外参数拒绝；有限格式修复不执行越权操作。"
+        }
+      ]
+    },
+    {
+      "id": "VA05",
+      "scenario": "同名对象歧义",
+      "required": "核对真实ID/项目，不凭名字误选",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA05",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "cross-project and cross-chapter object IDs cannot write or read another target"
+            }
+          ],
+          "note": "按真实ID校验项目/章节归属；同名自然语言消歧质量尚待真实模型。"
+        }
+      ]
+    },
+    {
+      "id": "VA06",
+      "scenario": "问法与执行统一入口",
+      "required": "只问解释不自动修改，明确动作有记录",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA06",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "ordinary question reads real context and ends without writes; message replay never resends"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "registered UI actions require a click, do not autoplay, and reject arbitrary URLs or targets"
+            }
+          ],
+          "note": "普通问答零业务写入；UI定位/试听只返回用户点击按钮。"
+        }
+      ]
+    },
+    {
+      "id": "VA07",
+      "scenario": "已批准整章委托",
+      "required": "合法低风险步骤连续执行，不逐字段盖章",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA07",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "generation and master run through real worker receipts; waiting ticks spend no assistant calls"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "explicit workflow scope generates a group inside one mandate without repeated approvals"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "authorized existing scene generates directly and preserves manual guidance and sound events"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "dry mandate asks once for a concrete group expansion and continues later group work automatically"
+            }
+          ],
+          "note": "一次委托贯通导入、选声、确认和真实母版；批准的对戏/场景范围内自动执行。已配置人工场景直接生成，零额外分析。"
+        }
+      ]
+    },
+    {
+      "id": "VA08",
+      "scenario": "缺音色未授权AI选",
+      "required": "按角色一次询问，不私自绑定",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA08",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "complete:true without a real master cannot complete a whole chapter task"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "central voice choices are scoped business operations and do not fake a listened result"
+            }
+          ],
+          "note": "缺声按实际角色一次列出，可通过有界角色选择继续。"
+        }
+      ]
+    },
+    {
+      "id": "VA09",
+      "scenario": "允许批准集合选声",
+      "required": "可自动选且记AI来源，不伪造人工",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA09",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "an approved voice set permits automatic role selection with AI provenance and no further approval"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "composite useVoice propagates trusted actor without marking inherited choices as human"
+            }
+          ],
+          "note": "批准集合内自动选声，policy_ai来源，无二次逐字段审批。"
+        }
+      ]
+    },
+    {
+      "id": "VA10",
+      "scenario": "人工保护字段",
+      "required": "重分析不覆盖已有手工值",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA10",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "assistant mutations record AI provenance, protect human fields and preserve exact text"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "analysis application respects human protection and records an atomic AI receipt"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "manual line changes while jobs complete are never rebased as assistant changes"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "group and scene delegation never overwrites manual guidance, adopted events or grouping"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "authorized existing scene generates directly and preserves manual guidance and sound events"
+            }
+          ],
+          "note": "人工表演、组指导、已采用事件和组结构均保护；历史恢复只有具体差异批准后可覆盖；后台期间人工改动不被重设版本。"
+        }
+      ]
+    },
+    {
+      "id": "VA11",
+      "scenario": "原文忠实",
+      "required": "配音委托不允许改写/删字或盲替全文",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA11",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "assistant mutations record AI provenance, protect human fields and preserve exact text"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "analysis application respects human protection and records an atomic AI receipt"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "approved bounded task progresses through multiple local steps with AI source, preserves text and never marks listened"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+            }
+          ],
+          "note": "默认保原文；明确编辑按实际差异和完整读取限制。"
+        }
+      ]
+    },
+    {
+      "id": "VA12",
+      "scenario": "上下文截断",
+      "required": "补读或缩小编辑，禁止未知部分整体替换",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA12",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "truncated automatic context is explicitly partial and full segment reads preserve all text"
+            }
+          ],
+          "note": "超过自动上下文范围明确partial；完整单句读取可补齐。"
+        }
+      ]
+    },
+    {
+      "id": "VA13",
+      "scenario": "当前草稿",
+      "required": "明确标未保存；执行前相关保存屏障",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA13",
+          "status": "已实现未验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "draft status is only view metadata; questions use saved facts and never transmit local draft text"
+            }
+          ],
+          "note": "已验证服务端只接受draftStatus枚举提示，facts仅持久记录，草稿正文不外发且问答零业务写入；浏览器保存屏障另由UI负责人证据覆盖，本文件不代签。"
+        },
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VA13",
+          "status": "已实现并验证",
+          "verifiedScope": "当前未保存状态明确提示；ask只发draftStatus不传草稿正文；task只在保存屏障成功后发出并标saved",
+          "browser": [],
+          "fixture": [
+            "automation/assistant-ui-draft-status.log",
+            "tests/assistant-client.test.mjs",
+            "tests/assistant-service.test.mjs"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VA14",
+      "scenario": "另一页草稿冲突",
+      "required": "不清缓存不强更新revision",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA14",
+          "status": "已实现未验证",
+          "evidence": [],
+          "note": "浏览器另一页草稿保护不在本子任务实际验证范围。"
+        },
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VA14",
+          "status": "已实现并验证",
+          "verifiedScope": "保存冲突零发送、不清草稿、不强改revision；已有跨标签autosave及新增助手保存屏障夹具通过。",
+          "browser": [],
+          "fixture": [
+            "automation/assistant-ui-final-regression.log",
+            "automation/assistant-ui-tests.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VA15",
+      "scenario": "具体提案稳定",
+      "required": "确认实际payload，不能确认后重新生成另一版",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA15",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "specific proposal requires exact approval, refuses changed targets and persistent rejection"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "writes require trusted execution context and unchanged plain revision dependencies"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "tail maintenance only sends approved scope through shared adapter and cannot acquire its own consent"
+            }
+          ],
+          "note": "不重新生成审批payload；维护与删除保留原预览范围。"
+        }
+      ]
+    },
+    {
+      "id": "VA16",
+      "scenario": "拒绝持久",
+      "required": "刷新后仍拒绝，旧确认不能执行",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA16",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "specific proposal requires exact approval, refuses changed targets and persistent rejection"
+            }
+          ],
+          "note": "拒绝持久，旧决定不能执行。"
+        }
+      ]
+    },
+    {
+      "id": "VA17",
+      "scenario": "双击确认",
+      "required": "同proposal/operation一次效果",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA17",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "duplicate approval returns the same decision and applies a local proposal exactly once"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "message/run publication is atomic; a failed run write cannot swallow an idempotent message"
+            }
+          ],
+          "note": "双击同一决定只一次效果；消息/run写入失败同事务回滚。"
+        }
+      ]
+    },
+    {
+      "id": "VA18",
+      "scenario": "任务步骤丢回执",
+      "required": "查原操作不重做整个流程",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA18",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "domain mutation and durable assistant receipt commit together; lost step receipt is replayable"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "consumed proposal response is not re-applied after service recovery"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "recovery resolves a committed local operation with missing step receipt instead of applying it twice"
+            }
+          ],
+          "note": "原操作回执补丢失步骤；消费过的回复不重复解析执行。"
+        }
+      ]
+    },
+    {
+      "id": "VA19",
+      "scenario": "真实user修改后确认",
+      "required": "依赖变化过期，保护新版",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA19",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "specific proposal requires exact approval, refuses changed targets and persistent rejection"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "manual line changes while jobs complete are never rebased as assistant changes"
+            }
+          ],
+          "note": "同一对象人工更改后旧提案stale，已完成步骤保留。"
+        }
+      ]
+    },
+    {
+      "id": "VA20",
+      "scenario": "无关对象修改",
+      "required": "不无理由使全部任务过期",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA20",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "unrelated manual title change does not expire a line performance proposal"
+            }
+          ],
+          "note": "无关章节标题变动不阻断单句表演步骤。"
+        }
+      ]
+    },
+    {
+      "id": "VA21",
+      "scenario": "同章手工与助手",
+      "required": "共用job/版本限制，不另起绕过",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA21",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "shared action guard preserves rename/delete occupancy and audio validation before mutation"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "manual line changes while jobs complete are never rebased as assistant changes"
+            }
+          ],
+          "note": "复用现有领域锁、共享音频校验和真实worker。"
+        }
+      ]
+    },
+    {
+      "id": "VA22",
+      "scenario": "三类预算",
+      "required": "助手/分析/音频分别计数，已发未知占可能用量",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA22",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "generation and master run through real worker receipts; waiting ticks spend no assistant calls"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "budget amendments keep past usage and require explicit route approval; unknown request needs exact decision"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "an audio unknown requires its exact attempt decision; resumed generation does not reset either budget"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "each assistant call has a durable receipt, including format repair; archive removes response material"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "same task step-limit expansion keeps usage and consumes the saved model reply without resending"
+            }
+          ],
+          "note": "三类额度独立，步骤默认40、同任务可扩至200，续跑保留已用并复用收到的回复。本轮零真实外发。"
+        }
+      ]
+    },
+    {
+      "id": "VA23",
+      "scenario": "未授权/扩额/换路由",
+      "required": "0越界调用，明确新决定",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA23",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "paid operations cannot start without a server-provided grant; no model-supplied grant allowed"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "budget amendments keep past usage and require explicit route approval; unknown request needs exact decision"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "changing assistant or production route requires the corresponding explicit amendment"
+            }
+          ],
+          "note": "模型不能携grant，预算调整/助手路由/制作路由分别明确决定。"
+        }
+      ]
+    },
+    {
+      "id": "VA24",
+      "scenario": "格式修复",
+      "required": "仅一次有限修复且保留必要图片/约束",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA24",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "unregistered model action repairs at most once, then executes nothing"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "each assistant call has a durable receipt, including format repair; archive removes response material"
+            }
+          ],
+          "note": "格式仅有限修复，各次回执单独保存；像素保留另由附件测试覆盖。"
+        }
+      ]
+    },
+    {
+      "id": "VA25",
+      "scenario": "模型调用超时",
+      "required": "区分消息unknown，不自动执行旧半提案",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA25",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "paid assistant unknown survives restart without sending again, and closing waits for in-flight receipt"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "budget amendments keep past usage and require explicit route approval; unknown request needs exact decision"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "keeping an unknown assistant result does not authorize retrying the original message"
+            }
+          ],
+          "note": "unknown不自动重发；确切请求+足够额度的重试决定才继续。选择保留结果须新的用户指示，不被恢复按钮隐式重发。"
+        }
+      ]
+    },
+    {
+      "id": "VA26",
+      "scenario": "模型等待音频",
+      "required": "免费观察job，不逐秒收费轮询LLM",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA26",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "generation and master run through real worker receipts; waiting ticks spend no assistant calls"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+            }
+          ],
+          "note": "等待时免费读取任务，只有下一次规划才消耗助手调用。"
+        }
+      ]
+    },
+    {
+      "id": "VA27",
+      "scenario": "人工passed",
+      "required": "只有对明确当前音频的人类决定可登记",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA27",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "review passed requires an explicit human audio decision and never uses model assertion"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "assistant mutations record AI provenance, protect human fields and preserve exact text"
+            }
+          ],
+          "note": "普通批准不能伪造passed；原听评界面处理。"
+        }
+      ]
+    },
+    {
+      "id": "VA28",
+      "scenario": "导出未听评",
+      "required": "待听评/试听母版，不能绕正式export",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA28",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "automatic export always confirm=false and human-only model settings/grants stay unexecutable"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "complete:true without a real master cannot complete a whole chapter task"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "generation and master run through real worker receipts; waiting ticks spend no assistant calls"
+            }
+          ],
+          "note": "导出confirm=false；整章无真实母版不能标完成。"
+        }
+      ]
+    },
+    {
+      "id": "VA29",
+      "scenario": "停止托管",
+      "required": "不再后续步骤，已有请求状态真实",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA29",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "pause while model is in flight keeps reply but dispatches no business action"
+            }
+          ],
+          "note": "暂停期间已收回回复不触发后续业务；已有付费结果仍保留。"
+        }
+      ]
+    },
+    {
+      "id": "VA30",
+      "scenario": "停止任务范围",
+      "required": "只关联job，别的手工任务不被误停",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA30",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "a delegated run cannot stop a manual job or revoke a different grant"
+            }
+          ],
+          "note": "委托不能经job.stop/revoke停止手动任务；control只关联本任务job。"
+        }
+      ]
+    },
+    {
+      "id": "VA31",
+      "scenario": "关闭聊天",
+      "required": "不重开旧面板，运行任务仍可查看",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA31",
+          "status": "已实现未验证",
+          "evidence": [],
+          "note": "关闭面板及结果通知属于UI负责人浏览器验证范围。"
+        },
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VA31",
+          "status": "已实现并验证",
+          "verifiedScope": "关闭不重开旧面板，暂停重开与明确恢复，跨页完成不抢当前对象",
+          "browser": [
+            "browser/assistant-boundary-results.json",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-tests.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VA32",
+      "scenario": "切章/切会话",
+      "required": "绑定不悄变，消息和附件不串",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA32",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "cross-project and cross-chapter object IDs cannot write or read another target"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "creation from an empty session binds only actual created objects and continues the mandate"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+            }
+          ],
+          "note": "服务端绑定持久、不会随view改变；浏览器切页迟到响应另见UI证据。"
+        },
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VA32",
+          "status": "已实现并验证",
+          "verifiedScope": "会话和章节绑定、草稿及迟到附件隔离；跨项目完成保持当前编辑页",
+          "browser": [
+            "browser/assistant-boundary-results.json",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-tests.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VA33",
+      "scenario": "目标删除/归档",
+      "required": "不能执行旧提案，但可以拒绝/取消/查看",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA33",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "approved deletion of the bound project leaves only a generic archived result, not private data"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "a separate active run still blocks a project deletion and changed deletion scope cannot be auto-refreshed"
+            }
+          ],
+          "note": "自身批准删除只留通用归档墓碑，其他活动任务及新范围仍阻断。"
+        }
+      ]
+    },
+    {
+      "id": "VA34",
+      "scenario": "原始历史与摘要",
+      "required": "能回读纠正，新约束优先不覆盖原件",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA34",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "each assistant call has a durable receipt, including format repair; archive removes response material"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "message/run publication is atomic; a failed run write cannot swallow an idempotent message"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "assistant call journal records only the actual attachment fingerprints and not pixel data"
+            }
+          ],
+          "note": "每次实际发送内容/提示/截图指纹及响应时点可追溯；回执先落盘，归档删除回复材料。截图日志反例采用模拟已验证模型/像素，不宣称真实识图验收。"
+        }
+      ]
+    },
+    {
+      "id": "VA35",
+      "scenario": "单会话损坏",
+      "required": "隔离，其他会话可用，未知权限不写",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA35",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "one corrupt waiting session cannot prevent other ready sessions from advancing"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "malformed persisted assistant rows are isolated from listing, busy checks and other session context"
+            }
+          ],
+          "note": "实际注入坏形状JSON、缺绑定和缺会话；其他会话列表、busy、上下文继续可用。"
+        }
+      ]
+    },
+    {
+      "id": "VA36",
+      "scenario": "只图片发送",
+      "required": "等待像素上传完成，不能只发空文字",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA36",
+          "status": "已实现未验证",
+          "evidence": [],
+          "note": "附件/前端/模型传输模块由其他负责人验证；本文件不代签该范围。"
+        },
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VA36",
+          "status": "已实现并验证",
+          "verifiedScope": "纯图有效发送；上传期间发送不可点",
+          "browser": [
+            "browser/assistant-browser-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-tests.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VA37",
+      "scenario": "粘贴/拖拽/多图/移除",
+      "required": "上传顺序和会话绑定正确",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA37",
+          "status": "已实现未验证",
+          "evidence": [],
+          "note": "附件/前端/模型传输模块由其他负责人验证；本文件不代签该范围。"
+        },
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VA37",
+          "status": "已实现并验证",
+          "verifiedScope": "选择、粘贴、拖入、预览和移除；两张含圈注PNG在浏览器同轮发送；2张及8MB边界通过",
+          "browser": [
+            "browser/assistant-browser-results.json",
+            "browser/assistant-boundary-results.json",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-tests.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VA38",
+      "scenario": "图片A慢B快/关页",
+      "required": "旧读取不污染新会话",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA38",
+          "status": "已实现未验证",
+          "evidence": [],
+          "note": "附件/前端/模型传输模块由其他负责人验证；本文件不代签该范围。"
+        },
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VA38",
+          "status": "已实现并验证",
+          "verifiedScope": "迟到A附件不进入B；卸载后仅保留原会话草稿元数据",
+          "browser": [
+            "browser/assistant-boundary-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-tests.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VA39",
+      "scenario": "真实格式与像素限制",
+      "required": "伪MIME/畸形/超像素/大小数量拒绝",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA39",
+          "status": "已实现未验证",
+          "evidence": [],
+          "note": "附件/前端/模型传输模块由其他负责人验证；本文件不代签该范围。"
+        },
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VA39",
+          "status": "已实现并验证",
+          "verifiedScope": "客户端格式、数量、字节、像素限制；服务端保留真实解码入口",
+          "browser": [],
+          "fixture": [
+            "automation/assistant-ui-tests.log",
+            "tests/assistant-attachments.test.mjs"
+          ],
+          "limitations": [
+            "服务端假MIME、畸形及超像素结果引用root全量，非本子任务重复运行。"
+          ]
+        },
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/assistant-attachments.test.mjs",
+            "tests/assistant-lifecycle.test.mjs"
+          ],
+          "note": "真实解码、格式/尺寸/数量/字节限制及来源绑定验证。"
+        }
+      ]
+    },
+    {
+      "id": "VA40",
+      "scenario": "最终模型图片输入",
+      "required": "真实像素而非文件名/路径；修复仍带图",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA40",
+          "status": "已实现未验证",
+          "evidence": [],
+          "note": "附件/前端/模型传输模块由其他负责人验证；本文件不代签该范围。"
+        },
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VA40",
+          "status": "已实现并验证",
+          "verifiedScope": "真实截图字节到Mock模型；随机色码验证亦走像素通路",
+          "browser": [
+            "browser/assistant-browser-results.json"
+          ],
+          "fixture": [],
+          "limitations": [
+            "不是实际Claude/其他真实模型识图质量验收",
+            "格式修复时保留像素由后端测试覆盖，本子任务未独立实跑"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "VA41",
+      "scenario": "像素随机码实测",
+      "required": "真实视觉模型识别，不从prompt或alt泄题",
+      "status": "模型待验",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA41",
+          "status": "已实现未验证",
+          "evidence": [],
+          "note": "未向真实多模态模型外发；真实识图、旧图差异与圈注理解尚未验证。"
+        },
+        {
+          "source": "root verification",
+          "status": "模型待验",
+          "evidence": [
+            "doc/concurrency-assistant/real-provider-validation.md"
+          ],
+          "note": "真实外发材料、账号并发能力和请求上限需按规格单独授权；本轮 Mock 不能代替真实模型。"
+        }
+      ]
+    },
+    {
+      "id": "VA42",
+      "scenario": "旧截图与实时不同",
+      "required": "明确两种依据，不按截图旧状态写数据",
+      "status": "模型待验",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA42",
+          "status": "已实现未验证",
+          "evidence": [],
+          "note": "未向真实多模态模型外发；真实识图、旧图差异与圈注理解尚未验证。"
+        },
+        {
+          "source": "root verification",
+          "status": "模型待验",
+          "evidence": [
+            "doc/concurrency-assistant/real-provider-validation.md"
+          ],
+          "note": "真实外发材料、账号并发能力和请求上限需按规格单独授权；本轮 Mock 不能代替真实模型。"
+        }
+      ]
+    },
+    {
+      "id": "VA43",
+      "scenario": "截图圈注与模糊这里",
+      "required": "能定位/适量询问，不凭坐标点危险按钮",
+      "status": "模型待验",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA43",
+          "status": "已实现未验证",
+          "evidence": [],
+          "note": "未向真实多模态模型外发；真实识图、旧图差异与圈注理解尚未验证。"
+        },
+        {
+          "source": "root verification",
+          "status": "模型待验",
+          "evidence": [
+            "doc/concurrency-assistant/real-provider-validation.md"
+          ],
+          "note": "真实外发材料、账号并发能力和请求上限需按规格单独授权；本轮 Mock 不能代替真实模型。"
+        }
+      ]
+    },
+    {
+      "id": "VA44",
+      "scenario": "小说/图像注入",
+      "required": "不获新能力/授权/跨库读取，输出仍经白名单",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/m3-m4-evidence.json",
+          "id": "VA44",
+          "status": "已实现并验证",
+          "evidence": [
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "capability whitelist rejects unknown tools, raw forwarding and server-owned fields"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "cross-project and cross-chapter object IDs cannot write or read another target"
+            },
+            {
+              "file": "tests/assistant-capabilities.test.mjs",
+              "name": "paid operations cannot start without a server-provided grant; no model-supplied grant allowed"
+            },
+            {
+              "file": "tests/assistant-service.test.mjs",
+              "name": "unregistered model action repairs at most once, then executes nothing"
+            }
+          ],
+          "note": "白名单、所属范围和授权字段边界有反向测试；真实图像注入理解表现尚未外发验证。"
+        }
+      ]
+    },
+    {
+      "id": "VX01",
+      "scenario": "问助手与检查器",
+      "required": "右侧布局不挤垮正文，可切回手动",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX01",
+          "status": "已实现并验证",
+          "verifiedScope": "共享Inspector，紧凑宽度原生Dialog；返回手动入口",
+          "browser": [
+            "browser/assistant-browser-results.json",
+            "browser/assistant-1280.png",
+            "browser/assistant-320-final.png"
+          ],
+          "fixture": [],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VX02",
+      "scenario": "集中缺声卡",
+      "required": "数量/来源/影响范围/试听清楚",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX02",
+          "status": "已实现并验证",
+          "verifiedScope": "三角色同卡逐一选声，显示台词数量，可实际播放合成参考；保存不执行，明确恢复后经useVoice绑定",
+          "browser": [
+            "browser/assistant-decision-results.json",
+            "browser/assistant-voice-decision.png",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-tests.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VX03",
+      "scenario": "错误与当前下一步",
+      "required": "unknown/确定未发/本地恢复分清",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX03",
+          "status": "已实现并验证",
+          "verifiedScope": "确定拒绝、本地恢复和unknown分开；暂停或需补充时真正unknown可核对，正常sending不误显示未知",
+          "browser": [
+            "browser/assistant-decision-results.json",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-final-regression.log",
+            "tests/audio-provenance-client.test.mjs",
+            "tests/assistant-client.test.mjs",
+            "automation/assistant-ui-draft-status.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VX04",
+      "scenario": "输入法Enter",
+      "required": "组合中不发送；换行/发送规则清晰",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX04",
+          "status": "已实现并验证",
+          "verifiedScope": "IME组合Enter不发，实际Shift+Enter换行，明确发送按钮",
+          "browser": [
+            "browser/assistant-browser-results.json",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-tests.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VX05",
+      "scenario": "播放器快捷键",
+      "required": "聊天/菜单/选择器不误触左右跳播",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX05",
+          "status": "已实现并验证",
+          "verifiedScope": "30秒参考暂停10秒，聊天、会话选择、项目选择菜单左右键不跳播；播放器自身仍精确前进5秒",
+          "browser": [
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "tests/playback-seek.test.mjs",
+            "automation/assistant-ui-final-extended-regression.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VX06",
+      "scenario": "新消息跟随",
+      "required": "用户读旧记录不抢滚动，底部可跟随",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX06",
+          "status": "已实现并验证",
+          "verifiedScope": "30条长历史阅读位置120px时新消息不抢滚动；主动回到底部恢复跟随",
+          "browser": [
+            "browser/assistant-voice-decision.png",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VX07",
+      "scenario": "关闭/返回焦点",
+      "required": "对话/截图/提案浮层Esc与Tab正确",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX07",
+          "status": "已实现并验证",
+          "verifiedScope": "截图Tab与Esc回原缩略图；窄屏14次Tab不进入对话外页面控件；宽转窄关闭后返回助手入口",
+          "browser": [
+            "browser/assistant-browser-results.json",
+            "browser/assistant-boundary-results.json",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "tests/task-progress.test.mjs"
+          ],
+          "limitations": [
+            "Chrome原生Tab可进入浏览器地址栏，不属于对话外页面控件。"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "VX08",
+      "scenario": "窄屏/缩放/长内容",
+      "required": "关键按钮、聊天和播放不被遮挡",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX08",
+          "status": "已实现并验证",
+          "verifiedScope": "320/375/768/1280与200%等效视口，发现并修正边缘裁切/发送区挤压",
+          "browser": [
+            "browser/assistant-browser-results.json",
+            "browser/assistant-boundary-results.json",
+            "browser/assistant-320-final.png",
+            "browser/assistant-200percent-final.png"
+          ],
+          "fixture": [],
+          "limitations": [
+            "200%使用640 CSS像素/1280物理像素等效视口，不伪称真实浏览器缩放键测试"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "VX09",
+      "scenario": "会话管理非当前",
+      "required": "不切当前、不丢输入，不绑错对象",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX09",
+          "status": "已实现并验证",
+          "verifiedScope": "直接归档非当前B，A选择、文字和附件及所有本机草稿保持；B附件由服务按归属清理",
+          "browser": [
+            "browser/assistant-boundary-results.json",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-tests.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VX10",
+      "scenario": "任务跨页完成",
+      "required": "结果卡可找但不抢当前编辑选择",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX10",
+          "status": "已实现并验证",
+          "verifiedScope": "延迟回复期间切另一个项目章节，完成结果仍可找到，不改变当前编辑章节",
+          "browser": [
+            "browser/assistant-boundary-results.json",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "automation/assistant-ui-tests.log"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VX11",
+      "scenario": "回到当前对象",
+      "required": "稳定UI目标存在才导航，旧版本给当前路径",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX11",
+          "status": "已实现并验证",
+          "verifiedScope": "明确点击稳定目标先到绑定章再定位现存片段；不存在的旧目标给出核对提示并留在会话",
+          "browser": [
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [
+            "src/App.tsx:assistantUI"
+          ],
+          "limitations": []
+        }
+      ]
+    },
+    {
+      "id": "VX12",
+      "scenario": "隐私发送预览",
+      "required": "只发明确附件/内容，能移除或裁剪敏感区",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "doc/concurrency-assistant/ui-evidence.json",
+          "id": "VX12",
+          "status": "已实现并验证",
+          "verifiedScope": "发送费用/外发材料提示，截图显示服务端实际像素，可放大和移除",
+          "browser": [
+            "browser/assistant-browser-results.json",
+            "browser/assistant-boundary-results.json",
+            "browser/assistant-extended-completed-results.json"
+          ],
+          "fixture": [],
+          "limitations": [
+            "内置裁剪圈注为可选项；可移除敏感图并重传用户已裁剪或圈注的图片。"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "VG01",
+      "scenario": "新增schema旧writer",
+      "required": "安全拒写新语义，回退1走兼容新代码",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/audio-delivery-lifecycle.test.mjs",
+            "tests/storage-hardening.test.mjs",
+            "tests/assistant-lifecycle.test.mjs",
+            "tests/attachment-integrity.test.mjs",
+            "tests/concurrency-integration.test.mjs"
+          ],
+          "note": "真实 SQLite、文件、FFmpeg 和临时目录验证；迁移失败恢复、在途上传与删除互锁、旧 writer 拒写。"
+        }
+      ]
+    },
+    {
+      "id": "VG02",
+      "scenario": "联合备份还原",
+      "required": "原件/派生/助手/附件/委托/unknown一致",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/audio-delivery-lifecycle.test.mjs",
+            "tests/storage-hardening.test.mjs",
+            "tests/assistant-lifecycle.test.mjs",
+            "tests/attachment-integrity.test.mjs",
+            "tests/concurrency-integration.test.mjs"
+          ],
+          "note": "真实 SQLite、文件、FFmpeg 和临时目录验证；迁移失败恢复、在途上传与删除互锁、旧 writer 拒写。"
+        }
+      ]
+    },
+    {
+      "id": "VG03",
+      "scenario": "维护并发附件或助手",
+      "required": "有占用不提前迁移/删引用",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/audio-delivery-lifecycle.test.mjs",
+            "tests/storage-hardening.test.mjs",
+            "tests/assistant-lifecycle.test.mjs",
+            "tests/attachment-integrity.test.mjs",
+            "tests/concurrency-integration.test.mjs"
+          ],
+          "note": "真实 SQLite、文件、FFmpeg 和临时目录验证；迁移失败恢复、在途上传与删除互锁、旧 writer 拒写。"
+        }
+      ]
+    },
+    {
+      "id": "VG04",
+      "scenario": "功能开关关闭",
+      "required": "服务端禁止新任务，已有记录可查可停",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "tests/assistant-model.test.mjs",
+            "tests/assistant-service.test.mjs"
+          ],
+          "note": "关闭连接禁止新调用；原记录仍能查看、暂停、核对。"
+        }
+      ]
+    },
+    {
+      "id": "VG05",
+      "scenario": "账号能力与限额",
+      "required": "实际验证记录，没有未测支持声称",
+      "status": "模型待验",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "模型待验",
+          "evidence": [
+            "doc/concurrency-assistant/real-provider-validation.md"
+          ],
+          "note": "真实外发材料、账号并发能力和请求上限需按规格单独授权；本轮 Mock 不能代替真实模型。"
+        }
+      ]
+    },
+    {
+      "id": "VG06",
+      "scenario": "真实外发试验",
+      "required": "精确材料/路由/次数授权，未知即按规则停",
+      "status": "模型待验",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "模型待验",
+          "evidence": [
+            "doc/concurrency-assistant/real-provider-validation.md"
+          ],
+          "note": "真实外发材料、账号并发能力和请求上限需按规格单独授权；本轮 Mock 不能代替真实模型。"
+        }
+      ]
+    },
+    {
+      "id": "VG07",
+      "scenario": "固定SHA全量回归",
+      "required": "817原有效断言保留，集合变化说明",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "data/concurrency-assistant/automation/full-regression-final.log"
+          ],
+          "note": "原有效断言保留；新增集合和夹具适配见交付记录，子集不重复相加。"
+        }
+      ]
+    },
+    {
+      "id": "VG08",
+      "scenario": "构建/包/资源一致",
+      "required": "实际发布内容与源码/帮助相符",
+      "status": "实现待验",
+      "evidence": []
+    },
+    {
+      "id": "VG09",
+      "scenario": "日志凭据扫描",
+      "required": "只声明已检查范围，公开无私人图片/原文/Key",
+      "status": "工程关闭",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "工程关闭",
+          "evidence": [
+            "data/concurrency-assistant/automation/gitleaks-staged.log",
+            "data/concurrency-assistant/automation/gitleaks-evidence.log",
+            "data/concurrency-assistant/automation/gitleaks-m0.log",
+            "data/concurrency-assistant/automation/gitleaks-m1.log",
+            "data/concurrency-assistant/automation/credential-review.json"
+          ],
+          "note": "源码与测试证据扫描无真实凭据；旧合成错误夹具的模式命中单独复核，不排除真实秘密。"
+        }
+      ]
+    },
+    {
+      "id": "VG10",
+      "scenario": "干净Mac首次与更新",
+      "required": "不靠开发机配置代验，不默认私有服务能访问",
+      "status": "产品待验",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "产品待验",
+          "evidence": [
+            "doc/concurrency-assistant/human-acceptance.md"
+          ],
+          "note": "真人 5 新手/2 熟手、声音/最终视觉签收和干净 Mac 安装尚未执行。"
+        }
+      ]
+    },
+    {
+      "id": "VG11",
+      "scenario": "真人5新手+2熟手",
+      "required": "核心任务分别4/5自主目标；不伪造留存提升",
+      "status": "产品待验",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "产品待验",
+          "evidence": [
+            "doc/concurrency-assistant/human-acceptance.md"
+          ],
+          "note": "真人 5 新手/2 熟手、声音/最终视觉签收和干净 Mac 安装尚未执行。"
+        }
+      ]
+    },
+    {
+      "id": "VG12",
+      "scenario": "分项最终签收",
+      "required": "工程/真视觉/音效/体验/安装分开，已关旧项不反复重开",
+      "status": "产品待验",
+      "evidence": [
+        {
+          "source": "root verification",
+          "status": "产品待验",
+          "evidence": [
+            "doc/concurrency-assistant/human-acceptance.md"
+          ],
+          "note": "真人 5 新手/2 熟手、声音/最终视觉签收和干净 Mac 安装尚未执行。"
+        }
+      ]
+    }
+  ],
+  "statusVocabulary": [
+    "待复现",
+    "已复现待修",
+    "实现待验",
+    "工程关闭",
+    "模型待验",
+    "产品待验",
+    "有依据延期"
+  ],
+  "counts": {
+    "tasks": {
+      "工程关闭": 31,
+      "模型待验": 3,
+      "产品待验": 2
+    },
+    "checks": {
+      "工程关闭": 102,
+      "有依据延期": 1,
+      "模型待验": 5,
+      "实现待验": 1,
+      "产品待验": 3
+    }
+  }
+}

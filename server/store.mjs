@@ -31,13 +31,13 @@ export function openStore(directory) {
   let transactionDepth = 0;
   const settingsTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'").get();
   const schema = settingsTable && db.prepare("SELECT data FROM settings WHERE id='data-schema'").get();
-  if (schema && (![1,2,3].includes(JSON.parse(schema.data).version))) {
+  if (schema && (![1,2,3,4].includes(JSON.parse(schema.data).version))) {
     db.close();
     fail("数据模式高于此版本，请使用匹配版本或恢复对应备份");
   }
   // Old writers do not read the schema metadata. Native DML triggers on upgraded
   // databases require this connection capability; plain read-only backups work.
-  let writerVersion = schema && JSON.parse(schema.data).version === 2 ? 2 : 3;
+  let writerVersion = schema ? JSON.parse(schema.data).version : 4;
   db.function("workbench_schema_version", () => writerVersion);
   db.exec(
     "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
@@ -58,6 +58,12 @@ export function openStore(directory) {
     "voiceSessions",
     "units",
     "events",
+    "assistantSessions",
+    "assistantMessages",
+    "assistantRuns",
+    "assistantSteps",
+    "assistantDecisions",
+    "assistantAttachments",
   ];
   for (const table of tables)
     db.exec(
@@ -133,9 +139,9 @@ export function openStore(directory) {
       } finally { transactionDepth--; }
     },
     protectSchema() {
-      writerVersion = 3;
+      writerVersion = 4;
       for (const table of tables) for (const action of ["INSERT", "UPDATE", "DELETE"])
-        db.exec(`DROP TRIGGER IF EXISTS schema_v2_${table}_${action}; CREATE TRIGGER IF NOT EXISTS schema_v3_${table}_${action} BEFORE ${action} ON ${table} BEGIN SELECT CASE WHEN workbench_schema_version() <> 3 THEN RAISE(ABORT, 'Unsupported workbench data schema') END; END`);
+        db.exec(`DROP TRIGGER IF EXISTS schema_v2_${table}_${action}; DROP TRIGGER IF EXISTS schema_v3_${table}_${action}; CREATE TRIGGER IF NOT EXISTS schema_v4_${table}_${action} BEFORE ${action} ON ${table} BEGIN SELECT CASE WHEN workbench_schema_version() <> 4 THEN RAISE(ABORT, 'Unsupported workbench data schema') END; END`);
     },
     close() {
       db.close();

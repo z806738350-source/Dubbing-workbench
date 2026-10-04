@@ -1,0 +1,395 @@
+{
+  "date": "2026-10-04",
+  "workspace": "/Users/uiteam/.codex/worktrees/concurrency-assistant/Dubbing workbench",
+  "scope": "前端工程与隔离Chrome浏览器证据；真实模型识图、音频质量和真人体验另行验收。",
+  "productionUserWorkspaceTouched": false,
+  "realProviderCalls": 0,
+  "browser": {
+    "name": "Chrome",
+    "version": "154.0.8037.95",
+    "headless": true,
+    "url": "http://127.0.0.1:4391",
+    "mock": true
+  },
+  "checks": {
+    "relatedClientRegression": 80,
+    "latestAssistantSpecific": 13,
+    "browserRecords": 37,
+    "overlapWarning": "浏览器组含重复宽度复验，不能当作18个完全独立产品能力；测试子集与root全量不能相加",
+    "latestAffectedRegression": 54
+  },
+  "build": "automation/assistant-ui-build.log",
+  "entries": [
+    {
+      "id": "T12",
+      "status": "已实现并验证",
+      "verifiedScope": "生成确认内1至4段并发设置；任务逐段阶段及已发未发；真实停止接口、收尾和320px布局验收",
+      "browser": [
+        "browser/parallel-progress-results.json",
+        "browser/parallel-plan-320.png",
+        "browser/parallel-tasks-320.png"
+      ],
+      "fixture": [
+        "automation/assistant-ui-final-regression.log",
+        "tests/concurrency-client.test.mjs",
+        "tests/task-progress.test.mjs",
+        "tests/generation-plan.test.mjs",
+        "automation/assistant-ui-final-extended-regression.log"
+      ],
+      "limitations": [
+        "浏览器在途阶段为显式隔离记录，待发送记录持有fixture锁阻止真实调用；实际并发与限流另引用worker回归。"
+      ]
+    },
+    {
+      "id": "T16",
+      "status": "已实现并验证",
+      "verifiedScope": "选图/粘贴/拖放/仅图/预览移除/迟到归属/实际像素传输的隔离浏览器路径",
+      "browser": [
+        "browser/assistant-browser-results.json",
+        "browser/assistant-boundary-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-tests.log",
+        "tests/assistant-client.test.mjs"
+      ],
+      "limitations": [
+        "供应商为Mock；真实视觉能力另行授权验收",
+        "服务端格式与存储失败测试由root整合，非本子任务独立实跑"
+      ]
+    },
+    {
+      "id": "T24",
+      "status": "已实现并验证",
+      "verifiedScope": "共享右侧及窄屏布局；三角色选声与实际参考播放；预算、40至200步骤、对戏与场景范围；各宽度及长消息滚动",
+      "browser": [
+        "browser/assistant-browser-results.json",
+        "browser/assistant-boundary-results.json",
+        "browser/assistant-decision-results.json",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-final-regression.log"
+      ],
+      "limitations": [
+        "试听使用合成WAV；真实声音质量不属于该工程验收。"
+      ]
+    },
+    {
+      "id": "T25",
+      "status": "已实现并验证",
+      "verifiedScope": "已圈注截图按真实像素发送；明确UI回执先到绑定章再定位当前片段；不存在的旧目标明确拒绝",
+      "browser": [
+        "browser/assistant-browser-results.json",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-tests.log"
+      ],
+      "limitations": [
+        "真实模型理解旧截图或模糊指代的效果待授权验证；内置裁剪圈注为规格可选项。"
+      ]
+    },
+    {
+      "id": "T32",
+      "status": "已实现并验证",
+      "verifiedScope": "37条隔离Chrome检查记录：输入、图片、布局、任务、选择保护、跨页完成、旧目标和逐段并发停止",
+      "browser": [
+        "browser/assistant-browser-results.json",
+        "browser/assistant-boundary-results.json",
+        "browser/assistant-decision-results.json",
+        "browser/assistant-extended-completed-results.json",
+        "browser/parallel-progress-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-final-regression.log"
+      ],
+      "limitations": [
+        "仅4391隔离Mock与合成WAV；4318升级后检查由主任务单列，真实供应商与真人体验不冒称已通过。"
+      ]
+    },
+    {
+      "id": "VX01",
+      "status": "已实现并验证",
+      "verifiedScope": "共享Inspector，紧凑宽度原生Dialog；返回手动入口",
+      "browser": [
+        "browser/assistant-browser-results.json",
+        "browser/assistant-1280.png",
+        "browser/assistant-320-final.png"
+      ],
+      "fixture": [],
+      "limitations": []
+    },
+    {
+      "id": "VX02",
+      "status": "已实现并验证",
+      "verifiedScope": "三角色同卡逐一选声，显示台词数量，可实际播放合成参考；保存不执行，明确恢复后经useVoice绑定",
+      "browser": [
+        "browser/assistant-decision-results.json",
+        "browser/assistant-voice-decision.png",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-tests.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VX03",
+      "status": "已实现并验证",
+      "verifiedScope": "确定拒绝、本地恢复和unknown分开；暂停或需补充时真正unknown可核对，正常sending不误显示未知",
+      "browser": [
+        "browser/assistant-decision-results.json",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-final-regression.log",
+        "tests/audio-provenance-client.test.mjs",
+        "tests/assistant-client.test.mjs",
+        "automation/assistant-ui-draft-status.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VX04",
+      "status": "已实现并验证",
+      "verifiedScope": "IME组合Enter不发，实际Shift+Enter换行，明确发送按钮",
+      "browser": [
+        "browser/assistant-browser-results.json",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-tests.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VX05",
+      "status": "已实现并验证",
+      "verifiedScope": "30秒参考暂停10秒，聊天、会话选择、项目选择菜单左右键不跳播；播放器自身仍精确前进5秒",
+      "browser": [
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "tests/playback-seek.test.mjs",
+        "automation/assistant-ui-final-extended-regression.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VX06",
+      "status": "已实现并验证",
+      "verifiedScope": "30条长历史阅读位置120px时新消息不抢滚动；主动回到底部恢复跟随",
+      "browser": [
+        "browser/assistant-voice-decision.png",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [],
+      "limitations": []
+    },
+    {
+      "id": "VX07",
+      "status": "已实现并验证",
+      "verifiedScope": "截图Tab与Esc回原缩略图；窄屏14次Tab不进入对话外页面控件；宽转窄关闭后返回助手入口",
+      "browser": [
+        "browser/assistant-browser-results.json",
+        "browser/assistant-boundary-results.json",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "tests/task-progress.test.mjs"
+      ],
+      "limitations": [
+        "Chrome原生Tab可进入浏览器地址栏，不属于对话外页面控件。"
+      ]
+    },
+    {
+      "id": "VX08",
+      "status": "已实现并验证",
+      "verifiedScope": "320/375/768/1280与200%等效视口，发现并修正边缘裁切/发送区挤压",
+      "browser": [
+        "browser/assistant-browser-results.json",
+        "browser/assistant-boundary-results.json",
+        "browser/assistant-320-final.png",
+        "browser/assistant-200percent-final.png"
+      ],
+      "fixture": [],
+      "limitations": [
+        "200%使用640 CSS像素/1280物理像素等效视口，不伪称真实浏览器缩放键测试"
+      ]
+    },
+    {
+      "id": "VX09",
+      "status": "已实现并验证",
+      "verifiedScope": "直接归档非当前B，A选择、文字和附件及所有本机草稿保持；B附件由服务按归属清理",
+      "browser": [
+        "browser/assistant-boundary-results.json",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-tests.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VX10",
+      "status": "已实现并验证",
+      "verifiedScope": "延迟回复期间切另一个项目章节，完成结果仍可找到，不改变当前编辑章节",
+      "browser": [
+        "browser/assistant-boundary-results.json",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-tests.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VX11",
+      "status": "已实现并验证",
+      "verifiedScope": "明确点击稳定目标先到绑定章再定位现存片段；不存在的旧目标给出核对提示并留在会话",
+      "browser": [
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "src/App.tsx:assistantUI"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VX12",
+      "status": "已实现并验证",
+      "verifiedScope": "发送费用/外发材料提示，截图显示服务端实际像素，可放大和移除",
+      "browser": [
+        "browser/assistant-browser-results.json",
+        "browser/assistant-boundary-results.json",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [],
+      "limitations": [
+        "内置裁剪圈注为可选项；可移除敏感图并重传用户已裁剪或圈注的图片。"
+      ]
+    },
+    {
+      "id": "VA13",
+      "status": "已实现并验证",
+      "verifiedScope": "当前未保存状态明确提示；ask只发draftStatus不传草稿正文；task只在保存屏障成功后发出并标saved",
+      "browser": [],
+      "fixture": [
+        "automation/assistant-ui-draft-status.log",
+        "tests/assistant-client.test.mjs",
+        "tests/assistant-service.test.mjs"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VA14",
+      "status": "已实现并验证",
+      "verifiedScope": "保存冲突零发送、不清草稿、不强改revision；已有跨标签autosave及新增助手保存屏障夹具通过。",
+      "browser": [],
+      "fixture": [
+        "automation/assistant-ui-final-regression.log",
+        "automation/assistant-ui-tests.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VA31",
+      "status": "已实现并验证",
+      "verifiedScope": "关闭不重开旧面板，暂停重开与明确恢复，跨页完成不抢当前对象",
+      "browser": [
+        "browser/assistant-boundary-results.json",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-tests.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VA32",
+      "status": "已实现并验证",
+      "verifiedScope": "会话和章节绑定、草稿及迟到附件隔离；跨项目完成保持当前编辑页",
+      "browser": [
+        "browser/assistant-boundary-results.json",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-tests.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VA36",
+      "status": "已实现并验证",
+      "verifiedScope": "纯图有效发送；上传期间发送不可点",
+      "browser": [
+        "browser/assistant-browser-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-tests.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VA37",
+      "status": "已实现并验证",
+      "verifiedScope": "选择、粘贴、拖入、预览和移除；两张含圈注PNG在浏览器同轮发送；2张及8MB边界通过",
+      "browser": [
+        "browser/assistant-browser-results.json",
+        "browser/assistant-boundary-results.json",
+        "browser/assistant-extended-completed-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-tests.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VA38",
+      "status": "已实现并验证",
+      "verifiedScope": "迟到A附件不进入B；卸载后仅保留原会话草稿元数据",
+      "browser": [
+        "browser/assistant-boundary-results.json"
+      ],
+      "fixture": [
+        "automation/assistant-ui-tests.log"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "VA39",
+      "status": "已实现并验证",
+      "verifiedScope": "客户端格式、数量、字节、像素限制；服务端保留真实解码入口",
+      "browser": [],
+      "fixture": [
+        "automation/assistant-ui-tests.log",
+        "tests/assistant-attachments.test.mjs"
+      ],
+      "limitations": [
+        "服务端假MIME、畸形及超像素结果引用root全量，非本子任务重复运行。"
+      ]
+    },
+    {
+      "id": "VA40",
+      "status": "已实现并验证",
+      "verifiedScope": "真实截图字节到Mock模型；随机色码验证亦走像素通路",
+      "browser": [
+        "browser/assistant-browser-results.json"
+      ],
+      "fixture": [],
+      "limitations": [
+        "不是实际Claude/其他真实模型识图质量验收",
+        "格式修复时保留像素由后端测试覆盖，本子任务未独立实跑"
+      ]
+    }
+  ],
+  "evidenceRoot": "data/concurrency-assistant",
+  "optionalFeatures": {
+    "imageCropAnnotation": "规格709行明确为可选裁剪圈注。本期支持用户已裁剪或圈注图片的真实像素上传、预览、移除和两图发送，未新增内置编辑器。"
+  },
+  "evidenceNotes": [
+    "补充索引整合9加5条已通过记录，保留原始脚本超时日志及修正；不冒称真实模型。",
+    "前54项、末次13项与root全量集合重叠，不相加。",
+    "320px生成计划已待布局稳定重截：DOM仅一个Dialog、一个标题，底部生成按钮可见。"
+  ]
+}

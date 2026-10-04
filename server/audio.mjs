@@ -14,7 +14,19 @@ import { constants, existsSync, rmSync, statSync, renameSync, readFileSync } fro
 import { join, dirname } from "node:path";
 import { projectFile, projectExportFile } from './workspace.mjs';
 import { fail, uid, text } from "./store.mjs";
-const exec = promisify(execFile);
+import { createLocalPool } from './scheduler.mjs';
+const nativeExec = promisify(execFile), mediaProcesses = createLocalPool(1);
+// ponytail: one native media process per server keeps uploads and background
+// rendering within the same CPU ceiling; raise only after measured headroom.
+export function runMediaProcess(file, args, options = {}) {
+  const timeout = options.timeout ?? 300000;
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 2147483647) return Promise.reject(new Error('媒体处理时限应为有效的正整数毫秒数'));
+  // The timeout starts after admission, so waiting behind another local task is
+  // not counted as a stalled child. Kill a stalled child before releasing its slot.
+  return mediaProcesses.run(() => nativeExec(file, args, { ...options, timeout, killSignal: 'SIGKILL' }));
+}
+export const mediaProcessActivity = () => ({ active: mediaProcesses.active, queued: mediaProcesses.queued, peak: mediaProcesses.peak, limit: 1 });
+const exec = runMediaProcess;
 export const ffmpeg =
   process.env.FFMPEG_PATH ||
   (existsSync(`${process.env.HOME}/.local/bin/ffmpeg`)
@@ -34,7 +46,7 @@ export async function inspect(file) {
       "json",
       file,
     ],
-    { maxBuffer: 1024 * 1024 },
+    { maxBuffer: 1024 * 1024, timeout: 30000 },
   );
   const meta = JSON.parse(stdout);
   const stream = meta.streams.find((s) => s.codec_type === "audio");
@@ -47,7 +59,7 @@ export async function inspect(file) {
   await exec(
     ffmpeg,
     ["-v", "error", "-xerror", "-i", file, "-f", "null", "-"],
-    { maxBuffer: 1024 * 1024 },
+    { maxBuffer: 1024 * 1024, timeout: 120000 },
   );
   return {
     duration: Number(meta.format.duration),
@@ -317,7 +329,7 @@ export function drainReferenceDeletes(store, reading = new Map()) {
       reading.get(v.id) ||
       store
         .all("attempts")
-        .some((a) => (a.input.referenceVoiceIds || (a.input.voiceId ? [a.input.voiceId] : [])).includes(v.id) && a.status === "sending")
+        .some((a) => (a.input.referenceVoiceIds || (a.input.voiceId ? [a.input.voiceId] : [])).includes(v.id) && (a.status === "sending" || a.phase === 'preparing'))
     )
       continue;
     try {

@@ -65,9 +65,9 @@ test('侧栏音色库计数与日常可见列表一致，全部隐藏时显示�
 });
 
 test('底层完整声音集合保留，历史音频任务仍识别已删与删除中声音的旧名称',()=>{
-  const voices=fixture(),state={voices,chapters:[],jobs:voices.filter(voice=>voice.state==='deleted'||voice.deletePending).map(voice=>({id:'job-'+voice.id,kind:'voice-test',voiceId:voice.id,status:'success',done:1,total:1,createdAt:'2026-10-02T00:00:00Z'}))};
+  const voices=fixture(),state={voices,settings:{},chapters:[],jobs:voices.filter(voice=>voice.state==='deleted'||voice.deletePending).map(voice=>({id:'job-'+voice.id,kind:'voice-test',voiceId:voice.id,status:'success',done:1,total:1,createdAt:'2026-10-02T00:00:00Z'}))};
   const allVoices=project(voicesBinding,{state});assert.deepEqual(allVoices.map(voice=>voice.id),voices.map(voice=>voice.id));
-  const f=setup(voices),tree=project(tasks,{...f.env,state,voices:allVoices,taskRecord:null,chapterId:'fixture-chapter',time:()=>'',active:()=>false,locked:false,busy:false,setModal(){},setTaskRecord(){},startPlay(){},run:callback=>callback()});
+  const f=setup(voices),tree=project(tasks,{...f.env,ConcurrencyStatus:'ConcurrencyStatus',state,voices:allVoices,taskRecord:null,chapterId:'fixture-chapter',time:()=>'',active:()=>false,locked:false,busy:false,setModal(){},setTaskRecord(){},startPlay(){},run:callback=>callback()});
   assert.match(text(tree),/旧音频的已删声音/);assert.match(text(tree),/等待删除的声音/);
 });
 

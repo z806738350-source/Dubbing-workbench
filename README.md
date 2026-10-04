@@ -28,7 +28,11 @@ npm start
 
 浏览器打开 http://127.0.0.1:4318 。开发模式运行 `npm run dev`，打开 http://127.0.0.1:5173 。服务仅监听本机。
 
-在项目根目录的 `.env.kunpo` 配置 `KUNPO_API_KEY`、`KUNPO_BASE_URL`、`KUNPO_TTS_MODEL`。文本分析默认使用 `gemini-3.8-flash`，可以在“设置与连接”输入任意 Kunpo 支持的模型名称并保存。可选 `KUNPO_TEXT_MODEL` 作为初始默认值，界面已保存的选择优先。密钥不发送到前端、不写入日志，也不包含在数据备份中。不要分享该文件。
+在项目根目录的 `.env.kunpo` 配置 `KUNPO_API_KEY`、`KUNPO_BASE_URL`、`KUNPO_TTS_MODEL`。文本分析默认使用 `gemini-3.8-flash`，可以在“设置与连接”输入任意 Kunpo 支持的模型名称并保存。可选 `KUNPO_TEXT_MODEL` 作为初始默认值，界面已保存的选择优先。这些环境凭据不回传到前端、不写入日志，也不包含在数据备份中。不要分享该文件。
+
+AI 助手使用独立连接，初始模型为可编辑的 `claude-sonnet-5-5`；可配置 `ASSISTANT_MODEL` / `ASSISTANT_BASE_URL` 提供初始值，已保存的设置优先。界面支持独立凭据或同服务复用配音凭据，图片须先通过一次明确获准的真实识图验证。独立助手凭据保存在本机工作区数据库，完整备份包含该设置，请按私人资料保管。助手服务不会把保存的凭据返回前端或发给模型。
+
+音频并发默认 1；`AUDIO_CONCURRENCY` 提供期望初值，`AUDIO_ROUTE_CONCURRENCY_CAP` 为管理员已核实的账号上限，均限定 1—4。用户在设置或生成计划中可调整期望值；没有核实账号能力时，上限保持 1。详细操作见 [并发制作与 AI 助手说明](doc/concurrency-assistant/user-guide.md)，恢复与维护见 [调度恢复说明](doc/concurrency-assistant/scheduler-recovery-contract.md)。
 
 可用环境配置：`DATA_DIR` 指定独立数据目录，`PORT` 指定本地端口，`FFMPEG_PATH` / `FFPROBE_PATH` 指定处理程序。未指定时优先使用本机 `~/.local/bin/ffmpeg`。
 

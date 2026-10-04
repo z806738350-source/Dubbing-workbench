@@ -48,6 +48,10 @@ import { useDraftSaveStatus } from "./ObjectDraft";
 import { chapterIssues, chapterMemberState, configurationDecided, playbackIdentity, IssueCenter, ProjectOverview, VoicePicker, RecoveryCenter, QuickHelp, GeneratePlan, type RecoveryTarget } from "./WorkspaceExperience";
 import TaskAuthorization from "./TaskAuthorization";
 import { submitOperation } from "./taskOperations";
+import { LocalAudioRecovery } from "./AudioProvenance";
+import AssistantPanel from "./AssistantPanel";
+import { ConcurrencySettings, ConcurrencyStatus } from "./ConcurrencySettings";
+import type { UIAction } from "./assistantClient";
 import VoiceCreation from "./VoiceCreation";
 import UnitPanel, { CreateGroup, unitHasDraft } from "./UnitPanel";
 import { Dialog, Empty, ErrorBanner, ErrorContext, Field, Form, Select, Status } from "./components";
@@ -127,6 +131,10 @@ type Modal =
 export default function App() {
   const [deleteTarget,setDeleteTarget]=useState<Project|null>(null);
   const [rebindOpen, setRebindOpen] = useState(false);
+  const [assistantOpen,setAssistantOpen]=useState(false),[assistantNarrow,setAssistantNarrow]=useState(window.innerWidth<1216),[assistantPrompt,setAssistantPrompt]=useState<{id:string;text:string}>();
+  const assistantButton=useRef<HTMLButtonElement>(null),assistantWasOpen=useRef(false);
+  useEffect(()=>{if(assistantWasOpen.current&&!assistantOpen&&!document.querySelector('dialog[open]'))assistantButton.current?.focus({preventScroll:true});assistantWasOpen.current=assistantOpen;},[assistantOpen]);
+  useEffect(()=>{const resize=()=>setAssistantNarrow(window.innerWidth<1216);window.addEventListener("resize",resize);return()=>window.removeEventListener("resize",resize);},[]);
   const [unitPanelId, setUnitPanelId] = useState<string|null>(null);
   const [currentMembers, setCurrentMembers] = useState<string[]>([]);
   const [draftIds,setDraftIds] = useState<string[]>([]);
@@ -143,7 +151,7 @@ export default function App() {
   const [generationPlan,setGenerationPlan] = useState<{plan:GenerationPlan;ids:string[];regenerate:boolean;retryUnknown:boolean;resumeRoute:boolean}|null>(null);
   const generationIntent=useRef(0);
   const closeGeneration=()=>{generationIntent.current++;setGenerationPlan(null);};
-  const [taskRecord,setTaskRecord] = useState<{jobId:string;attempt:{id:string;status:string;mode?:string;error?:string}}|null>(null);
+  const [taskRecord,setTaskRecord] = useState<{jobId:string;attempt:{id:string;status:string;mode?:string;error?:string;phase?:string;localRecoveryPending?:boolean}}|null>(null);
   const taskRecordRef=useRef<HTMLElement>(null),unitPanelRef=useRef(unitPanelId);
   unitPanelRef.current=unitPanelId;
   const onDraftChange = useCallback((id:string,dirty:boolean)=>setDraftIds(prev=>dirty ? (prev.includes(id) ? prev : [...prev,id]) : prev.filter(x=>x!==id)),[]);
@@ -220,7 +228,7 @@ export default function App() {
         !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
       const target = event.target instanceof Element ? event.target : null;
       if (target && !target.matches("input[data-playback-progress]") && target.closest(
-        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="slider"], [role="spinbutton"], [role="listbox"], [role="tablist"], [role="menu"]',
+        'input, textarea, select, .select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="slider"], [role="spinbutton"], [role="listbox"], [role="tablist"], [role="menu"]',
       )) return;
       if (seekPlayback(event.key === "ArrowLeft" ? -5 : 5)) event.preventDefault();
     };
@@ -785,6 +793,36 @@ export default function App() {
         chapter={chapter} roles={roles} selected={checked} refresh={refresh} onLocate={locate} onIssues={()=>setModal("issues")} stateJobs={state?.jobs||[]}/>
     </div>
   </>;
+  const showAssistant=(text?:string)=>{setModal(null);setInspectorOpen(false);setUnitPanelId(null);if(text)setAssistantPrompt({id:crypto.randomUUID(),text});setAssistantOpen(true);};
+  const closeAssistant=()=>setAssistantOpen(false);
+  const assistantNavigate=(binding:{projectId:string|null;chapterId:string|null})=>{
+    if(binding.projectId&&!state?.projects.some(p=>p.id===binding.projectId))throw Error("任务项目已不可用，请核对会话记录");
+    if(binding.chapterId&&!state?.chapters.some(c=>c.id===binding.chapterId&&c.projectId===binding.projectId))throw Error("任务章节已不可用，请核对会话记录");
+    if(binding.projectId!==projectRef.current)pickProject(binding.projectId||"");
+    pickChapter(binding.chapterId||"");setSelected("");setChecked([]);
+  };
+  const assistantUI=async(target:UIAction)=>{
+    if(target.type==='play'){
+      if(!target.id||!['voices','audios','masters','exports'].includes(target.kind||''))throw Error('结果缺少可试听声音');
+      await startPlay(target.kind!,target.id,'助手制作结果',undefined,true);return;
+    }
+    if(target.type!=='navigate')throw Error('此操作位置暂不可用');
+    if(target.chapterId&&target.chapterId!==chapterRef.current){const next=state?.chapters.find(c=>c.id===target.chapterId);if(!next)throw Error('目标章节已不可用');assistantNavigate({projectId:next.projectId,chapterId:next.id});setNotice('已打开目标章节，请再次点击操作位置以核对当前内容');return;}
+    if(target.target==='assistant-settings'){setAssistantPrompt({id:crypto.randomUUID(),text:'如何设置助手连接？'});return;}
+    if(target.segmentId&&!chapter?.segments.some(s=>s.id===target.segmentId))throw Error('台词已变化，请刷新任务后再定位');
+    if(target.unitId&&!chapter?.units?.some(u=>u.id===target.unitId))throw Error('声音单元已变化，请刷新任务后再定位');
+    closeAssistant();
+    if(target.segmentId){locate(target.segmentId);return;}
+    if(target.target==='scene'&&target.unitId){openUnit(target.unitId,'scene');return;}
+    if(target.target==='history'){openUnit(target.unitId||'list');return;}
+    const pages:Partial<Record<NonNullable<UIAction['target']>,Modal>>={tasks:'tasks',export:'export',voices:'voices','project-overview':'overview'};
+    if(target.target&&pages[target.target])setModal(pages[target.target]||null);else{setPanelMode('settings');if(assistantNarrow&&chapter)setInspectorOpen(true);}
+  };
+  const assistantPanel=assistantOpen&&state?<AssistantPanel key={state.settings.workspaceIdentity||'workspace'} state={state} projectId={projectId} chapterId={chapterId} selectedSegmentIds={checked.length?checked:selected?[selected]:[]} selectedUnitId={selectedUnit?.id} pane={panelMode} draftStatus={saveStatus} connected={connectionReady} initialPrompt={assistantPrompt} onClose={closeAssistant} onManual={()=>{closeAssistant();setPanelMode('settings');if(assistantNarrow&&chapter)setInspectorOpen(true);}} onNavigate={assistantNavigate} onUIAction={assistantUI} refresh={refresh} withSavedScope={async(binding,work)=>{
+    if(binding.projectId!==(projectRef.current||null)||binding.chapterId!==(chapterRef.current||null))throw Error('请先回到任务绑定的项目与章节，再核对本次操作');
+    if(binding.chapterId)await withSavedDrafts('chapter:'+binding.chapterId,undefined,async()=>{if(binding.chapterId!==chapterRef.current)throw Error('当前章节已改变，请重新核对任务');await work();});else await work();
+  }}/>:null;
+  const taskRecoveryPending = !!taskRecord && (state?.jobs.find(job => job.id === taskRecord.jobId)?.localRecoveryAttemptIds?.includes(taskRecord.attempt.id) ?? (taskRecord.attempt.localRecoveryPending || taskRecord.attempt.phase === "localRecoveryPending"));
   return (
     <ErrorContext.Provider value={{ message: error, dismiss: () => setError("") }}>
       <div className={"app-shell density-"+density} style={{"--reading-size":readingSize+"px"} as React.CSSProperties}>
@@ -805,6 +843,7 @@ export default function App() {
               <strong>{chapter?.title || "开始制作"}</strong>
             </div>
             <div className="topbar-actions">
+              <button ref={assistantButton} className={"button small "+(assistantOpen?"active":"")} aria-expanded={assistantOpen} onClick={()=>assistantOpen?closeAssistant():showAssistant()}><Sparkles size={15}/>AI 助手</button>
               <span className="local-save">
                 <Check size={13} />
                 {saveStatus === "saved" ? "已保存" : saveStatus === "saving" ? "保存中…" : saveStatus === "conflict" ? "保存冲突" : saveStatus === "local" ? "本机暂存" : "本地工作区"}
@@ -894,10 +933,11 @@ export default function App() {
                     </strong>
                     <span>
                       已成功 {job.done} / {job.total} · 失败 {job.failed || 0} · 已耗时 {time(job.elapsedSeconds || 0)}
-                      {job.currentSegmentId && ` · 当前第 ${(segments.find(s => s.id === job.currentSegmentId)?.order ?? 0) + 1} 条`}
+                      {job.counts && ` · ${job.counts.inFlight} 段生成或接收 · ${job.counts.local} 段整理 · ${job.counts.queued+job.counts.preparing} 段未发送`}
                       · 本章暂时只读，可前往其他章节
                     </span>
                   </div>
+                  <button className="text-button" onClick={()=>setModal("tasks")}>查看逐段进度</button>
                   {job.kind === "master" && pendingPlay.current && <button className="text-button" onClick={()=>{playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;setNotice("已取消准备完成后自动播放，试听文件仍会保留。");}}>取消自动播放</button>}
                   <button
                     className="button small"
@@ -1206,8 +1246,8 @@ export default function App() {
                     <span>有效修改自动保存 · 正文 {readingSize}px</span>
                   </div>
                 </section>
-                <aside className={`inspector ${panelMode === "analysis" ? "analysis-active" : ""}`}>
-                  {!inspectorOpen && inspector}
+                <aside className={`inspector ${assistantOpen ? "assistant-active" : panelMode === "analysis" ? "analysis-active" : ""}`}>
+                  {assistantOpen&&!assistantNarrow?assistantPanel:!inspectorOpen&&inspector}
                 </aside>
               </div>
             </>
@@ -1384,7 +1424,7 @@ export default function App() {
         initialMode={unitInitialMode} initialEventId={unitInitialEvent} chapter={chapter} roles={roles} state={state} locked={locked} connected={connectionReady} refresh={refresh} close={()=>setUnitPanelId(null)} open={openMember}
         onTask={async(jobId,attemptId)=>{
           const expectedChapter=chapter.id,expectedUnit=unitPanelId;
-          const attempts=await api<{id:string;status:string;mode?:string;error?:string}[]>("/attempts/"+jobId);
+          const attempts=await api<{id:string;status:string;mode?:string;error?:string;phase?:string;localRecoveryPending?:boolean}[]>("/attempts/"+jobId);
           if(chapterRef.current!==expectedChapter||unitPanelRef.current!==expectedUnit)return;
           const attempt=attempts.find(item=>item.id===attemptId);
           if(!attempt)throw new Error("这次记录尚未找到，请刷新任务记录。");
@@ -1393,7 +1433,7 @@ export default function App() {
         }}
         play={(id,title,historical)=>{const unit=chapter.units!.find(u=>u.id === unitPanelId)!;const mode=unit.variants.scene.current === id ? "scene" : "dry";setCurrentMembers(unit.kind === "group" && !historical ? unit.members : []);
           void startPlay("audios",id,title,undefined,!!historical,historical ? undefined : {id:unit.id,mode,audioId:id,basis:unit.variants[mode].status.basis,state:unit.state});}}/>}
-      {generationPlan && chapter && <GeneratePlan plan={generationPlan.plan} chapter={chapter} model={state?.settings.model} grantId={grantId} unknown={generationUnknown} routeBlocked={!!state?.settings.routeBlocked} retryUnknown={generationPlan.retryUnknown} resumeRoute={generationPlan.resumeRoute} busy={busy}
+      {generationPlan && chapter && <GeneratePlan plan={generationPlan.plan} chapter={chapter} model={state?.settings.model} concurrency={<ConcurrencySettings key={state?.settings.workspaceIdentity} status={state?.settings.scheduler} connected={connectionReady} refresh={refresh}/>} grantId={grantId} unknown={generationUnknown} routeBlocked={!!state?.settings.routeBlocked} retryUnknown={generationPlan.retryUnknown} resumeRoute={generationPlan.resumeRoute} busy={busy}
         onGrant={id=>{if(generationIntent.current===planIntent)setGrantId(id);}} onRetryUnknown={value=>{if(generationIntent.current===planIntent)setGenerationPlan(current=>current?{...current,retryUnknown:value}:null);}} onResumeRoute={value=>{if(generationIntent.current===planIntent)setGenerationPlan(current=>current?{...current,resumeRoute:value}:null);}} onGenerate={submitGeneration} onClose={closeGeneration} onEdit={id=>{closeGeneration();locate(id);}} onRecheck={async()=>{
           const request=generationPlan;
           const intent=++generationIntent.current;
@@ -1411,7 +1451,8 @@ export default function App() {
           <div className="mobile-nav">{nav}</div>
         </Dialog>
       )}
-      {inspectorOpen && chapter && (
+      {assistantOpen && (assistantNarrow || !chapter) && <Dialog title="AI 助手" presentation="sidepanel" onClose={closeAssistant}>{assistantPanel}</Dialog>}
+      {inspectorOpen && chapter && !assistantOpen && (
         <div className="mobile-inspector">
           <Dialog title="章节工作面板" onClose={() => setInspectorOpen(false)}>
             {inspector}
@@ -1622,10 +1663,11 @@ export default function App() {
       {modal === "overview" && state && <ProjectOverview state={state} projectId={projectId} onClose={()=>setModal(null)} onPick={id=>{setModal(null);pickChapter(id);}} onImport={()=>setModal(projectId?'chapter':'project')} onHelp={()=>setModal('help')}/>}
       {modal === "issues" && chapter && <IssueCenter chapter={chapter} roles={roles} voices={voices} onClose={()=>setModal(null)} onLocate={locate} onVoice={id=>openVoice(id)} onSource={()=>setModal('source')} onUnit={(id,mode)=>openUnit(id,mode)} onTasks={()=>setModal('tasks')} onAI={()=>{setModal(null);setPanelMode('analysis');if(window.innerWidth<1216)setInspectorOpen(true);}} onConfirm={async ids=>{await withSavedDrafts('chapter:'+chapter.id,ids.map(id=>'segment:'+id),async()=>{await mutate('segment.confirm',{ids,roleOnly:true,revision:draftScopeRevision('chapter:'+chapter.id,chapter.revision)});});}}/>}
       {modal === "recovery" && state && <RecoveryCenter state={state} chapter={chapter} onClose={()=>setModal(null)} onRecovered={(_id,target)=>{setModal(null);recoveryTarget.current=target;setDraftSignal(n=>n+1);const targetChapter=target.chapterId || (target.projectId&&target.projectId!==projectId?state.chapters.filter(c=>c.projectId===target.projectId).sort((a,b)=>b.order-a.order)[0]?.id:undefined);if(targetChapter&&targetChapter!==chapterId){recoveryTarget.current={...target,chapterId:targetChapter};pickChapter(targetChapter);}else setDraftSignal(n=>n+1);}}/>}
-      {modal === "help" && <QuickHelp configured={!!state?.settings.configured} onClose={()=>setModal(null)} onDemo={playDemo} onImport={()=>setModal(projectId?'chapter':'project')}/>}
+      {modal === "help" && <QuickHelp onAssistant={()=>showAssistant("请介绍当前页面的操作方式。")} configured={!!state?.settings.configured} onClose={()=>setModal(null)} onDemo={playDemo} onImport={()=>setModal(projectId?'chapter':'project')}/>}
       {voiceTarget && chapter && state && <VoicePicker key={chapter.id+':'+voiceTarget.roleId+':'+voiceTarget.segmentId} state={state} chapter={chapter} roles={roles} initialTarget={voiceTarget} onClose={()=>setVoiceTarget(null)} onRefresh={refresh} playingId={playing?player?.id:undefined} play={(kind,id,title)=>void startPlay(kind,id,title,undefined,true)} onUsed={()=>{setVoiceTarget(null);setNotice('声音已应用，返回原处继续制作。');}}/>}
       {modal === "settings" && state && (
         <Dialog title="设置与连接" onClose={() => setModal(null)}>
+          <ConcurrencySettings key={state.settings.workspaceIdentity} status={state.settings.scheduler} connected={connectionReady} refresh={refresh}/>
           <div className="settings-status">
             <span className="brand-mark">
               <AudioLines size={22} />
@@ -1729,10 +1771,12 @@ export default function App() {
       )}
       {modal === "tasks" && state && (
         <Dialog title="任务记录" onClose={() => {setModal(null);setTaskRecord(null);}} wide>
+          <ConcurrencyStatus status={state.settings.scheduler}/>
           {taskRecord&&<section className="task-outcome" tabIndex={-1} ref={taskRecordRef}>
             <h3>这次{taskRecord.attempt.mode==="scene"?"声音背景":"纯人声"}生成记录</h3>
-            <p>结果：{names[taskRecord.attempt.status]||taskRecord.attempt.status}。{taskRecord.attempt.status==="unknown"?"可能已计费；查看记录和试听已有声音均不会重新发送。":"已有声音和历史保留。"}</p>
+            <p>{taskRecoveryPending ? "原件已接收；免费恢复只处理本机文件，不会重新请求配音。" : `结果：${names[taskRecord.attempt.status] || taskRecord.attempt.status}。已有声音和历史保留。`}</p>
             {taskRecord.attempt.error&&<p className="error-inline">{taskRecord.attempt.error}</p>}
+            {taskRecoveryPending && <LocalAudioRecovery key={taskRecord.attempt.id} attemptId={taskRecord.attempt.id} jobId={taskRecord.jobId} chapterId={state.jobs.find(job => job.id === taskRecord.jobId)?.chapterId || ""} connected={connectionReady} refresh={refresh} />}
             <p className="hint">请求记录 {taskRecord.attempt.id}</p>
           </section>}
           <div className="task-list">
@@ -1767,9 +1811,14 @@ export default function App() {
                       已成功 {j.done} / {j.total} · 失败 {j.failed || 0} · 未提交 {j.stopped || 0} · 任务历时 {j.elapsedSeconds === undefined ? "未记录" : time(j.elapsedSeconds)} ·{" "}
                       {new Date(j.createdAt).toLocaleString("zh-CN")}
                     </p>
+                    {j.counts&&<p className="hint">未发送 {j.counts.queued+j.counts.preparing} · 生成或接收 {j.counts.inFlight} · 本机整理 {j.counts.local} · 结果待核对 {j.counts.unknown}</p>}
+                    {!!j.attempts?.length&&<details className="parallel-attempts"><summary>逐段进度（{j.attempts.length}）</summary><ol>{j.attempts.map(a=><li key={a.id}><span>{a.memberNumbers.length?'第 '+a.memberNumbers.join('、')+' 条':'第 '+(a.ordinal+1)+' 个声音'}{a.mode==='scene'?' · 声音背景':''}</span><strong>{({queued:'等待发送',preparing:'准备参考',sending:'生成中',receiving:'接收音频',rawSealed:'原件已保存',processing:'本机整理',registered:'已完成',localRecoveryPending:'待本地恢复',success:'已完成',failed:'未完成',unknown:'结果待核对',stopped:'已停止'} as Record<string,string>)[a.phase]||names[a.status]||'待核对'}</strong><span>{a.submitted===true?'已发送，可能计费':a.submitted===false?'尚未发送':'发送状态未记录'}</span></li>)}</ol></details>}
+                    {active(j.status)&&['generate','unit-generate','voice-test','voice-create'].includes(j.kind)&&<div className="task-stop-actions"><button className="button small" disabled={busy||!connectionReady||j.stop} onClick={()=>void run(()=>action('job.stop',{id:j.id}))}>{j.stop?'正在停止后续':'停止后续'}</button><p className="hint">{j.stop?'未发送的请求已停止；已发送的继续接收并保存，收尾完成后结束任务。':'停止只取消尚未发送的请求；已发送的可能计费，会继续接收并保存。'}</p></div>}
                     {j.error && <p className="error-inline">{j.error}</p>}
                     {j.resultAudioId && <button className="text-button" onClick={() => void startPlay("audios", j.resultAudioId!, j.kind === "voice-test" ? "本次试音结果" : "本次生成结果", undefined, true)}>{j.resultNotSelected ? "试听本次结果 · 已保留，未替换当前版本" : j.kind === "voice-test" ? "试听本次样音" : j.kind === "voice-create" ? "试听本次声音候选" : "试听本次单元结果"}</button>}
-                    {j.kind === "generate" && j.chapterId === chapterId && !active(j.status) && ["failed", "stopped", "unknown"].includes(j.status) && <button className="text-button" disabled={locked || busy} onClick={() => void run(async () => {
+                    {j.localRecoveryAttemptIds?.filter(id => id !== taskRecord?.attempt.id).map(id => <LocalAudioRecovery key={id} attemptId={id} jobId={j.id} chapterId={j.chapterId || ""} connected={connectionReady} refresh={refresh} />)}
+                    {j.localRecoveredAudioIds?.map(id => <button key={id} className="button secondary small" disabled={!connectionReady} onClick={() => void startPlay("audios", id, "本地恢复的声音", undefined, true)}>试听已恢复声音</button>)}
+                    {j.kind === "generate" && !j.localRecoveryAttemptIds?.length && j.chapterId === chapterId && !active(j.status) && ["failed", "stopped", "unknown"].includes(j.status) && <button className="text-button" disabled={locked || busy} onClick={() => void run(async () => {
                       const current = await api<ChapterDetail>("/chapters/" + j.chapterId);
                       const remaining = current.segments.filter(s => j.ids?.includes(s.id) && !s.excluded && s.latest !== "unknown" && (s.validity !== "matched" || s.review === "rework"));
                       setChapter(current);
@@ -1787,7 +1836,7 @@ export default function App() {
                           : ""
                     }
                   >
-                    {names[j.status] || j.status}
+                    {j.localRecoveryAttemptIds?.length ? "待本地恢复" : names[j.status] || j.status}
                   </Status>
                 </div>
               ))
@@ -1869,8 +1918,8 @@ function WorkspaceLocation({ directory, projectCount, projectName, projectFolder
       }}>{choosing ? '请在窗口中选择…' : selected ? '重新选择文件夹' : '更改位置'}</button>
     </div>
     {inventory && <section className="inspector-section" aria-label="本工作区资料与空间"><h4>本工作区资料与空间</h4><p className="hint">按现有记录核对文件，不删除参考原件、历史声音或成品。</p>
-      <dl>{([['voices','参考录音原件'],['audios','生成声音原件'],['masters','整章试听母版'],['exports','导出成品']] as const).map(([kind,label])=><div key={kind}><dt>{label}</dt><dd>{inventory.counts[kind]||0} 份 · {(inventory.bytes[kind]||0)>=1048576?((inventory.bytes[kind]||0)/1048576).toFixed(1)+' MB':Math.ceil((inventory.bytes[kind]||0)/1024)+' KB'}</dd></div>)}</dl>
-      {inventory.missing.length ? <><p className={inventory.primaryAvailable?'hint':'warning'}>{inventory.primaryAvailable?'仅有可免费重建的整章试听母版缺失，原始声音仍在。':'有原件或成品缺失，暂不能迁移；请先找回文件或恢复完整备份，再重新核对。'}</p><ul>{inventory.missing.map(item=><li key={item.kind+'/'+item.id}><span className="workspace-path-inline">{item.path}</span> · {item.kind==='masters'&&item.repairable?'可免费重建整章试听母版':'原件缺失，需要找回文件或恢复备份'}</li>)}</ul></> : <p className="hint">已记录的参考原件、声音、母版和成品均可读取。</p>}
+      <dl>{([['voices','参考录音原件'],['audios','生成声音原件'],['masters','整章试听母版'],['exports','导出成品'],['deliveries','已接收音频']] as const).map(([kind,label])=><div key={kind}><dt>{label}</dt><dd>{inventory.counts[kind]||0} 份 · {(inventory.bytes[kind]||0)>=1048576?((inventory.bytes[kind]||0)/1048576).toFixed(1)+' MB':Math.ceil((inventory.bytes[kind]||0)/1024)+' KB'}</dd></div>)}</dl>
+      {inventory.missing.length ? <><p className={inventory.primaryAvailable?'hint':'warning'}>{inventory.primaryAvailable?'仅有可免费重建的整章试听母版缺失，原始声音仍在。':'有原件或成品缺失，暂不能迁移；请先找回文件或恢复完整备份，再重新核对。'}</p><ul>{inventory.missing.map(item=><li key={item.kind+'/'+item.id+'/'+item.path}><span className="workspace-path-inline">{item.path}</span> · {item.kind==='masters'&&item.repairable?'可免费重建整章试听母版':'原件缺失，需要找回文件或恢复备份'}</li>)}</ul></> : <p className="hint">已记录的参考原件、声音、母版和成品均可读取。</p>}
     </section>}
     {copyError && <p className="error-inline" role="alert">{copyError}</p>}
     {selected && <Form key={selected} label="迁移全部项目" busy={choosing || checking || migrating || selected === directory || source!==directory || !inventory?.primaryAvailable} successMessage="迁移完成，已使用新位置。原目录保留，后续修改仅保存到新位置。" onSubmit={async () => {

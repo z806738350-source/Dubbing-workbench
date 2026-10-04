@@ -20,9 +20,9 @@ async function setup(api=async()=>[],operation=async()=>({outcome:'processing'})
     useObjectDraft:(kind,id,draft,revision=0,options={})=>{const key=kind+'/'+id;if(!drafts.has(key)){const controller={draft,base:revision,options,dirty:false,status:'saved',frozen:false,composing:false,saving:false,flush:async()=>{},edit(value){controller.draft={...controller.draft,...value};},compositionStart(){},compositionEnd(){},save:async persist=>{const saved=await persist(controller.draft,controller.base,{chapterRevision:controller.draft.chapterRevision,operationId:'fixture-default',replay:false});controller.base=saved.revision;controller.draft=saved.value;return {...saved,dirty:false};}};drafts.set(key,controller);}return drafts.get(key);},
     saveAction:(...args)=>runtime.persistSave(...args),persistSave:async()=>{},withSavedDrafts:async(_scope,_dependencies,fn)=>fn(),draftScopeRevision:(_scope,revision)=>revision,
     submitOperation:async(...args)=>{sent.push(args);return operation(...args);},
-    ChevronRight:'ChevronRight',CircleHelp:'CircleHelp',Dialog:'Dialog',Field:'Field',Select:'Select',Status:'Status',ObjectDraftTools:'ObjectDraftTools',TaskAuthorization:'TaskAuthorization',SceneSuggestions:'SceneSuggestions'};
+    ChevronRight:'ChevronRight',CircleHelp:'CircleHelp',Dialog:'Dialog',Field:'Field',Select:'Select',Status:'Status',ObjectDraftTools:'ObjectDraftTools',TaskAuthorization:'TaskAuthorization',SceneSuggestions:'SceneSuggestions',AudioProvenance:'AudioProvenance'};
   globalThis.unitPanelTest=runtime;
-  const header='const {React,useEffect,useRef,useState,api,action,hasDraft,objectDraftId,useObjectDraft,saveAction,withSavedDrafts,draftScopeRevision,submitOperation,ChevronRight,CircleHelp,Dialog,Field,Select,Status,ObjectDraftTools,TaskAuthorization,SceneSuggestions}=globalThis.unitPanelTest;\n';
+  const header='const {React,useEffect,useRef,useState,api,action,hasDraft,objectDraftId,useObjectDraft,saveAction,withSavedDrafts,draftScopeRevision,submitOperation,ChevronRight,CircleHelp,Dialog,Field,Select,Status,ObjectDraftTools,TaskAuthorization,SceneSuggestions,AudioProvenance}=globalThis.unitPanelTest;\n';
   const {UnitDetails,CreateGroup}=await import('data:text/javascript;base64,'+Buffer.from(header+compiled+'\n// test '+sequence++).toString('base64'));
   const status=()=>({validity:'matched',review:'passed',prompt:'',promptIssues:[],basis:{}});
   const variant=(current,latest)=>({current,previous:'previous',approved:null,latest,revision:1,guidance:'保留要求',backgroundPresence:'unspecified',status:status(),history:[]});
@@ -398,4 +398,39 @@ test('缺省清楚在明确分析操作前保存，用返回版本而非旧版�
   assert.deepEqual(await analysis.props.savedBase(),{revision:3,entityRevision:2});assert.equal(saved.length,1);assert.equal(saved[0][0],'unit.update');assert.equal(saved[0][1].backgroundPresence,'clear');
   assert.deepEqual(await analysis.props.savedBase(),{revision:3,entityRevision:2});assert.equal(saved.length,1,'同一已确认设置不再次写');
   assert.equal(f.sent.length,0);assert.equal(f.actions.length,0);assert.equal(f.props.unit.variants.scene.current,null);
+});
+
+
+test('原件折叠到处理版下；试听不改变选版，匹配原件沿现有单元选用校验', async () => {
+  const f = await setup(); f.props.unit.variants.scene.latest = 'success';
+  const original = {id:'raw',matched:true,available:true,selected:false,provenance:'provider-original'}, processed = {id:'processed',matched:true,available:true,selected:false,originalAudioId:'raw',originalAvailability:'retained'};
+  f.props.unit.variants.scene.history = [original, processed];
+  let tree = f.render(), card = nodes(tree).find(node => node.type === 'AudioProvenance');
+  assert.equal(card.props.record.id, 'processed'); assert.equal(card.props.original.id, 'raw'); assert.match(text(tree), /历史声音 · 1 版/);
+  card.props.preview('raw'); assert.deepEqual(f.played, [['raw','清理前声音',true]]); assert.equal(f.actions.length, 0); assert.equal(f.sent.length, 0);
+  card.props.useOriginal(original); await tick();
+  assert.deepEqual(f.actions[0], ['unit.select-result', {chapterId:'chapter',revision:1,id:'group',entityRevision:1,mode:'scene',audioId:'raw'}]);
+  assert.equal(f.sent.length, 0);
+  original.selected = true; tree = f.render(); assert.match(text(tree), /历史声音 · 2 版/);
+});
+
+test('原件设置过期先走现有恢复预览；编辑未完成禁用原件选用', async () => {
+  const f = await setup(async () => ({differences:['声音设置已变化']})); f.props.unit.variants.scene.latest = 'success';
+  const original = {id:'raw',matched:false,available:true,selected:false};
+  f.props.unit.variants.scene.history = [original, {id:'processed',matched:true,available:true,selected:false,originalAudioId:'raw',originalAvailability:'retained'}];
+  nodes(f.render()).find(node => node.type === 'AudioProvenance').props.useOriginal(original); await tick();
+  assert.equal(f.reads[0][0], '/enhancement-preview'); assert.equal(f.reads[0][1].audioId, 'raw'); assert.equal(f.actions.length, 0); assert.equal(f.sent.length, 0);
+  const drafts = await setup(undefined, undefined, new Set(['one'])); drafts.props.unit.variants.scene.history = f.props.unit.variants.scene.history;
+  assert.equal(nodes(drafts.render()).find(node => node.type === 'AudioProvenance').props.locked, true);
+});
+
+
+test('已收到原件的未登记结果优先免费恢复，不提供再次计费确认', async () => {
+  const f = await setup(async () => [{id:'pending',unitId:'group',mode:'scene',status:'unknown',phase:'localRecoveryPending'}]);
+  f.props.unit.variants.scene.outstandingAttemptIds = ['pending'];
+  f.props.state.jobs = [{id:'job',unitId:'group',localRecoveryAttemptIds:['pending'],status:'unknown',createdAt:'2026-10-04T00:00:00Z'}];
+  const tree = f.render(); assert.match(text(tree), /原件已接收，待本地恢复/); assert.equal(button(tree.props.footer,'再次提交 1 次请求'), undefined);
+  assert.doesNotMatch(text(tree.props.footer), /明确再次提交/);
+  button(tree.props.footer,'查看并免费恢复').props.onClick(); await tick();
+  assert.deepEqual(f.tasks,[['job','pending']]); assert.equal(f.sent.length,0);
 });

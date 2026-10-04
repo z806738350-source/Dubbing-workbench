@@ -1,0 +1,20 @@
+[
+  {
+    "id": "AE-H01",
+    "status": "工程关闭",
+    "scope": "原件封存与处理恢复",
+    "rootCause": "处理输出曾覆盖完整响应，恢复再按当前算法处理且可能丢失来源记录。",
+    "resolution": "完整原件与处理版分别保存，完成清单、配方和派生结果可幂等本地恢复。",
+    "evidence": ["tests/audio-delivery.test.mjs", "tests/audio-crash-recovery.test.mjs", "tests/audio-delivery-lifecycle.test.mjs"],
+    "boundary": "真实SIGKILL和合成PCM验证，不代表真人尾音语义听评或断电测试；历史已被覆盖的原件不能补造。"
+  },
+  {
+    "id": "AE-H02",
+    "status": "工程关闭",
+    "scope": "旧output项目兼容",
+    "rootCause": "既有项目管理复用了新增目录保留名校验，导致旧版合法项目被拒绝。",
+    "resolution": "新建/改名保留现行规则；管理既有项目按真实目录、项目标记、路径与引用归属核对。",
+    "evidence": ["tests/legacy-output.test.mjs", "data/concurrency-assistant/automation/ae-h02-before.json", "data/concurrency-assistant/automation/ae-h02-after.json"],
+    "boundary": "真实旧writer建立的隔离项目复现；未删除或改名用户项目。"
+  }
+]

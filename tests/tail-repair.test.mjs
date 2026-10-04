@@ -68,6 +68,10 @@ test('清理当前干声保留正文、原history与approved，采用新ID并使
   const result = await repairProjectTails(store, domain, project.id);
   assert.equal(result.cleaned, 1); assert.equal(result.details.find(d => d.sourceAudioId === clean.id).changed, false);
   const changed = result.details.find(d => d.changed), audio = store.get('audios', changed.audioId), unit = store.get('units', changed.unitId);
+  assert.equal(audio.originalAudioId, source.id); assert.equal(audio.originalAvailability, 'not-saved');
+  assert.equal(audio.processing.sourceAudioId, source.id); assert.ok(audio.processing.version);
+  assert.ok(audio.processing.inputSha256); assert.ok(audio.processing.resultSha256);
+  assert.equal(audio.processing.frameCount, Math.round(audio.duration * 48000));
   assert.equal(audio.tailRepair.sourceAudioId, source.id); assert.equal(audio.review, undefined); assert.ok(Math.abs(audio.duration - audio.tailRepair.cutSeconds) < 1 / 48000);
   assert.equal(unit.variants.dry.current, audio.id); assert.equal(unit.variants.dry.previous, source.id);
   assert.equal(unit.variants.dry.approved, source.id); assert.equal(unit.variants.dry.review.state, 'pending');
@@ -164,4 +168,48 @@ test('离线命令实际清理并释放runtime，重复运行不再新建处理�
   const count = store.all('audios').length;
   assert.equal(run().cleaned, 0); assert.equal(store.all('audios').length, count);
   assert.equal(existsSync(join(directory, 'runtime.json')), false);
+});
+
+test('有界预览免费且仅指定当前单元；场景不剪、越界选择拒绝', async t => {
+  const { previewTailRepair, applyTailRepair } = await import('../server/tail-maintenance.mjs');
+  const f=setup(t),source=f.singleAudio(),ids=f.domain.list(f.chapter.id).map(s=>s.id);f.unitAudio(ids[1],'scene');
+  const before=['audios','units','segments','chapters'].map(table=>f.store.all(table));
+  const input={projectId:f.project.id,chapterId:f.chapter.id,unitIds:ids.slice(0,2)};
+  const preview=await previewTailRepair(f.store,f.domain,input);
+  assert.equal(preview.eligible,1);assert.equal(preview.scope.units[0].sourceAudioId,source.id);assert.equal(preview.scope.units[0].unitRevision,f.store.get('units',ids[0]).revision);
+  assert.equal(preview.details[1].reason,'scene_audio');assert.ok(preview.removedSeconds>0);assert.ok(preview.scope.algorithmVersion);
+  assert.deepEqual(['audios','units','segments','chapters'].map(table=>f.store.all(table)),before);
+  await assert.rejects(previewTailRepair(f.store,f.domain,{...input,unitIds:[ids[0],ids[0]]}),/不重复/);
+  await assert.rejects(previewTailRepair(f.store,f.domain,{...input,unitIds:['unrelated']}),/当前章节/);
+  const result=await applyTailRepair(f.store,f.domain,{...input,scope:preview.scope});assert.equal(result.cleaned,1);assert.equal(result.details[1].status,'skipped');
+  const count=f.store.all('audios').length,repeat=await applyTailRepair(f.store,f.domain,{...input,scope:preview.scope});
+  assert.equal(repeat.cleaned,0);assert.equal(repeat.details[0].alreadyCompleted,true);assert.equal(f.store.all('audios').length,count);
+  const fresh=await previewTailRepair(f.store,f.domain,input);assert.equal(fresh.details[0].reason,'already_processed');assert.equal(fresh.eligible,0);
+});
+
+test('有界维护部分失败保留逐项结果，重试只做失败项且原件逐字节不变', async t => {
+  const { previewTailRepair, applyTailRepair } = await import('../server/tail-maintenance.mjs');
+  const f=setup(t),sources=[f.singleAudio(0),f.singleAudio(1),f.singleAudio(2)],ids=sources.map(a=>a.targetId),originals=sources.map(a=>readFileSync(join(f.directory,a.path)));
+  const input={projectId:f.project.id,chapterId:f.chapter.id,unitIds:ids},preview=await previewTailRepair(f.store,f.domain,input);
+  f.store.db.exec(`CREATE TRIGGER reject_second_tail BEFORE UPDATE ON units WHEN NEW.id='${ids[1]}' BEGIN SELECT RAISE(ABORT,'second failed'); END`);
+  const result=await applyTailRepair(f.store,f.domain,{...input,scope:preview.scope});assert.equal(result.state,'partial');assert.deepEqual(result.details.map(d=>d.status),['completed','failed','completed']);
+  const successes=result.details.filter(d=>d.audioId).map(d=>d.audioId),count=f.store.all('audios').length;
+  f.store.db.exec('DROP TRIGGER reject_second_tail');
+  const repeat=await applyTailRepair(f.store,f.domain,{...input,scope:preview.scope});assert.equal(repeat.state,'completed');assert.equal(repeat.cleaned,1);assert.equal(f.store.all('audios').length,count+1);
+  assert.deepEqual(repeat.details.filter(d=>d.alreadyCompleted).map(d=>d.audioId),successes);
+  sources.forEach((a,i)=>assert.deepEqual(readFileSync(join(f.directory,a.path)),originals[i]));
+});
+
+test('维护预览后换声音、改变内容或编排必须重新预览，不能借重试覆盖新结果', async t => {
+  const { previewTailRepair, applyTailRepair } = await import('../server/tail-maintenance.mjs');
+  for(const change of ['selection','file','arrangement'])await t.test(change,async t=>{
+    const f=setup(t),source=f.singleAudio(),input={projectId:f.project.id,chapterId:f.chapter.id,unitIds:[source.targetId]},preview=await previewTailRepair(f.store,f.domain,input);
+    if(change==='selection')f.singleAudio(0,false);
+    if(change==='arrangement'){const c=f.store.get('chapters',f.chapter.id);c.arrangement++;f.store.put('chapters',c,c.projectId);}
+    if(change==='file'){const path=join(f.directory,source.path),bytes=readFileSync(path);bytes[100]^=1;writeFileSync(path,bytes);}
+    const count=f.store.all('audios').length;
+    if(change==='file'){const result=await applyTailRepair(f.store,f.domain,{...input,scope:preview.scope});assert.equal(result.state,'partial');assert.match(result.details[0].error,/原音频内容已变化/);}
+    else await assert.rejects(applyTailRepair(f.store,f.domain,{...input,scope:preview.scope}),/已变化/);
+    assert.equal(f.store.all('audios').length,count);
+  });
 });

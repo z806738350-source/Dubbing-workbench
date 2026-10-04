@@ -1,0 +1,991 @@
+{
+  "version": 1,
+  "date": "2026-10-04",
+  "scope": "capability_map_m0 owned shared actions/actor/context/capabilities/service verification; merge with root and UI evidence",
+  "sourceBaseline": "ae96c84cb2c7c6ae209e428010faa289a0b9e181",
+  "results": {
+    "dedicatedTests": 55,
+    "regressionTotal": 243,
+    "passed": 243,
+    "failed": 0,
+    "log": "data/concurrency-assistant/automation/assistant-domain-final.log",
+    "command": "node --test tests/assistant-capabilities.test.mjs tests/assistant-service.test.mjs tests/analysis.test.mjs tests/domain.test.mjs tests/experience.test.mjs tests/experience-provenance.test.mjs tests/scene-analysis.test.mjs",
+    "realProviderCalls": 0,
+    "environment": "isolated temporary stores, mocked model/provider responses, actual SQLite and local WAV/FFmpeg worker outputs"
+  },
+  "tasks": [
+    {
+      "id": "T04",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "capability map tracks all accepted actions and every tool has indexed help"
+        }
+      ],
+      "scope": "实际业务能力清单和帮助索引"
+    },
+    {
+      "id": "T13",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "capability whitelist rejects unknown tools, raw forwarding and server-owned fields"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "cross-project and cross-chapter object IDs cannot write or read another target"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "shared action guard preserves rename/delete occupancy and audio validation before mutation"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "assistant mutations record AI provenance, protect human fields and preserve exact text"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "domain mutation and durable assistant receipt commit together; lost step receipt is replayable"
+        }
+      ],
+      "scope": "共享业务执行适配及可信来源"
+    },
+    {
+      "id": "T14",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "ordinary question reads real context and ends without writes; message replay never resends"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "unregistered model action repairs at most once, then executes nothing"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "each assistant call has a durable receipt, including format repair; archive removes response material"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "changing assistant or production route requires the corresponding explicit amendment"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "assistant call journal records only the actual attachment fingerprints and not pixel data"
+        }
+      ],
+      "scope": "本子任务验证独立路由与最小传输调用、账本；真实服务验证另记"
+    },
+    {
+      "id": "T15",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "context/help use real scoped facts without local paths, other project text or credentials"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "truncated automatic context is explicitly partial and full segment reads preserve all text"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "draft status is only view metadata; questions use saved facts and never transmit local draft text"
+        }
+      ],
+      "scope": "真实有界上下文与可追溯帮助"
+    },
+    {
+      "id": "T16",
+      "status": "已实现未验证",
+      "evidence": [],
+      "scope": "归属附件/UI负责人，本文件不代签"
+    },
+    {
+      "id": "T17",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "paid assistant unknown survives restart without sending again, and closing waits for in-flight receipt"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "consumed proposal response is not re-applied after service recovery"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "message/run publication is atomic; a failed run write cannot swallow an idempotent message"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "recovery resolves a committed local operation with missing step receipt instead of applying it twice"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "malformed persisted assistant rows are isolated from listing, busy checks and other session context"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "keeping an unknown assistant result does not authorize retrying the original message"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "assistant call journal records only the actual attachment fingerprints and not pixel data"
+        }
+      ],
+      "scope": "持久消息、调用账本、任务恢复及坏会话隔离"
+    },
+    {
+      "id": "T18",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "specific proposal requires exact approval, refuses changed targets and persistent rejection"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "duplicate approval returns the same decision and applies a local proposal exactly once"
+        }
+      ],
+      "scope": "具体提案审批、拒绝、重复回执"
+    },
+    {
+      "id": "T19",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "budget amendments keep past usage and require explicit route approval; unknown request needs exact decision"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "an audio unknown requires its exact attempt decision; resumed generation does not reset either budget"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "changing assistant or production route requires the corresponding explicit amendment"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "same task step-limit expansion keeps usage and consumes the saved model reply without resending"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "dry mandate asks once for a concrete group expansion and continues later group work automatically"
+        }
+      ],
+      "scope": "有界授权、三预算与精确unknown决定"
+    },
+    {
+      "id": "T20",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "generation and master run through real worker receipts; waiting ticks spend no assistant calls"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "explicit workflow scope generates a group inside one mandate without repeated approvals"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "authorized existing scene generates directly and preserves manual guidance and sound events"
+        }
+      ],
+      "scope": "模拟助手/音频供应商，真实空项目到试听母版完整执行"
+    },
+    {
+      "id": "T21",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "assistant mutations record AI provenance, protect human fields and preserve exact text"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "analysis application respects human protection and records an atomic AI receipt"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "central voice choices are scoped business operations and do not fake a listened result"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "an approved voice set permits automatic role selection with AI provenance and no further approval"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "group and scene delegation never overwrites manual guidance, adopted events or grouping"
+        }
+      ],
+      "scope": "集中选声、批准集合选择及人工保护"
+    },
+    {
+      "id": "T22",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "automatic export always confirm=false and human-only model settings/grants stay unexecutable"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "review passed requires an explicit human audio decision and never uses model assertion"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "tail maintenance only sends approved scope through shared adapter and cannot acquire its own consent"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "partial maintenance retry keeps original scope and leaves version ownership to maintenance adapter"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "authorized existing scene generates directly and preserves manual guidance and sound events"
+        }
+      ],
+      "scope": "注册场景/历史/返工/原件/尾部维护/导出；不是79个能力逐个真实模型验收"
+    },
+    {
+      "id": "T23",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "pause while model is in flight keeps reply but dispatches no business action"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "unrelated manual title change does not expire a line performance proposal"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "manual line changes while jobs complete are never rebased as assistant changes"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "a delegated run cannot stop a manual job or revoke a different grant"
+        }
+      ],
+      "scope": "相关变化过期、无关变化保留、暂停和其他任务保护"
+    },
+    {
+      "id": "T28",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "capability map tracks all accepted actions and every tool has indexed help"
+        }
+      ],
+      "scope": "实际普通action与schema/help同步检查"
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "VA01",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "empty project can initialize without guessed chapter or inherited model configuration"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "creation from an empty session binds only actual created objects and continues the mandate"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+        }
+      ],
+      "note": "空会话绑定来自实际创建回执；完整空项目到母版使用模拟模型回复、真实SQLite/WAV/工作线程/FFmpeg。"
+    },
+    {
+      "id": "VA02",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "context/help use real scoped facts without local paths, other project text or credentials"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "truncated automatic context is explicitly partial and full segment reads preserve all text"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "ordinary question reads real context and ends without writes; message replay never resends"
+        }
+      ],
+      "note": "实际正文与范围进入上下文；尚未评价真实模型回答准确率。"
+    },
+    {
+      "id": "VA03",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "capability map tracks all accepted actions and every tool has indexed help"
+        }
+      ],
+      "note": "38个既有普通action、79个注册能力；采用当前dispatch分支形式的覆盖检查及帮助引用检查。"
+    },
+    {
+      "id": "VA04",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "capability whitelist rejects unknown tools, raw forwarding and server-owned fields"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "unregistered model action repairs at most once, then executes nothing"
+        }
+      ],
+      "note": "未知能力和额外参数拒绝；有限格式修复不执行越权操作。"
+    },
+    {
+      "id": "VA05",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "cross-project and cross-chapter object IDs cannot write or read another target"
+        }
+      ],
+      "note": "按真实ID校验项目/章节归属；同名自然语言消歧质量尚待真实模型。"
+    },
+    {
+      "id": "VA06",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "ordinary question reads real context and ends without writes; message replay never resends"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "registered UI actions require a click, do not autoplay, and reject arbitrary URLs or targets"
+        }
+      ],
+      "note": "普通问答零业务写入；UI定位/试听只返回用户点击按钮。"
+    },
+    {
+      "id": "VA07",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "generation and master run through real worker receipts; waiting ticks spend no assistant calls"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "explicit workflow scope generates a group inside one mandate without repeated approvals"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "authorized existing scene generates directly and preserves manual guidance and sound events"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "dry mandate asks once for a concrete group expansion and continues later group work automatically"
+        }
+      ],
+      "note": "一次委托贯通导入、选声、确认和真实母版；批准的对戏/场景范围内自动执行。已配置人工场景直接生成，零额外分析。"
+    },
+    {
+      "id": "VA08",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "complete:true without a real master cannot complete a whole chapter task"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "central voice choices are scoped business operations and do not fake a listened result"
+        }
+      ],
+      "note": "缺声按实际角色一次列出，可通过有界角色选择继续。"
+    },
+    {
+      "id": "VA09",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "an approved voice set permits automatic role selection with AI provenance and no further approval"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "composite useVoice propagates trusted actor without marking inherited choices as human"
+        }
+      ],
+      "note": "批准集合内自动选声，policy_ai来源，无二次逐字段审批。"
+    },
+    {
+      "id": "VA10",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "assistant mutations record AI provenance, protect human fields and preserve exact text"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "analysis application respects human protection and records an atomic AI receipt"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "manual line changes while jobs complete are never rebased as assistant changes"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "group and scene delegation never overwrites manual guidance, adopted events or grouping"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "authorized existing scene generates directly and preserves manual guidance and sound events"
+        }
+      ],
+      "note": "人工表演、组指导、已采用事件和组结构均保护；历史恢复只有具体差异批准后可覆盖；后台期间人工改动不被重设版本。"
+    },
+    {
+      "id": "VA11",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "assistant mutations record AI provenance, protect human fields and preserve exact text"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "analysis application respects human protection and records an atomic AI receipt"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "approved bounded task progresses through multiple local steps with AI source, preserves text and never marks listened"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+        }
+      ],
+      "note": "默认保原文；明确编辑按实际差异和完整读取限制。"
+    },
+    {
+      "id": "VA12",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "truncated automatic context is explicitly partial and full segment reads preserve all text"
+        }
+      ],
+      "note": "超过自动上下文范围明确partial；完整单句读取可补齐。"
+    },
+    {
+      "id": "VA13",
+      "status": "已实现未验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "draft status is only view metadata; questions use saved facts and never transmit local draft text"
+        }
+      ],
+      "note": "已验证服务端只接受draftStatus枚举提示，facts仅持久记录，草稿正文不外发且问答零业务写入；浏览器保存屏障另由UI负责人证据覆盖，本文件不代签。"
+    },
+    {
+      "id": "VA14",
+      "status": "已实现未验证",
+      "evidence": [],
+      "note": "浏览器另一页草稿保护不在本子任务实际验证范围。"
+    },
+    {
+      "id": "VA15",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "specific proposal requires exact approval, refuses changed targets and persistent rejection"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "writes require trusted execution context and unchanged plain revision dependencies"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "tail maintenance only sends approved scope through shared adapter and cannot acquire its own consent"
+        }
+      ],
+      "note": "不重新生成审批payload；维护与删除保留原预览范围。"
+    },
+    {
+      "id": "VA16",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "specific proposal requires exact approval, refuses changed targets and persistent rejection"
+        }
+      ],
+      "note": "拒绝持久，旧决定不能执行。"
+    },
+    {
+      "id": "VA17",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "duplicate approval returns the same decision and applies a local proposal exactly once"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "message/run publication is atomic; a failed run write cannot swallow an idempotent message"
+        }
+      ],
+      "note": "双击同一决定只一次效果；消息/run写入失败同事务回滚。"
+    },
+    {
+      "id": "VA18",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "domain mutation and durable assistant receipt commit together; lost step receipt is replayable"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "consumed proposal response is not re-applied after service recovery"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "recovery resolves a committed local operation with missing step receipt instead of applying it twice"
+        }
+      ],
+      "note": "原操作回执补丢失步骤；消费过的回复不重复解析执行。"
+    },
+    {
+      "id": "VA19",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "specific proposal requires exact approval, refuses changed targets and persistent rejection"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "manual line changes while jobs complete are never rebased as assistant changes"
+        }
+      ],
+      "note": "同一对象人工更改后旧提案stale，已完成步骤保留。"
+    },
+    {
+      "id": "VA20",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "unrelated manual title change does not expire a line performance proposal"
+        }
+      ],
+      "note": "无关章节标题变动不阻断单句表演步骤。"
+    },
+    {
+      "id": "VA21",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "shared action guard preserves rename/delete occupancy and audio validation before mutation"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "manual line changes while jobs complete are never rebased as assistant changes"
+        }
+      ],
+      "note": "复用现有领域锁、共享音频校验和真实worker。"
+    },
+    {
+      "id": "VA22",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "generation and master run through real worker receipts; waiting ticks spend no assistant calls"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "budget amendments keep past usage and require explicit route approval; unknown request needs exact decision"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "an audio unknown requires its exact attempt decision; resumed generation does not reset either budget"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "each assistant call has a durable receipt, including format repair; archive removes response material"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "same task step-limit expansion keeps usage and consumes the saved model reply without resending"
+        }
+      ],
+      "note": "三类额度独立，步骤默认40、同任务可扩至200，续跑保留已用并复用收到的回复。本轮零真实外发。"
+    },
+    {
+      "id": "VA23",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "paid operations cannot start without a server-provided grant; no model-supplied grant allowed"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "budget amendments keep past usage and require explicit route approval; unknown request needs exact decision"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "changing assistant or production route requires the corresponding explicit amendment"
+        }
+      ],
+      "note": "模型不能携grant，预算调整/助手路由/制作路由分别明确决定。"
+    },
+    {
+      "id": "VA24",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "unregistered model action repairs at most once, then executes nothing"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "each assistant call has a durable receipt, including format repair; archive removes response material"
+        }
+      ],
+      "note": "格式仅有限修复，各次回执单独保存；像素保留另由附件测试覆盖。"
+    },
+    {
+      "id": "VA25",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "paid assistant unknown survives restart without sending again, and closing waits for in-flight receipt"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "budget amendments keep past usage and require explicit route approval; unknown request needs exact decision"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "keeping an unknown assistant result does not authorize retrying the original message"
+        }
+      ],
+      "note": "unknown不自动重发；确切请求+足够额度的重试决定才继续。选择保留结果须新的用户指示，不被恢复按钮隐式重发。"
+    },
+    {
+      "id": "VA26",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "generation and master run through real worker receipts; waiting ticks spend no assistant calls"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+        }
+      ],
+      "note": "等待时免费读取任务，只有下一次规划才消耗助手调用。"
+    },
+    {
+      "id": "VA27",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "review passed requires an explicit human audio decision and never uses model assertion"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "assistant mutations record AI provenance, protect human fields and preserve exact text"
+        }
+      ],
+      "note": "普通批准不能伪造passed；原听评界面处理。"
+    },
+    {
+      "id": "VA28",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "automatic export always confirm=false and human-only model settings/grants stay unexecutable"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "complete:true without a real master cannot complete a whole chapter task"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "generation and master run through real worker receipts; waiting ticks spend no assistant calls"
+        }
+      ],
+      "note": "导出confirm=false；整章无真实母版不能标完成。"
+    },
+    {
+      "id": "VA29",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "pause while model is in flight keeps reply but dispatches no business action"
+        }
+      ],
+      "note": "暂停期间已收回回复不触发后续业务；已有付费结果仍保留。"
+    },
+    {
+      "id": "VA30",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "a delegated run cannot stop a manual job or revoke a different grant"
+        }
+      ],
+      "note": "委托不能经job.stop/revoke停止手动任务；control只关联本任务job。"
+    },
+    {
+      "id": "VA31",
+      "status": "已实现未验证",
+      "evidence": [],
+      "note": "关闭面板及结果通知属于UI负责人浏览器验证范围。"
+    },
+    {
+      "id": "VA32",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "cross-project and cross-chapter object IDs cannot write or read another target"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "creation from an empty session binds only actual created objects and continues the mandate"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "one empty-session mandate imports exact text, selects approved voice and delivers a real master"
+        }
+      ],
+      "note": "服务端绑定持久、不会随view改变；浏览器切页迟到响应另见UI证据。"
+    },
+    {
+      "id": "VA33",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "approved deletion of the bound project leaves only a generic archived result, not private data"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "a separate active run still blocks a project deletion and changed deletion scope cannot be auto-refreshed"
+        }
+      ],
+      "note": "自身批准删除只留通用归档墓碑，其他活动任务及新范围仍阻断。"
+    },
+    {
+      "id": "VA34",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "each assistant call has a durable receipt, including format repair; archive removes response material"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "message/run publication is atomic; a failed run write cannot swallow an idempotent message"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "assistant call journal records only the actual attachment fingerprints and not pixel data"
+        }
+      ],
+      "note": "每次实际发送内容/提示/截图指纹及响应时点可追溯；回执先落盘，归档删除回复材料。截图日志反例采用模拟已验证模型/像素，不宣称真实识图验收。"
+    },
+    {
+      "id": "VA35",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "one corrupt waiting session cannot prevent other ready sessions from advancing"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "malformed persisted assistant rows are isolated from listing, busy checks and other session context"
+        }
+      ],
+      "note": "实际注入坏形状JSON、缺绑定和缺会话；其他会话列表、busy、上下文继续可用。"
+    },
+    {
+      "id": "VA36",
+      "status": "已实现未验证",
+      "evidence": [],
+      "note": "附件/前端/模型传输模块由其他负责人验证；本文件不代签该范围。"
+    },
+    {
+      "id": "VA37",
+      "status": "已实现未验证",
+      "evidence": [],
+      "note": "附件/前端/模型传输模块由其他负责人验证；本文件不代签该范围。"
+    },
+    {
+      "id": "VA38",
+      "status": "已实现未验证",
+      "evidence": [],
+      "note": "附件/前端/模型传输模块由其他负责人验证；本文件不代签该范围。"
+    },
+    {
+      "id": "VA39",
+      "status": "已实现未验证",
+      "evidence": [],
+      "note": "附件/前端/模型传输模块由其他负责人验证；本文件不代签该范围。"
+    },
+    {
+      "id": "VA40",
+      "status": "已实现未验证",
+      "evidence": [],
+      "note": "附件/前端/模型传输模块由其他负责人验证；本文件不代签该范围。"
+    },
+    {
+      "id": "VA41",
+      "status": "已实现未验证",
+      "evidence": [],
+      "note": "未向真实多模态模型外发；真实识图、旧图差异与圈注理解尚未验证。"
+    },
+    {
+      "id": "VA42",
+      "status": "已实现未验证",
+      "evidence": [],
+      "note": "未向真实多模态模型外发；真实识图、旧图差异与圈注理解尚未验证。"
+    },
+    {
+      "id": "VA43",
+      "status": "已实现未验证",
+      "evidence": [],
+      "note": "未向真实多模态模型外发；真实识图、旧图差异与圈注理解尚未验证。"
+    },
+    {
+      "id": "VA44",
+      "status": "已实现并验证",
+      "evidence": [
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "capability whitelist rejects unknown tools, raw forwarding and server-owned fields"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "cross-project and cross-chapter object IDs cannot write or read another target"
+        },
+        {
+          "file": "tests/assistant-capabilities.test.mjs",
+          "name": "paid operations cannot start without a server-provided grant; no model-supplied grant allowed"
+        },
+        {
+          "file": "tests/assistant-service.test.mjs",
+          "name": "unregistered model action repairs at most once, then executes nothing"
+        }
+      ],
+      "note": "白名单、所属范围和授权字段边界有反向测试；真实图像注入理解表现尚未外发验证。"
+    }
+  ],
+  "boundaries": [
+    "没有修改真实用户工作区或音频",
+    "没有真实模型费用、真实视觉验证或人工听评",
+    "未把场景质量、新手体验、浏览器全流程或发布验收记为通过",
+    "当前普通action源分支覆盖采用既有dispatch形式，不是任意未来语法解析器"
+  ],
+  "testCatalog": {
+    "tests/assistant-capabilities.test.mjs": [
+      "capability whitelist rejects unknown tools, raw forwarding and server-owned fields",
+      "cross-project and cross-chapter object IDs cannot write or read another target",
+      "writes require trusted execution context and unchanged plain revision dependencies",
+      "scoped local mutation reuses the real domain and carries trusted actor separately",
+      "paid operations cannot start without a server-provided grant; no model-supplied grant allowed",
+      "automatic export always confirm=false and human-only model settings/grants stay unexecutable",
+      "review passed requires an explicit human audio decision and never uses model assertion",
+      "empty project can initialize without guessed chapter or inherited model configuration",
+      "context/help use real scoped facts without local paths, other project text or credentials",
+      "operation reads resolve scope from durable request, not public receipt with request removed",
+      "shared action guard preserves rename/delete occupancy and audio validation before mutation",
+      "assistant mutations record AI provenance, protect human fields and preserve exact text",
+      "domain mutation and durable assistant receipt commit together; lost step receipt is replayable",
+      "composite useVoice propagates trusted actor without marking inherited choices as human",
+      "analysis application respects human protection and records an atomic AI receipt",
+      "registered UI actions require a click, do not autoplay, and reject arbitrary URLs or targets",
+      "capability map tracks all accepted actions and every tool has indexed help",
+      "tail maintenance only sends approved scope through shared adapter and cannot acquire its own consent",
+      "a delegated run cannot stop a manual job or revoke a different grant",
+      "partial maintenance retry keeps original scope and leaves version ownership to maintenance adapter",
+      "truncated automatic context is explicitly partial and full segment reads preserve all text",
+      "group and scene delegation never overwrites manual guidance, adopted events or grouping"
+    ],
+    "tests/assistant-service.test.mjs": [
+      "ordinary question reads real context and ends without writes; message replay never resends",
+      "specific proposal requires exact approval, refuses changed targets and persistent rejection",
+      "approved bounded task progresses through multiple local steps with AI source, preserves text and never marks listened",
+      "unregistered model action repairs at most once, then executes nothing",
+      "paid assistant unknown survives restart without sending again, and closing waits for in-flight receipt",
+      "pause while model is in flight keeps reply but dispatches no business action",
+      "unrelated manual title change does not expire a line performance proposal",
+      "complete:true without a real master cannot complete a whole chapter task",
+      "generation and master run through real worker receipts; waiting ticks spend no assistant calls",
+      "manual line changes while jobs complete are never rebased as assistant changes",
+      "budget amendments keep past usage and require explicit route approval; unknown request needs exact decision",
+      "consumed proposal response is not re-applied after service recovery",
+      "an audio unknown requires its exact attempt decision; resumed generation does not reset either budget",
+      "central voice choices are scoped business operations and do not fake a listened result",
+      "creation from an empty session binds only actual created objects and continues the mandate",
+      "one corrupt waiting session cannot prevent other ready sessions from advancing",
+      "each assistant call has a durable receipt, including format repair; archive removes response material",
+      "changing assistant or production route requires the corresponding explicit amendment",
+      "message/run publication is atomic; a failed run write cannot swallow an idempotent message",
+      "recovery resolves a committed local operation with missing step receipt instead of applying it twice",
+      "malformed persisted assistant rows are isolated from listing, busy checks and other session context",
+      "an approved voice set permits automatic role selection with AI provenance and no further approval",
+      "duplicate approval returns the same decision and applies a local proposal exactly once",
+      "one empty-session mandate imports exact text, selects approved voice and delivers a real master",
+      "approved deletion of the bound project leaves only a generic archived result, not private data",
+      "a separate active run still blocks a project deletion and changed deletion scope cannot be auto-refreshed",
+      "keeping an unknown assistant result does not authorize retrying the original message",
+      "explicit workflow scope generates a group inside one mandate without repeated approvals",
+      "authorized existing scene generates directly and preserves manual guidance and sound events",
+      "dry mandate asks once for a concrete group expansion and continues later group work automatically",
+      "same task step-limit expansion keeps usage and consumes the saved model reply without resending",
+      "assistant call journal records only the actual attachment fingerprints and not pixel data",
+      "draft status is only view metadata; questions use saved facts and never transmit local draft text"
+    ]
+  }
+}

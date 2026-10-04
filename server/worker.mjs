@@ -1,8 +1,9 @@
-import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync, createWriteStream, statSync } from "node:fs";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { join, dirname } from "node:path";
+import { createLocalPool, createFairPicker, createReferenceCache, referenceVersion, hasNewerAttempt } from './scheduler.mjs';
 import { projectFile } from './workspace.mjs';
 import {
   active,
@@ -16,7 +17,7 @@ import {
   checkEntityRevision,
 } from "./domain.mjs";
 import { buildMaster, exportMaster, inspect, validateStoredAudio } from "./audio.mjs";
-import { analyzeTail, trimTail } from './tail-audio.mjs';
+import { sealAudioDelivery, prepareAudioDelivery, hasAudioDelivery, saveAudioAttempt } from './audio-delivery.mjs';
 import { fail, same, uid } from "./store.mjs";
 import { templateCatalog, templateOf } from "./templates.mjs";
 import { configurationDecided, attemptScope, relatedTarget, outstandingAttempts, reserveGrant, settleGrant } from './experience.mjs';
@@ -25,10 +26,24 @@ export function createWorker(store, domain, config) {
   if (config.callLimit !== undefined && (!Number.isSafeInteger(config.callLimit) || config.callLimit < 1)) fail("本地调用额度应为正整数");
   const quotaScope = config.usageScope || "audio-calls-v1";
   if (typeof quotaScope !== "string" || !quotaScope || quotaScope.length > 100) fail("调用额度范围无效");
-  let running = false,
-    closing = false;
+  for (const [name, max] of [['audioConcurrency',4],['routeConcurrencyCap',4],['localAudioConcurrency',2]])
+    if (config[name] !== undefined && (!Number.isSafeInteger(config[name]) || config[name] < 1 || config[name] > max)) fail(`${name} 应为1至${max}的整数`);
+  if (config.audioStartIntervalMs !== undefined && (!Number.isSafeInteger(config.audioStartIntervalMs) || config.audioStartIntervalMs < 0 || config.audioStartIntervalMs > 60000)) fail('发送间隔应为0至60000毫秒');
+  for (const name of ['timeout', 'audioResponseTimeoutMs', 'audioReceiveTimeoutMs'])
+    if (config[name] !== undefined && (!Number.isSafeInteger(config[name]) || config[name] < 1 || config[name] > 2147483647)) fail(`${name} 应为有效的正整数毫秒数`);
+  const local = createLocalPool(config.localAudioConcurrency || 1), picker = createFairPicker();
+  const executing = new Map(), renders = new Map(), idleWaiters = [];
+  const referenceCache = createReferenceCache(store.directory, local, inspectReference, config.referenceCacheBytes);
+  const audioKinds = new Set(['generate','voice-test','voice-create','unit-generate']);
+  const responseLimit = 100 * 1024 * 1024, pendingLimit = config.maxPendingAudio || 8, pendingBytesLimit = config.maxPendingAudioBytes || 800 * 1024 * 1024;
+  if (!Number.isSafeInteger(pendingLimit) || pendingLimit < 1 || !Number.isSafeInteger(pendingBytesLimit) || pendingBytesLimit < responseLimit) fail('音频积压上限无效');
+  let closing = false, localRecovery = false, admissionStopped = false, storageBlocked = false, schedulingError = "", pumping = false, nextSendAt = 0, timer;
+  const desiredConcurrency = () => store.maybe('settings','scheduler')?.desiredAudioConcurrency ?? config.audioConcurrency ?? 1;
+  const concurrency = () => Math.min(Number.isSafeInteger(desiredConcurrency()) ? Math.max(1, Math.min(4, desiredConcurrency())) : 1, config.routeConcurrencyCap || 1, pendingLimit, Math.floor(pendingBytesLimit / responseLimit));
+  const networkActive = () => [...executing.values()].filter(item => item.network).length;
+  const busy = () => executing.size > 0 || renders.size > 0 || localRecovery || local.active > 0 || local.queued > 0 || !!timer;
   const routeBlocked = () => !!store.maybe("settings", "audio-route")?.blocked;
-  const setRouteBlocked = blocked => store.put("settings", { id: "audio-route", blocked });
+  const setRouteBlocked = (blocked, details = {}) => store.put("settings", { id: "audio-route", blocked, ...details });
   const requestOf = p => JSON.parse(JSON.stringify({ ...p, kind: p.kind || "generate" }));
   const existingCommand = p => {
     if (typeof p?.commandId !== "string" || !p.commandId || p.commandId.length > 100) fail("生成命令标识缺失");
@@ -67,6 +82,15 @@ export function createWorker(store, domain, config) {
     for (const a of attempts) a.quota = { scope: quotaScope, state: "reserved" };
   }
   function acknowledgeUnknown(job, attempts, p) {
+    const local = store.all('attempts').filter(a => a.status !== 'success' && a.deliveryVersion &&
+      (a.phase === 'localRecoveryPending' || hasAudioDelivery(store, a)) && attempts.some(target => relatedTarget(store, target, a)));
+    if (local.length) fail('原件已完整接收，请先免费恢复本地处理，不要重新请求模型', 409,
+      { code: 'raw-received-local-pending', retryClass: 'recover-local', scope: { kind: 'attempt', ids: local.map(a => a.id) } });
+    const history = store.all('attempts');
+    attempts.forEach((a, ordinal) => {
+      a.ordinal = ordinal; a.phase = 'queued';
+      a.generationEpoch = 1 + Math.max(0, ...history.filter(old => relatedTarget(store, a, old)).map(old => old.generationEpoch || 0));
+    });
     const ids=outstandingAttempts(store,attempts,undefined,true).map(a=>a.id);
     if (p.acknowledgedAttemptIds !== undefined && (!Array.isArray(p.acknowledgedAttemptIds) || !same([...p.acknowledgedAttemptIds].sort(),[...ids].sort()))) fail('结果不明的请求范围已变化，请重新核对后决定',409);
     if (ids.length && p.retryUnknown !== true) fail('所选包含结果不明的请求，需明确确认可能重复计费');
@@ -85,9 +109,11 @@ export function createWorker(store, domain, config) {
     store.put("settings", usage);
   }
   function saveAttempt(a, jobId) {
+    if (a.phase !== 'localRecoveryPending') a.phase = a.status === 'stopped' ? 'stoppedNotSent' :
+      a.status === 'failed' ? a.createdAt ? 'rejected' : 'rejectedNotSent' : a.status === 'unknown' ? 'outcomeUnknown' : a.phase;
     store.transaction(() => {
       if (["stopped", "failed"].includes(a.status)) moveQuota(a, "released");
-      store.put("attempts", a, jobId);
+      saveAudioAttempt(store, a, jobId);
       domain.enhancement?.setAttemptStatus(store.get("jobs", jobId), a, a.status);
     });
   }
@@ -134,6 +160,7 @@ export function createWorker(store, domain, config) {
     return store.transaction(() => {
       const existing = existingCommand(p);
       if (existing) return existing;
+      if (p.resumeRoute) storageBlocked = false;
       if (["voice-create", "unit-generate"].includes(p.kind)) {
         if (!config.key) fail("请先配置 Kunpo API Key");
         if (routeBlocked() && !p.resumeRoute) fail("接口已暂停，请核对配置后重新启用");
@@ -150,7 +177,7 @@ export function createWorker(store, domain, config) {
         reserve(attempts,p);
         setJob(job);
         for (const a of attempts) {
-          store.put("attempts", a, job.id);
+          saveAudioAttempt(store, a, job.id);
           domain.enhancement.setAttemptStatus(job, a, "queued");
         }
         setRouteBlocked(false);
@@ -208,7 +235,7 @@ export function createWorker(store, domain, config) {
         acknowledgeUnknown(job,[attempt],p);
         reserve([attempt],p);
         setJob(job);
-        store.put("attempts", attempt, job.id);
+        saveAudioAttempt(store, attempt, job.id);
         return job;
       }
       const c = domain.editable(p.chapterId, p.revision);
@@ -320,7 +347,7 @@ export function createWorker(store, domain, config) {
         acknowledgeUnknown(job,attempts,p);
         reserve(attempts,p);
         setJob(job);
-        for (const a of attempts) store.put("attempts", a, job.id);
+        for (const a of attempts) saveAudioAttempt(store, a, job.id);
       }
       return job;
     });
@@ -351,31 +378,34 @@ export function createWorker(store, domain, config) {
         ...meta,
         createdAt: new Date().toISOString(),
       };
+      if (audio.originalAudioId) {
+        const original = { ...audio, id: audio.originalAudioId, path: audio.delivery.rawPath,
+          ...audio.delivery.mediaMetadata, provenance: 'provider-original', sourceAttemptId: attempt.id };
+        delete original.originalAudioId; delete original.processing; delete original.tailRepair;
+        store.put("audios", original, c?.id || "");
+      }
       store.put("audios", audio, c?.id || "");
+      attempt.phase = "registered";
+      delete attempt.localError; delete attempt.error;
       if (["candidate", "unit"].includes(attempt.targetKind)) {
         attempt.adopted = domain.enhancement.register(j, attempt, audio);
         attempt.status = "success";
-        store.put("attempts", attempt, j.id);
+        saveAudioAttempt(store, attempt, j.id);
         return;
       }
       if (!s) {
         const v = store.get("voices", attempt.input.voiceId);
-        const history = store.all("attempts");
-        const newer = history.slice(history.findIndex(a => a.id === attempt.id) + 1)
-          .some(a => !a.segmentId && a.input.voiceId === v.id);
+        const newer = hasNewerAttempt(store.all("attempts"), attempt, a => !a.segmentId && a.input.voiceId === v.id);
         attempt.selectedAsSample = active(j) && j.voiceRevision === (v.revision ?? 1) && !newer && !v.deletePending && v.state !== "deleted";
         if (attempt.selectedAsSample) {
           v.sampleAudioId = audio.id;
           store.put("voices", v);
         }
         attempt.status = "success";
-        store.put("attempts", attempt, j.id);
+        saveAudioAttempt(store, attempt, j.id);
         return;
       }
-      const history = store.all("attempts");
-      const newer = history
-        .slice(history.findIndex((a) => a.id === attempt.id) + 1)
-        .some((a) => a.segmentId === s.id);
+      const newer = hasNewerAttempt(store.all("attempts"), attempt, a => a.segmentId === s.id);
       if (
         active(j) && !s.retired &&
         c.revision === j.revision &&
@@ -391,30 +421,49 @@ export function createWorker(store, domain, config) {
         domain.touch(c, false);
       }
       attempt.status = "success";
-      store.put("attempts", attempt, j.id);
+      saveAudioAttempt(store, attempt, j.id);
     });
   }
-  async function prepareAudio(attempt, file) {
-    const meta = await inspect(file);
-    // Reference creation/tests and scene effects are not dry paragraph speech.
-    if (!(attempt.segmentId || (attempt.targetKind === 'unit' && attempt.mode === 'dry'))) return meta;
-    const tail = await analyzeTail(file);
-    if (!tail.detected) return meta;
-    const temporary = `${file}.tail.part`;
-    try {
-      await rm(temporary, { force: true });
-      await trimTail(file, temporary, tail);
-      const cleaned = await inspect(temporary);
-      await rename(temporary, file);
-      return { ...cleaned, tailRepair: { reason: tail.reason, cutSeconds: tail.cutSeconds, removedSeconds: tail.removedSeconds, at: new Date().toISOString() } };
-    } finally { await rm(temporary, { force: true }); }
+  function claimAttempt(id) {
+    return store.transaction(() => {
+      const a = store.get('attempts', id), j = store.get('jobs', a.jobId);
+      if (!active(j) || a.status !== 'queued' || a.ownerToken) return null;
+      a.ownerToken = uid(); a.claimedAt = new Date().toISOString(); a.phase = 'preparing';
+      saveAudioAttempt(store, a, j.id); j.status = 'running'; setJob(j); return a;
+    });
   }
-  async function generate(job) {
-    for (const a of store.all("attempts", job.id)) {
-      if (a.status !== "queued") continue;
-      const fresh = store.get("jobs", job.id);
-      if (!active(fresh)) break;
-      if (store.get("attempts", a.id).status !== "queued") continue;
+  function updateCounts(job, attempts) {
+      job.done = attempts.filter(a => a.status === 'success').length;
+      job.counts = { queued: 0, preparing: 0, inFlight: 0, local: 0, success: 0, failed: 0, unknown: 0, stopped: 0 };
+      for (const a of attempts) {
+        const bucket = a.status === 'queued' ? a.phase === 'preparing' ? 'preparing' : 'queued' :
+          a.status === 'sending' ? ['rawSealed','processing'].includes(a.phase) ? 'local' : 'inFlight' : a.status;
+        if (bucket in job.counts) job.counts[bucket]++;
+      }
+  }
+  function summarize(jobId, pending = false) {
+    return store.transaction(() => {
+      const job = store.get('jobs', jobId);
+      if (!active(job)) return job;
+      const attempts = store.all('attempts', jobId);
+      updateCounts(job, attempts);
+      if (!pending && !attempts.some(a => ['queued','sending'].includes(a.status))) {
+        job.status = attempts.every(a => a.status === 'success') ? 'success' : attempts.some(a => a.status === 'unknown') ? 'unknown' :
+          attempts.some(a => a.status === 'failed') ? 'failed' : 'stopped';
+        job.finishedAt = new Date().toISOString();
+      }
+      setJob(job); return job;
+    });
+  }
+  async function executeAttempt(job, a, onSealed = () => {}) {
+      const leases = [];
+      const started = performance.now(); let sentAt, receivedAt, localAt, networkTimer;
+      const controller = new AbortController();
+      const deadline = (phase, milliseconds) => {
+        clearTimeout(networkTimer);
+        networkTimer = setTimeout(() => { a.timeoutPhase = phase; controller.abort(new DOMException(phase === 'upstream' ? '等待音频响应超时' : '接收音频超时', 'TimeoutError')); }, milliseconds);
+      };
+      const fresh = store.get('jobs', job.id);
       let s = a.segmentId ? store.get("segments", a.segmentId) : null;
       if (fresh.stop || routeBlocked() || closing) {
         a.status = "stopped";
@@ -424,31 +473,21 @@ export function createWorker(store, domain, config) {
           domain.enhancement?.syncLegacySegment(s);
         }
         saveAttempt(a, job.id);
-        continue;
+        return;
       }
       try {
         for (const id of referenceIds(a)) {
-          const reference = store.get("voices", id);
-          if (reference.path && !["stopped", "deleted"].includes(reference.state)) {
-            try {
-              await inspectReference(reference);
-            } catch (e) {
-              if (e.status) throw e;
-              fail("参考声音损坏或不可解码，本条未发送");
-            }
-          }
+          const voice = store.get('voices', id);
+          if (!['active','archived'].includes(voice.state) || voice.deletePending || !voice.path)
+            throw Object.assign(new Error('参考已停用，尚未发送的请求已停止'), { status: 400, stopped: true });
+          try { leases.push(await referenceCache.acquire(voice)); }
+          catch (e) { if (e.status) throw e; fail('参考声音损坏或不可解码，本条未发送'); }
         }
-        const references = await Promise.all(referenceIds(a).map(async id => {
-          const voice = store.get("voices", id);
-          if (!["active", "archived"].includes(voice.state) || voice.deletePending || !voice.path)
-            throw Object.assign(new Error("参考已停用，尚未发送的请求已停止"), { status: 400, stopped: true });
-          const data = await readFile(join(store.directory, voice.path));
-          if (!data.length || data.length > 10 * 1024 * 1024) fail("参考声音读取后超出 10 MB 规格，本次未发送");
-          return { audio_data: data.toString("base64") };
-        }));
+        const references = leases.map(item => item.payload);
+        a.referenceAssets = leases.map(item => item.asset);
         const dispatch = store.transaction(() => {
           const latest = store.get("jobs", job.id);
-          if (!active(latest) || store.get("attempts", a.id).status !== "queued") return false;
+          if (!active(latest) || store.get("attempts", a.id).status !== "queued" || store.get("attempts", a.id).ownerToken !== a.ownerToken) return false;
           if (latest.stop || closing || routeBlocked())
             throw Object.assign(new Error("尚未提交的请求已停止"), { status: 400, stopped: true });
           const unresolved=outstandingAttempts(store,[a],undefined,true).map(v=>v.id);
@@ -475,10 +514,17 @@ export function createWorker(store, domain, config) {
             if (!["active", "archived"].includes(v.state) || v.deletePending || !v.path || !existsSync(join(store.directory, v.path)))
               throw Object.assign(new Error("参考已停用，尚未发送的请求已停止"), { status: 400, stopped: true });
           }
+          for (const asset of a.referenceAssets) {
+            const voice = store.get('voices', asset.voiceId);
+            if (voice.path !== asset.path || referenceVersion(statSync(join(store.directory, voice.path))) !== asset.fileVersion)
+              fail('参考素材在发送前已变化，本条未发送', 409);
+          }
           a.status = "sending";
+          a.deliveryVersion = 1;
+          a.phase = "sending";
           moveQuota(a, "used");
           a.createdAt = new Date().toISOString();
-          store.put("attempts", a, job.id);
+          saveAudioAttempt(store, a, job.id);
           domain.enhancement?.setAttemptStatus(latest, a, "running");
           if (s) {
             s.latest = "running";
@@ -487,7 +533,10 @@ export function createWorker(store, domain, config) {
           }
           return true;
         });
-        if (!dispatch) continue;
+        if (!dispatch) return;
+        sentAt = performance.now();
+        a.timings = { preparingMs: sentAt - started };
+        deadline('upstream', config.audioResponseTimeoutMs ?? config.timeout ?? 180000);
         const response = await fetch(config.audioUrl, {
           method: "POST",
           headers: {
@@ -506,14 +555,16 @@ export function createWorker(store, domain, config) {
               pitch_rate: a.input.config.pitch_rate,
             },
           }),
-          signal: AbortSignal.timeout(config.timeout || 180000),
+          signal: controller.signal,
         });
+        receivedAt = performance.now(); a.timings.upstreamMs = receivedAt - sentAt;
+        deadline('receiving', config.audioReceiveTimeoutMs ?? config.timeout ?? 180000);
         if (!response.ok) {
           a.httpStatus = response.status;
           let durationError = false;
           try {
             let errorText = '', bytes = 0;
-            for await (const chunk of Readable.fromWeb(response.body)) {
+            for await (const chunk of Readable.fromWeb(response.body, { signal: controller.signal })) {
               bytes += chunk.length;
               if (bytes > 64 * 1024) break;
               errorText += chunk.toString('utf8');
@@ -521,14 +572,20 @@ export function createWorker(store, domain, config) {
             durationError = ![401, 403, 429].includes(response.status) && /\bDurationOutOfRange\b/.test(errorText);
           } catch {} // An unreadable error body keeps the existing HTTP protection.
           if (durationError) a.providerErrorCode = 'DurationOutOfRange';
-          if (!durationError && [401, 402, 403, 429].includes(response.status)) setRouteBlocked(true);
+          if (!durationError && [401, 402, 403, 429].includes(response.status)) {
+            const retry = response.headers.get('retry-after');
+            a.retryAfterSeconds = retry ? Math.max(0, Number.isFinite(Number(retry)) ? Number(retry) : (Date.parse(retry) - Date.now()) / 1000) : undefined;
+            setRouteBlocked(true, { status: response.status, reason: response.status === 429 ? 'rate-or-quota-limit' : 'permission-or-quota',
+              ...(Number.isFinite(a.retryAfterSeconds) ? { retryAfterSeconds: a.retryAfterSeconds } : {}) });
+          }
           throw Object.assign(
             new Error(
               durationError ? '音频服务拒绝本条时长：参考须不超过30秒，输出不超过120秒；请拆短正文后再生成，短句仍失败时请核对参考素材。' : `音频服务返回 ${response.status}，请检查权限、额度或稍后手动重试`,
             ),
-            { known: true },
+            { known: durationError || response.status < 500 },
           );
         }
+        a.phase = "receiving"; saveAudioAttempt(store, a, job.id);
         if (
           !/audio\/(wav|x-wav|wave)|application\/octet-stream/i.test(
             response.headers.get("content-type") || "",
@@ -539,7 +596,7 @@ export function createWorker(store, domain, config) {
         await mkdir(dirname(file), { recursive: true });
         let size = 0;
         await pipeline(
-          Readable.fromWeb(response.body),
+          Readable.fromWeb(response.body, { signal: controller.signal }),
           new Transform({
             transform(chunk, encoding, done) {
               size += chunk.length;
@@ -554,13 +611,21 @@ export function createWorker(store, domain, config) {
         const length = Number(response.headers.get("content-length"));
         if (!size || (length && length !== size))
           throw new Error("音频接收长度不完整");
-        const meta = await prepareAudio(a, file + ".part");
-        await rename(file + ".part", file);
-        register(a, meta);
+        clearTimeout(networkTimer);
+        localAt = performance.now(); a.timings.receivingMs = localAt - receivedAt;
+        await local.run(() => sealAudioDelivery(store, a, size, response));
+        onSealed(size);
+        await local.run(async () => {
+          const metadata = await prepareAudioDelivery(store, a);
+          a.timings.localMs = performance.now() - localAt; a.timings.totalMs = performance.now() - started;
+          register(a, metadata);
+        });
       } catch (e) {
         const persisted = store.get("attempts", a.id);
         a.quota = persisted.quota;
         a.createdAt = persisted.createdAt;
+        if (hasAudioDelivery(store, a)) a.phase = "localRecoveryPending";
+        if (localAt !== undefined || e.code === "ENOSPC") storageBlocked = true;
         const unknown = ["sending", "unknown"].includes(persisted.status) && !e.known;
         a.status = unknown ? "unknown" : e.stopped ? "stopped" : "failed";
         a.error = e.status
@@ -568,6 +633,10 @@ export function createWorker(store, domain, config) {
           : e.known
             ? e.message
             : "本次音频未能完整确认，保留记录，请核对后手动处理";
+        if (a.phase === 'localRecoveryPending') {
+          a.error = '原件已完整接收，本地处理或登记未完成；请免费恢复，不需要重新生成';
+          a.localError = e.message;
+        }
         saveAttempt(a, job.id);
         if (s && active(store.get("jobs", job.id))) {
           s = store.get("segments", a.segmentId);
@@ -575,23 +644,14 @@ export function createWorker(store, domain, config) {
           store.put("segments", s, job.chapterId);
           domain.enhancement?.syncLegacySegment(s);
         }
-        job.error = a.error;
-        if (unknown) job.stop = true;
-      }
-      job.done = store.all("attempts", job.id).filter(a => a.status === "success").length;
-      const latest = store.get("jobs", job.id);
-      if (!active(latest)) return;
-      job.stop = job.stop || latest.stop;
-      setJob(job);
-    }
-    const attempts = store.all("attempts", job.id);
-    job.status = attempts.every((a) => a.status === "success")
-      ? "success"
-      : attempts.some((a) => a.status === "unknown")
-        ? "unknown"
-        : attempts.some((a) => a.status === "failed")
-          ? "failed"
-          : "stopped";
+        store.transaction(() => {
+          const latest = store.get('jobs', job.id);
+          if (!active(latest)) return;
+          latest.error = a.error;
+          if (unknown) latest.stop = true;
+          setJob(latest);
+        });
+      } finally { clearTimeout(networkTimer); controller.abort(); for (const lease of leases) lease.release(); }
   }
   async function render(job) {
     const c = store.get("chapters", job.chapterId);
@@ -660,45 +720,105 @@ export function createWorker(store, domain, config) {
     job.done = job.total;
     job.status = "success";
   }
-  async function tick() {
-    if (running || closing) return;
-    const job = store.all("jobs").find((j) => j.status === "queued");
-    if (!job) return;
-    running = true;
-    job.status = "running";
-    setJob(job);
-    try {
-      if (["generate", "voice-test", "voice-create", "unit-generate"].includes(job.kind)) await generate(job);
-      else await render(job);
-    } catch (e) {
-      job.status = "failed";
-      job.error = e.message;
-    } finally {
-      if (active(store.get("jobs", job.id))) {
-        job.finishedAt = new Date().toISOString();
-        setJob(job);
+  const pendingJob = id => [...executing.values()].some(item => item.jobId === id);
+  function stopQueued(job) {
+    for (const a of store.all('attempts', job.id)) {
+      if (a.status !== 'queued' || executing.has(a.id)) continue;
+      a.status = 'stopped'; saveAttempt(a, job.id);
+      if (a.segmentId) {
+        const segment = store.get('segments', a.segmentId); segment.latest = 'stopped';
+        store.put('segments', segment, job.chapterId); domain.enhancement?.syncLegacySegment(segment);
       }
-      running = false;
     }
+    summarize(job.id, pendingJob(job.id));
+  }
+  function wakeIdle() {
+    if (!busy()) for (const wake of idleWaiters.splice(0)) wake();
+  }
+  function launch(job, queued) {
+    const a = claimAttempt(queued.id);
+    if (!a) return false;
+    const latest = store.get('jobs', job.id);
+    const item = { jobId: job.id, network: true, bytes: responseLimit }; executing.set(a.id, item);
+    item.promise = executeAttempt(latest, a, bytes => { item.network = false; item.bytes = bytes; pump(); })
+      .catch(() => { storageBlocked = true; schedulingError = '本地任务登记未完成，请核对存储后恢复'; })
+      .finally(() => {
+        executing.delete(a.id);
+        try { summarize(job.id, pendingJob(job.id)); }
+        catch { storageBlocked = true; schedulingError = '本地任务汇总未完成，请核对存储后恢复'; }
+        pump(); wakeIdle();
+      });
+    return true;
+  }
+  function pump() {
+    if (pumping || localRecovery) return;
+    pumping = true;
+    try {
+      let jobs = store.all('jobs').filter(active);
+      if (closing || admissionStopped) for (const job of jobs.filter(j => j.status === 'queued' && !audioKinds.has(j.kind))) {
+        job.status = 'stopped'; job.finishedAt = new Date().toISOString(); setJob(job);
+      }
+      for (const job of jobs.filter(j => audioKinds.has(j.kind)))
+        if (job.stop || routeBlocked() || closing || admissionStopped || storageBlocked) stopQueued(job);
+      if (!closing && !admissionStopped && !storageBlocked && !routeBlocked()) {
+        while (networkActive() < concurrency() && executing.size < pendingLimit &&
+          [...executing.values()].reduce((sum, item) => sum + item.bytes, 0) + responseLimit <= pendingBytesLimit) {
+          jobs = store.all('jobs').filter(j => active(j) && !j.stop && audioKinds.has(j.kind)).map(j => ({ ...j,
+            inFlight: pendingJob(j.id), next: store.all('attempts', j.id).find(a => a.status === 'queued' && !a.ownerToken) })).filter(j => j.next);
+          const job = picker(jobs); if (!job) break;
+          const wait = nextSendAt - performance.now();
+          if (wait > 0) { if (!timer) timer = setTimeout(() => { timer = undefined; pump(); wakeIdle(); }, wait); break; }
+          if (!launch(job, job.next)) break;
+          nextSendAt = performance.now() + (config.audioStartIntervalMs ?? 100);
+        }
+      }
+      if (!closing && !admissionStopped) {
+        const job = store.all('jobs').find(j => j.status === 'queued' && !audioKinds.has(j.kind) && !renders.has(j.id));
+        if (job && !renders.size) {
+          job.status = 'running'; setJob(job);
+          const promise = local.run(async () => {
+            try { await render(job); } catch (error) { job.status = 'failed'; job.error = error.message; }
+            if (active(store.get('jobs', job.id))) { job.finishedAt = new Date().toISOString(); setJob(job); }
+          });
+          renders.set(job.id, promise);
+          promise.finally(() => { renders.delete(job.id); pump(); wakeIdle(); }).catch(() => {});
+        }
+      }
+    } catch { storageBlocked = true; schedulingError = '本地调度未完成，请核对存储后恢复'; }
+    finally { pumping = false; }
+  }
+  async function tick() {
+    const alreadyRunning = busy(); pump();
+    if (alreadyRunning) return;
+    while (busy() || timer) await new Promise(resolve => idleWaiters.push(resolve));
+  }
+  async function drain() {
+    while (busy() || timer) await new Promise(resolve => idleWaiters.push(resolve));
   }
   async function recover() {
     for (const j of store.all("jobs")) {
       const interrupted = active(j);
       for (const a of store.all("attempts", j.id)) {
         const file = join(store.directory, a.path || `audio/${a.id}.wav`);
-        // Only the completed, decoded response is renamed to this final path; .part never qualifies.
+        // New deliveries require a matching completion receipt. Legacy final files
+        // remain recoverable as history, without claiming an unprocessed original.
         if (
           ["sending", "unknown"].includes(a.status) &&
-          !store.maybe("audios", a.id) && !file.endsWith(".part") && existsSync(file)
+          !store.maybe("audios", a.id) && (a.deliveryVersion ? hasAudioDelivery(store, a) : !file.endsWith(".part") && existsSync(file))
         ) {
           try {
-            register(a, await prepareAudio(a, file));
+            register(a, await prepareAudioDelivery(store, a));
             continue;
-          } catch {}
+          } catch (error) {
+            if (a.deliveryVersion && hasAudioDelivery(store, a)) {
+              a.phase = "localRecoveryPending"; a.error = error.message;
+              saveAudioAttempt(store, a, j.id);
+            }
+          }
         }
         if (!interrupted) {
           if ((a.quota?.state === "reserved" || a.grantReservation?.state === 'reserved') && ["queued", "failed", "stopped"].includes(a.status))
-            store.transaction(() => { moveQuota(a, "released"); store.put("attempts", a, j.id); });
+            store.transaction(() => { moveQuota(a, "released"); saveAudioAttempt(store, a, j.id); });
           continue;
         }
         if (["queued", "sending"].includes(a.status)) {
@@ -714,6 +834,7 @@ export function createWorker(store, domain, config) {
       }
       if (!interrupted) continue;
       const recovered = store.all("attempts", j.id);
+      updateCounts(j, recovered);
       j.finishedAt = new Date().toISOString();
       if (recovered.length && recovered.every((a) => a.status === "success")) {
         j.status = "success";
@@ -740,7 +861,7 @@ export function createWorker(store, domain, config) {
         for (const id of new Set(rows.map(s => s.voiceId))) {
           const v = store.get("voices", id);
           if (["stopped", "deleted"].includes(v.state) || !v.path) fail("参考声音已停用或删除");
-          try { await inspectReference(v); }
+          try { await local.run(() => inspectReference(v)); }
           catch { fail(`参考声音「${v.name || id}」损坏或缺失，或不符合 30 秒/10 MB 规格；本批尚未入队`); }
         }
       } else if (p.kind === "unit-generate") {
@@ -748,7 +869,7 @@ export function createWorker(store, domain, config) {
         for (const id of new Set(checked.attempts.flatMap(referenceIds))) {
           const v = store.get("voices", id);
           if (["stopped", "deleted"].includes(v.state) || !v.path) fail("参考声音已停用或删除");
-          try { await inspectReference(v); }
+          try { await local.run(() => inspectReference(v)); }
           catch { fail(`参考声音「${v.name || id}」损坏或缺失，或不符合 30 秒/10 MB 规格；本批尚未入队`); }
         }
       } else if (["master", "export"].includes(p.kind)) {
@@ -756,15 +877,44 @@ export function createWorker(store, domain, config) {
         const rows = domain.enhancement?.resolve(c.id) || domain.list(c.id).filter(s => !s.excluded).map(s => ({s,a:segmentStatus(store,s).audio}));
         for (const [index,{s,a}] of rows.entries()) {
           if (!a) fail(`第 ${(s.order ?? index) + 1} 条没有音频`);
-          if (!await validateStoredAudio(store, a)) fail(`第 ${(s.order ?? index) + 1} 条音频损坏或缺失，请恢复备份或明确重做；本批未提交`);
+          if (!await local.run(() => validateStoredAudio(store, a))) fail(`第 ${(s.order ?? index) + 1} 条音频损坏或缺失，请恢复备份或明确重做；本批未提交`);
         }
       }
       return enqueue(p, checked);
     },
     tick,
     recover,
+    getActivity() {
+      return { active: busy(), storageBlocked, schedulingError, routeBlocked: routeBlocked(), accepting: !closing && !admissionStopped && !storageBlocked && !routeBlocked(), desiredAudioConcurrency: desiredConcurrency(),
+        effectiveAudioConcurrency: concurrency(), routeConcurrencyCap: config.routeConcurrencyCap || 1,
+        queuedAttempts: store.all('attempts').filter(a => a.status === 'queued' && a.phase !== 'preparing' && active(store.maybe('jobs', a.jobId) || {})).length,
+        networkActive: networkActive(), attemptsActive: executing.size, localActive: local.active, localQueued: local.queued, localPeak: local.peak,
+        rendersActive: renders.size, localRecovery, pendingAudioBytes: [...executing.values()].reduce((sum,item) => sum + item.bytes,0),
+        referenceCacheBytes: referenceCache.bytes, referenceCachePeakBytes: referenceCache.peak,
+        phaseCounts: store.all('attempts').filter(a => executing.has(a.id)).reduce((counts,a) => ({...counts,[a.phase]:(counts[a.phase] || 0)+1}),{}) };
+    },
+    stopAdmission() { admissionStopped = true; if (timer) { clearTimeout(timer); timer = undefined; } pump(); wakeIdle(); },
+    drain,
+    get referenceReads() { return referenceCache.reading; },
+    async recoverLocal(attemptId) {
+      if (busy() || localRecovery || closing) fail('本地工作正在进行，请稍后恢复', 409);
+      const a = store.get('attempts', attemptId);
+      if (store.maybe('audios', a.id)) return store.get('audios', a.id);
+      if (!a.deliveryVersion || !hasAudioDelivery(store, a)) fail('未找到完整接收凭据，不能按原件恢复', 409);
+      localRecovery = true;
+      try {
+        register(a, await local.run(() => prepareAudioDelivery(store, a)));
+        storageBlocked = false;
+        return store.get('audios', a.id);
+      } catch (error) {
+        a.phase = 'localRecoveryPending'; a.localError = error.message;
+        saveAudioAttempt(store, a, a.jobId);
+        throw error;
+      } finally { localRecovery = false; pump(); wakeIdle(); }
+    },
     close() {
       closing = true;
+      if (timer) { clearTimeout(timer); timer = undefined; }
       for (const j of store.all("jobs").filter((j) => j.status === "queued")) {
         for (const a of store.all("attempts", j.id)) {
           a.status = "stopped";
@@ -780,9 +930,10 @@ export function createWorker(store, domain, config) {
         j.finishedAt = new Date().toISOString();
         setJob(j);
       }
+      pump(); wakeIdle();
     },
     get running() {
-      return running;
+      return busy();
     },
     get routeBlocked() {
       return routeBlocked();

@@ -27,12 +27,14 @@ test('项目位置迁移保留资料、按名称分目录、失败回滚及重�
   assert.equal(existsSync(target), false);
   app.store.remove('jobs', 'busy');
   assert.equal((await post('/workspace/move', { source, directory: join(source, 'nested') })).status, 400);
+  assert.equal((await post('/assistant/sessions', { projectId: p.id })).status, 200, '迁移拒绝后原助手仍可创建会话');
   const occupied = join(root, 'occupied'); mkdirSync(occupied); writeFileSync(join(occupied, 'keep'), 'untouched');
   assert.equal((await post('/workspace/move', { source, directory: occupied })).status, 400);
   assert.equal(readFileSync(join(occupied, 'keep'), 'utf8'), 'untouched');
   app.store.put('audios', { id: 'missing', path: 'audio/missing.wav' }, c.id);
   assert.equal((await post('/workspace/move', { source, directory: target })).status, 400);
   assert.equal(app.store.directory, source); assert.equal(existsSync(target), false);
+  assert.equal((await post('/assistant/sessions', { projectId: p.id })).status, 200, '复制失败后原助手仍可使用');
   app.store.remove('audios', 'missing');
   mkdirSync(target); // User-selected existing empty folders are supported.
   const result = await post('/workspace/move', { source, directory: target });

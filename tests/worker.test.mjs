@@ -156,7 +156,7 @@ test('自动尾清理不改变正常音频、参考试音或有意的场景音�
   });
 });
 
-test('中断恢复也自动清理已接收的尾脉冲和长空白，重复恢复不改写或重发', async t => {
+test('旧版正式文件恢复保留历史字节，不按新算法重剪，重复恢复不改写或重发', async t => {
   for (const tail of ['pulse', 'silence']) for (const kind of ['legacy', 'unit', 'group']) await t.test(`${tail}/${kind}`, async t => {
     const { store, d, c, dir, worker, enqueue } = setup(t), raw = tail === 'pulse' ? tailPulseWav(true) : longTailSilenceWav();
     let id = d.list(c.id)[0].id;
@@ -170,8 +170,9 @@ test('中断恢复也自动清理已接收的尾脉冲和长空白，重复恢�
     t.mock.method(globalThis, 'fetch', () => assert.fail('恢复不得重发请求'));
     await worker.recover();
     const audio = store.get('audios', a.id), cleaned = readFileSync(join(dir, audio.path));
-    assert.ok(audio.tailRepair); assert.equal(d.enhancement.resolve(c.id).find(row => row.s.id === id).a.id, audio.id);
-    assert.ok(cleaned.length < raw.length); assert.deepEqual(cleaned.subarray(44), raw.subarray(44, cleaned.length));
+    assert.equal(audio.originalAvailability, 'not-saved'); assert.equal(audio.tailRepair, undefined);
+    assert.equal(d.enhancement.resolve(c.id).find(row => row.s.id === id).a.id, audio.id);
+    assert.deepEqual(cleaned, raw);
     await worker.recover(); assert.deepEqual(store.get('audios', a.id), audio); assert.deepEqual(readFileSync(join(dir, audio.path)), cleaned);
   });
 });
@@ -451,6 +452,8 @@ test("完整正式音频登记异常后，重开恢复历史产物且不复活�
     assert.ok(existsSync(file));assert.ok((await inspect(file)).duration>0);
     if(later==="edited")d.mutate("segment.update",{chapterId:c.id,revision:d.chapter(c.id).revision,id:attempt.segmentId,text:"登记失败后保存的新正文。"});
     if(later==="newer"){
+      assert.throws(()=>enqueue({retryUnknown:true}),e=>e.code==='raw-received-local-pending');
+      await worker.recoverLocal(attempt.id);
       const newer=enqueue({retryUnknown:true});await worker.tick();assert.equal(store.get("jobs",newer.id).status,"success");
       for(const s of d.list(c.id))d.mutate("segment.review",{chapterId:c.id,revision:d.chapter(c.id).revision,id:s.id,audioId:s.current,basis:basisOf(s),state:"passed"});
     }
@@ -461,10 +464,10 @@ test("完整正式音频登记异常后，重开恢复历史产物且不复活�
     requests.mock.mockImplementation(()=>assert.fail("恢复不得请求供应商"));
     await next.recover();await next.tick();
     assert.equal(reopened.get("audios",attempt.id).id,attempt.id);assert.equal(reopened.get("attempts",attempt.id).status,"success");
-    assert.equal(reopened.all("audios").length,before+1);assert.deepEqual(reopened.get("jobs",job.id),ended);
+    assert.equal(reopened.all("audios").length,before+(later==="newer"?0:1));assert.deepEqual(reopened.get("jobs",job.id),ended);
     assert.deepEqual(domain.list(c.id),segments);assert.deepEqual(reopened.get("chapters",c.id),chapter);
     const restored=reopened.get("audios",attempt.id);await next.recover();
-    assert.equal(reopened.all("audios").length,before+1);assert.deepEqual(reopened.get("audios",attempt.id),restored);
+    assert.equal(reopened.all("audios").length,before+(later==="newer"?0:1));assert.deepEqual(reopened.get("audios",attempt.id),restored);
   });
 });
 test("同配置返工失败保留旧结果与通过记录", async (t) => {

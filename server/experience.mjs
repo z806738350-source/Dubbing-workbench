@@ -59,6 +59,47 @@ export function humanChanges(before, after, action, payload) {
   if (changed.includes('performance')) after.decisions = {...after.decisions,performance:{source:'human',at:now(),values:after.performance}};
   return changed.length || confirming || !same(before.decisions,after.decisions);
 }
+export function assistantActor(context) {
+  if (!context || context.actorKind === 'human_direct') return null;
+  if (!['human_approved_proposal', 'assistant_delegated'].includes(context.actorKind)) fail('执行来源无效', 403);
+  return Object.fromEntries(['actorKind', 'runId', 'stepId', 'mandateId', 'proposalId', 'operationId'].filter(key => context[key] !== undefined).map(key => [key, context[key]]));
+}
+export function assistantOverride(context, targetId, field) {
+  return Array.isArray(context?.namedOverrides) && (context.namedOverrides.includes(field) || context.namedOverrides.includes(`${targetId}.${field}`));
+}
+export function assistantMutation(store, action, payload, context, apply) {
+  const actor = assistantActor(context);
+  if (!actor || !context.operationId || context.receiptOwner) return apply();
+  return store.transaction(() => {
+    const id = 'assistant-operation:' + context.operationId, request = JSON.parse(JSON.stringify(payload));
+    const previous = store.maybe('settings',id);
+    if (previous) {
+      if (previous.action !== action || !same(previous.request,request)) fail('同一助手步骤的业务参数不同',409);
+      return previous.result;
+    }
+    const result = apply();
+    store.put('settings',{id,operationId:context.operationId,action,request,result,executionSource:actor,
+      ...(context.capabilityId ? {capabilityId:context.capabilityId,capabilityInput:context.capabilityInput} : {}),
+      projectId:payload.projectId || (payload.chapterId && store.maybe('chapters',payload.chapterId)?.projectId),chapterId:payload.chapterId,at:now()});
+    return result;
+  });
+}
+export function assistantChanges(before, after, action, payload, context) {
+  const actor = assistantActor(context);
+  if (!actor) return humanChanges(before, after, action, payload);
+  const changed = ['text', 'roleId', 'voiceId', 'voiceSource', 'performance', 'type', 'config', 'excluded'].filter(field => !same(before[field], after[field]));
+  if (changed.includes('text') && context.textMutationPolicy !== 'explicitSpecifiedEdit') fail('本次任务要求保留原文，不能改写朗读正文', 403);
+  for (const field of changed) {
+    const protectedField = before.protectedFields?.includes(field) || field === 'performance' && !!before.performance && before.decisions?.performance?.source !== 'policy_ai' && !before.aiAllowedFields?.includes(field);
+    if (protectedField && !assistantOverride(context, before.id, field)) fail('这项人工设置受保护，请先对具体修改作出决定', 409);
+  }
+  const confirming = action === 'segment.confirm' && payload.ids?.includes(after.id);
+  after.protectedFields = [...(before.protectedFields || [])];
+  if (changed.includes('roleId') || changed.includes('type') || before.roleConfirmed !== after.roleConfirmed || confirming) decide(after, 'role', 'policy_ai', actor);
+  if (['voiceId', 'voiceSource', 'roleId'].some(field => changed.includes(field)) || before.identityConfirmed !== after.identityConfirmed || confirming && payload.roleOnly !== true) decide(after, 'identity', 'policy_ai', actor);
+  if (changed.includes('performance')) after.decisions = { ...after.decisions, performance: { source: 'policy_ai', at: now(), values: after.performance, ...actor } };
+  return changed.length || confirming || !same(before.decisions, after.decisions);
+}
 function grantFor(store, config, request, kind) {
   const c = request.chapterId ? store.get('chapters',request.chapterId) : null;
   const projectId = c?.projectId || request.projectId;
@@ -191,14 +232,16 @@ export function createExperience(store, domain, worker, analysis, config) {
     return result;
   }
   function get(id) { return view(store.get('settings',recordId('operation',id))); }
-  async function run(p) {
+  async function run(p, executionContext) {
     text(p.operationId,'操作标识',100);
     if (inflight.has(p.operationId)) { const existing = store.get('settings',recordId('operation',p.operationId)); if (!same(existing.request,p)) fail('同一操作标识的内容不同',409); return inflight.get(p.operationId); }
-    const task = execute(p);
+    const task = execute(p, executionContext);
     inflight.set(p.operationId,task);
     try { return await task; } finally { inflight.delete(p.operationId); }
   }
-  async function execute(p) {
+  async function execute(p, executionContext) {
+    const actor = assistantActor(executionContext);
+    const mutationContext = actor ? {...executionContext,receiptOwner:'experience'} : executionContext;
     if (p.kind === 'save' && p.action === 'project.delete') fail('删除项目请使用项目列表中的删除操作');
     const chapterId = chapterOf(p), projectId = projectOf(p);
     if (chapterId) store.get('chapters',chapterId);
@@ -206,7 +249,7 @@ export function createExperience(store, domain, worker, analysis, config) {
     const id = recordId('operation',p.operationId), old = store.maybe('settings',id);
     if (old && !same(old.request,p)) fail('同一操作标识的内容不同',409);
     if (old?.steps.completed || old?.jobIds.length || old?.result?.analysis) return view(old);
-    const op = old || {id,operationId:p.operationId,kind:p.kind,request:JSON.parse(JSON.stringify(p)),steps:{},jobIds:[],createdObjectIds:[],outcome:'processing',at:now()};
+    const op = old || {id,operationId:p.operationId,kind:p.kind,request:JSON.parse(JSON.stringify(p)),steps:{},jobIds:[],createdObjectIds:[],outcome:'processing',at:now(),...(actor ? {executionSource:actor} : {})};
     save(op);
     const step = (name, fn) => {
       if (op.steps[name]) return op.steps[name];
@@ -215,7 +258,7 @@ export function createExperience(store, domain, worker, analysis, config) {
     try {
       if (p.kind === 'save') {
         step('completed',() => {
-          const result = domain.mutate(p.action,{...p.data,...(['segment.split','segment.merge'].includes(p.action)?{operationId:p.operationId}:{})});
+          const result = domain.mutate(p.action,{...p.data,...(['segment.split','segment.merge'].includes(p.action)?{operationId:p.operationId}:{})},mutationContext);
           op.result = p.data.chapterId ? {...result,chapterRevision:store.get('chapters',p.data.chapterId).revision} : result;
           op.dependencies = {chapterId:p.data.chapterId || result.chapterId,segmentIds:p.action.startsWith('segment.') ? p.data.ids || [p.data.id].filter(Boolean) : [],unitIds:p.data.unitId ? [p.data.unitId] : [],roleIds:p.action === 'role.update' ? [p.data.id] : []};
           return true;
@@ -223,7 +266,7 @@ export function createExperience(store, domain, worker, analysis, config) {
         op.outcome = 'completed';
       } else if (p.kind === 'prepareChapter') {
         const existing = store.all('suggestions').find(a => a.operationId === p.operationId);
-        const a = existing || await analysis.start({...p,kind:p.analysisKind || (domain.list(p.chapterId).length ? 'director' : 'extract'),...(p.analysisKind === 'scene' ? {sceneEnabled:true} : {}),autoApply:p.autoApply !== false,requireGrant:true});
+        const a = existing || await analysis.start({...p,kind:p.analysisKind || (domain.list(p.chapterId).length ? 'director' : 'extract'),...(p.analysisKind === 'scene' ? {sceneEnabled:true} : {}),autoApply:p.autoApply !== false,requireGrant:true},executionContext);
         op.result = {analysis:a}; op.createdObjectIds = [a.id]; op.steps.analysis = a.id;
       } else if (p.kind === 'useVoice') {
         let voice = op.steps.voice ? store.get('voices',op.steps.voice) : p.audioId ? await saveCandidateVoice(store,{audioId:p.audioId,name:p.name || '新声音'}) : store.get('voices',p.voiceId);
@@ -231,14 +274,14 @@ export function createExperience(store, domain, worker, analysis, config) {
         if (p.scope !== 'library') step('bound',() => {
           if (!p.chapterId || (!p.segmentId && !p.roleId)) fail('请选择这次使用声音的章节与角色或台词');
           if (voice.state !== 'active' || voice.deletePending) fail('请选择当前可用的声音');
-          const target = domain.mutate(p.segmentId ? 'segment.update' : 'role.update',p.segmentId ? {chapterId:p.chapterId,revision:p.revision,id:p.segmentId,voiceId:voice.id,identityChosen:true} : {chapterId:p.chapterId,revision:p.revision,id:p.roleId,entityRevision:p.entityRevision,voiceId:voice.id,apply:p.apply !== false,chapterOnly:p.updateDefault !== true,identityChosen:true});
+          const target = domain.mutate(p.segmentId ? 'segment.update' : 'role.update',p.segmentId ? {chapterId:p.chapterId,revision:p.revision,id:p.segmentId,voiceId:voice.id,identityChosen:true} : {chapterId:p.chapterId,revision:p.revision,id:p.roleId,entityRevision:p.entityRevision,voiceId:voice.id,apply:p.apply !== false,chapterOnly:p.updateDefault !== true,identityChosen:true},mutationContext);
           op.result = {voice,target:{...target,chapterRevision:store.get('chapters',p.chapterId).revision}}; return op.result.target;
         });
         op.steps.completed = true; op.outcome = 'completed';
       } else {
         let payload = {chapterId:p.chapterId,projectId:p.projectId,revision:p.revision,grantId:p.grantId,requireGrant:true,commandId:p.operationId,...(p.retryUnknown === true ? {retryUnknown:true} : {}),...(p.acknowledgedAttemptIds ? {acknowledgedAttemptIds:p.acknowledgedAttemptIds} : {}),...(p.resumeRoute === true ? {resumeRoute:true} : {})};
         if (p.kind === 'groupAndGenerate') {
-          const unit = step('unit',() => domain.mutate('unit.create',{chapterId:p.chapterId,revision:p.revision,ids:p.ids,guidance:p.guidance || ''}));
+          const unit = step('unit',() => domain.mutate('unit.create',{chapterId:p.chapterId,revision:p.revision,ids:p.ids,guidance:p.guidance || ''},mutationContext));
           op.createdObjectIds = [unit.id]; op.result = {unit};
           payload = {...payload,kind:'unit-generate',revision:unit.chapterRevision,unitIds:[unit.id],mode:'dry'};
         } else if (p.kind === 'sceneAndGenerate') {
@@ -248,7 +291,7 @@ export function createExperience(store, domain, worker, analysis, config) {
             if (!Array.isArray(p.eventIds) || new Set(p.eventIds).size !== p.eventIds.length) fail('声音事件范围无效');
             for (const eventId of p.eventIds) {
               const e = store.get('events',eventId);
-              domain.mutate('event.update',{chapterId:c.id,revision:c.revision,unitId:unit.id,entityRevision:unit.revision,id:e.id,eventRevision:e.revision,state:'adopted'});
+              domain.mutate('event.update',{chapterId:c.id,revision:c.revision,unitId:unit.id,entityRevision:unit.revision,id:e.id,eventRevision:e.revision,state:'adopted'},mutationContext);
               c = store.get('chapters',c.id); unit = store.get('units',unit.id);
             }
             return {revision:c.revision,unitRevision:unit.revision};
@@ -259,7 +302,7 @@ export function createExperience(store, domain, worker, analysis, config) {
           if (!selected.audioRequests) { op.steps.completed = true; op.outcome = 'completed'; save(op); return view(op); }
           payload = {...payload,kind:'unit-generate',revision:selected.revision,arrangement:selected.arrangement,unitIds:selected.unitIds,...(p.mode ? {mode:p.mode} : {})};
         } else if (p.kind === 'voiceCandidate') payload = {...payload,kind:'voice-create',sessionId:p.sessionId,entityRevision:p.entityRevision};
-        else if (p.kind === 'export') payload = {...payload,requireGrant:false,kind:'export',arrangement:p.arrangement,reviewItems:p.reviewItems,confirm:p.confirm === true,format:p.format};
+        else if (p.kind === 'export') payload = {...payload,requireGrant:false,kind:'export',arrangement:p.arrangement,reviewItems:p.reviewItems,confirm:actor ? false : p.confirm === true,format:p.format};
         else fail('组合操作类型无效');
         const job = await worker.submit(payload);
         op.jobIds = [job.id]; op.steps.enqueued = job.id; op.result = {...op.result,job}; op.outcome = 'processing';
