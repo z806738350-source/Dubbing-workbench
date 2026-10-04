@@ -77,7 +77,7 @@ function appFixture(){
   const calls={actions:[],updates:[],refresh:0,paused:0,errors:[]};
   const state={settings:{workspaceDirectory:'/fixture'},projects:[{id:'one',name:'第一项目'},{id:'two',name:'第二项目'}],chapters:[{id:'old',projectId:'one'},{id:'next',projectId:'two'}]};
   const env={React,Select:'Select',state,projectId:'one',busy:false,connectionReady:true,
-    stateRef:{current:state},projectRef:{current:'one'},chapterRef:{current:'old'},refreshPending:{current:null},bookmarks:{current:{old:'line-old',next:'line-next'}},
+    stateRef:{current:state},projectRef:{current:'one'},chapterRef:{current:'old'},refreshPending:{current:null},bookmarks:{current:{old:'line-old',next:'line-next'}},chapterPlaybackSnapshots:{current:{old:{id:'old'},next:{id:'next'}}},
     playIntent:{current:0},pendingPlay:{current:'old'},pendingPlaySnapshot:{current:{arrangement:1}},recoveryTarget:{current:{chapterId:'old'}},
     bindDraftWorkspace(){},draftWorkspace:()=>'',playbackIdentity:items=>JSON.stringify(items),generationIntent:{current:0},generationPlan:{id:'old-plan'},audio:{current:{pause(){calls.paused++;}}},
     action:async(name,payload)=>calls.actions.push({name,payload}),refresh:async()=>{calls.refresh++;},
@@ -102,7 +102,7 @@ test('删除当前项目直接发action，切剩余项目并清旧章、播放�
   assert.equal(f.env.projectRef.current,'two');assert.equal(f.env.chapterRef.current,'next');assert.equal(f.env.chapter,null);
   assert.equal(f.env.player,null);assert.equal(f.env.generationPlan,null);assert.equal(f.env.modal,null);assert.equal(f.env.voiceTarget,null);assert.equal(f.env.unitPanelId,null);
   assert.deepEqual(f.env.checked,[]);assert.equal(f.env.search,'');assert.equal(f.env.oldPreview,null);assert.equal(f.env.recoveryTarget.current,null);
-  assert.deepEqual(f.env.bookmarks.current,{next:'line-next'});assert.deepEqual(f.env.state.projects.map(p=>p.id),['two']);assert.ok(f.calls.paused>0);
+  assert.deepEqual(f.env.bookmarks.current,{next:'line-next'});assert.deepEqual(f.env.chapterPlaybackSnapshots.current,{next:{id:'next'}});assert.deepEqual(f.env.state.projects.map(p=>p.id),['two']);assert.ok(f.calls.paused>0);
 });
 
 test('删除最后项目回空状态；删除非当前项目不改当前编辑或播放',async()=>{

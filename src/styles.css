@@ -689,6 +689,26 @@ input[type="range"]::-moz-range-thumb {
   margin-bottom: var(--space-sm);
   font-size: var(--text-sm);
 }
+/* Hallmark · component: audio-version-actions · theme: existing Workbench
+ * pre-emit critique: P5 H5 E4 S5 R5 V4 */
+.inspector-audio-actions {
+  display: grid;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+.inspector-audio-restore {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+  gap: var(--space-xs);
+}
+.inspector-audio-actions .button {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  margin: 0;
+}
+.inspector-audio-manage { justify-content: flex-start; }
+.inspector-audio-manage > svg:last-child { margin-left: auto; }
 .section-heading {
   display: flex;
   align-items: center;
@@ -1218,25 +1238,28 @@ input[type="range"]::-moz-range-thumb {
   color: var(--color-muted);
   padding-top: 2px;
 }
-.download-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-  padding-block: var(--space-sm);
-  border-bottom: 1px solid var(--color-rule);
-  font-size: var(--text-sm);
+/* Hallmark · component: export dialog · theme: studied-DNA
+ * Reuses button hover, focus, active, disabled and inline loading/error/success states. */
+.export-panel .button { min-height: 44px; }
+.export-destination { margin-bottom: var(--space-md); }
+.export-destination > span { display: flex; align-items: center; gap: var(--space-xs); font-weight: 500; }
+.export-destination p { margin-top: var(--space-2xs); color: var(--color-secondary); font-size: var(--text-xs); overflow-wrap: anywhere; user-select: text; }
+.export-ready { display: grid; gap: var(--space-sm); padding: var(--space-md); margin-bottom: var(--space-lg); border: 1px solid var(--color-selected-border); border-radius: var(--radius-md); background: var(--color-selected); color: var(--color-ink); }
+.export-file-info { display: grid; gap: var(--space-2xs); min-width: 0; }
+.export-file-info strong { display: flex; align-items: center; gap: var(--space-xs); font-weight: 600; }
+.export-ready .export-file-info strong { color: var(--color-accent); }
+.export-file-info span { font-size: var(--text-xs); color: var(--color-secondary); overflow-wrap: anywhere; }
+.export-settings { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: var(--space-md); }
+.export-settings > * { min-width: 0; }
+.export-feedback { margin-bottom: var(--space-sm); }
+.export-history { margin-top: var(--space-lg); border-top: 1px solid var(--color-rule); }
+.export-history summary { cursor: pointer; min-height: 44px; padding-block: var(--space-sm); color: var(--color-secondary); }
+.export-history-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); padding-block: var(--space-sm); border-top: 1px solid var(--color-rule); }
+@media (max-width: 414px) {
+  .export-settings { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .export-history-row { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .export-panel > form .button { width: 100%; }
 }
-.download-row span {
-  margin-left: auto;
-  display: grid;
-  gap: var(--space-xs);
-  text-align: right;
-  font-size: var(--text-xs);
-  color: var(--color-muted);
-}
-.download-row b { color: var(--color-ink); font-weight: 500; }
-.download-row small { font-size: inherit; }
-.download-row[aria-disabled="true"] { color: var(--color-muted); }
 .loading-layout {
   padding: var(--space-lg);
   display: flex;

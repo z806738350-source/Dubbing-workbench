@@ -194,6 +194,7 @@ export interface Master {
   }[];
 }
 export interface ExportRecord {
+  path: string;
   fileExists: boolean;
   current: boolean;
   id: string;
@@ -284,6 +285,7 @@ export interface GenerationUnit {
 }
 export interface ActionReadiness {allowed:boolean;blockers:{code:string;scope:{unitId?:string;memberIds?:string[];mode?:"dry"|"scene"};message:string;resolution:string;attemptIds?:string[]}[];warnings:{code:string;message:string}[]}
 export interface ChapterDetail extends Chapter {
+  outputDirectory: string;
   arrangementIssues?: string[];
   reviewItems?: {id:string;audioId:string|null;basis:Record<string,unknown>}[];
   playbackItems: {id: string; unitId?: string; members?: string[]; mode?: "dry" | "scene"; audioId: string | null; basis: Record<string, unknown>; validity: string; review?: string}[];

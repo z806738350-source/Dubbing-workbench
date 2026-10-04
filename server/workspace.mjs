@@ -91,7 +91,7 @@ export async function copyWorkspace(store, requested) {
   try {
     // SQLite creates a consistent database copy including committed WAL contents.
     store.db.exec(`VACUUM INTO '${join(staging, 'workbench.sqlite').replaceAll("'", "''")}'`);
-    for (const folder of new Set(['voices', 'audio', 'masters', 'exports', ...store.all('projects').map(p => p.folder).filter(Boolean)])) {
+    for (const folder of new Set(['voices', 'audio', 'masters', 'exports', 'output', ...store.all('projects').map(p => p.folder).filter(Boolean)])) {
       if (!existsSync(join(source, folder))) continue;
       await cp(join(source, folder), join(staging, folder), {
         recursive: true, force: false, errorOnExist: true,
@@ -153,9 +153,32 @@ export function projectFile(store, chapterId, kind, filename) {
   return join(folder || '', kind, filename);
 }
 
+export function projectExportFile(store, { chapterId, arrangement, id, format }) {
+  if (typeof id !== 'string' || !/^[\w-]+$/.test(id) || !['wav', 'mp3'].includes(format)) fail('导出文件标识或格式无效');
+  const chapter = store.get('chapters', chapterId);
+  const title = Array.from(chapter.title.replace(/[/\\:\x00-\x1f]/g, '-').trim().replace(/^\.+/, '')).slice(0, 40).join('') || '章节';
+  return projectFile(store, chapterId, 'output', `${title}-编排${arrangement ?? chapter.arrangement}-${id}.${format}`);
+}
+
+export async function revealExport(store, id, run = promisify(execFile)) {
+  const record = store.get('exports', id);
+  if (!record.path) fail('成品文件已不存在，请重新导出', 404);
+  const root = realpathSync(store.directory), file = resolve(root, record.path);
+  let actual, info;
+  try { actual = realpathSync(file); info = lstatSync(file); }
+  catch (error) { if (error.code === 'ENOENT') fail('成品文件已不存在，请重新导出', 404); throw error; }
+  const inside = relative(root, actual);
+  if (!inside || inside === '..' || inside.startsWith('../') || isAbsolute(inside) || !info.isFile())
+    fail('成品文件不在工作区内或不是普通文件', 403);
+  if (process.platform !== 'darwin') fail('当前打开成品位置功能仅支持 macOS', 501);
+  try { await run('/usr/bin/open', ['-R', file], { timeout: 10000 }); }
+  catch { fail('无法打开成品位置，请在项目的 output 文件夹查看'); }
+  return { path: file };
+}
+
 function validateFolderName(name) {
   if (!name || name === '.' || name === '..' || /[/\\\x00-\x1f]/.test(name) ||
-      ['voices', 'audio', 'masters', 'exports', 'workbench.sqlite', 'runtime.json'].includes(name.toLowerCase()))
+      ['voices', 'audio', 'masters', 'exports', 'output', 'workbench.sqlite', 'runtime.json'].includes(name.toLowerCase()))
     fail('项目名称不能包含斜杠、控制字符或与工作区系统目录重名');
 }
 export function createProjectFolder(store, project) {
@@ -184,7 +207,7 @@ function organizeProjects(store) {
       for (const [table, row, parent] of projectRecords(store, project)) {
         const old = row.path || (table === 'attempts' ? `audio/${row.id}.wav` : null);
         if (!old) continue;
-        const kind = table === 'attempts' || table === 'audios' ? 'audio' : table;
+        const kind = table === 'attempts' || table === 'audios' ? 'audio' : table === 'exports' && dirname(old).split('/').at(-1) === 'output' ? 'output' : table;
         const next = join(project.folder, kind, basename(old));
         mkdirSync(join(store.directory, project.folder, kind), { recursive: true });
         for (const suffix of ['', '.part']) {
@@ -273,7 +296,7 @@ export function stageProjectDeletion(store, project, paths, sharedPaths = []) {
   const shared = new Set(sharedPaths.map(path => resolve(store.directory, path)));
   const files = [...new Set(paths)].filter(Boolean).filter(path => !shared.has(resolve(store.directory, path)));
   for (const path of files) {
-    if (!['audio', 'masters', 'exports'].some(kind => path.startsWith(kind + '/')) && !(folder && path.startsWith(folder + '/')))
+    if (!['audio', 'masters', 'exports', 'output'].some(kind => path.startsWith(kind + '/')) && !(folder && path.startsWith(folder + '/')))
       fail('项目素材不在本项目或系统素材目录，未删除任何资料', 409);
     deletionPath(store, path);
   }

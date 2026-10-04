@@ -16,6 +16,7 @@ import {
   checkEntityRevision,
 } from "./domain.mjs";
 import { buildMaster, exportMaster, inspect, validateStoredAudio } from "./audio.mjs";
+import { analyzeTail, trimTail } from './tail-audio.mjs';
 import { fail, same, uid } from "./store.mjs";
 import { templateCatalog, templateOf } from "./templates.mjs";
 import { configurationDecided, attemptScope, relatedTarget, outstandingAttempts, reserveGrant, settleGrant } from './experience.mjs';
@@ -393,6 +394,21 @@ export function createWorker(store, domain, config) {
       store.put("attempts", attempt, j.id);
     });
   }
+  async function prepareAudio(attempt, file) {
+    const meta = await inspect(file);
+    // Reference creation/tests and scene effects are not dry paragraph speech.
+    if (!(attempt.segmentId || (attempt.targetKind === 'unit' && attempt.mode === 'dry'))) return meta;
+    const tail = await analyzeTail(file);
+    if (!tail.detected) return meta;
+    const temporary = `${file}.tail.part`;
+    try {
+      await rm(temporary, { force: true });
+      await trimTail(file, temporary, tail);
+      const cleaned = await inspect(temporary);
+      await rename(temporary, file);
+      return { ...cleaned, tailRepair: { reason: tail.reason, cutSeconds: tail.cutSeconds, removedSeconds: tail.removedSeconds, at: new Date().toISOString() } };
+    } finally { await rm(temporary, { force: true }); }
+  }
   async function generate(job) {
     for (const a of store.all("attempts", job.id)) {
       if (a.status !== "queued") continue;
@@ -538,7 +554,7 @@ export function createWorker(store, domain, config) {
         const length = Number(response.headers.get("content-length"));
         if (!size || (length && length !== size))
           throw new Error("音频接收长度不完整");
-        const meta = await inspect(file + ".part");
+        const meta = await prepareAudio(a, file + ".part");
         await rename(file + ".part", file);
         register(a, meta);
       } catch (e) {
@@ -676,7 +692,7 @@ export function createWorker(store, domain, config) {
           !store.maybe("audios", a.id) && !file.endsWith(".part") && existsSync(file)
         ) {
           try {
-            register(a, await inspect(file));
+            register(a, await prepareAudio(a, file));
             continue;
           } catch {}
         }

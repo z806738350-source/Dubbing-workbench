@@ -149,6 +149,7 @@ export default function App() {
   const onDraftChange = useCallback((id:string,dirty:boolean)=>setDraftIds(prev=>dirty ? (prev.includes(id) ? prev : [...prev,id]) : prev.filter(x=>x!==id)),[]);
 
   const bookmarks = useRef<Record<string, string>>({});
+  const chapterPlaybackSnapshots = useRef<Record<string, ChapterDetail>>({});
   const playIntent = useRef(0);
   const pendingPlay = useRef<string | null>(null);
   const pendingPlaySnapshot = useRef<{intent:number;arrangement:number;items:ChapterDetail["playbackItems"]}|null>(null);
@@ -206,6 +207,26 @@ export default function App() {
   chapterRef.current = chapterId;
   stateRef.current = state;
   playerRef.current = player;
+  const seekPlayback = useCallback((delta: number) => {
+    const el = audio.current;
+    if (!playerRef.current || !el || !el.readyState || !Number.isFinite(el.duration) || el.duration <= 0) return false;
+    el.currentTime = Math.max(0, Math.min(el.duration, el.currentTime + delta));
+    setPosition(el.currentTime);
+    return true;
+  }, []);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+        !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target && !target.matches("input[data-playback-progress]") && target.closest(
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="slider"], [role="spinbutton"], [role="listbox"], [role="tablist"], [role="menu"]',
+      )) return;
+      if (seekPlayback(event.key === "ArrowLeft" ? -5 : 5)) event.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [seekPlayback]);
   useEffect(()=>{if(modal==="tasks"&&taskRecord)taskRecordRef.current?.focus();},[modal,taskRecord?.attempt.id]);
   const refreshPending = useRef<Promise<void>|null>(null);
   const refresh = useCallback(() => {
@@ -215,7 +236,7 @@ export default function App() {
     const s = await api<State>("/state");
     const identity=s.settings.workspaceIdentity||s.settings.workspaceDirectory,changedWorkspace=!!draftWorkspace()&&draftWorkspace()!==identity;
     bindDraftWorkspace(identity);
-    if(changedWorkspace){playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;generationIntent.current++;setGenerationPlan(null);setGrantId(null);setDeleteTarget(null);setUnitPanelId(null);setVoiceTarget(null);setOldPreview(null);setModal(null);setChapter(null);setDraftSignal(value=>value+1);bookmarks.current={};audio.current?.pause();setPlayer(null);}
+    if(changedWorkspace){playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;generationIntent.current++;setGenerationPlan(null);setGrantId(null);setDeleteTarget(null);setUnitPanelId(null);setVoiceTarget(null);setOldPreview(null);setModal(null);setChapter(null);setDraftSignal(value=>value+1);bookmarks.current={};chapterPlaybackSnapshots.current={};audio.current?.pause();setPlayer(null);}
     setState(s);
     let id = chapterRef.current;
     if (!s.chapters.some((c) => c.id === id))
@@ -232,12 +253,23 @@ export default function App() {
       setSelected((prev) =>
         c.segments.some((x) => x.id === prev) ? prev : c.segments[0]?.id || "",
       );
+      const previousPlayback = chapterPlaybackSnapshots.current[id];
+      if (previousPlayback && !s.jobs.some(j => j.chapterId === id && active(j.status))) {
+        // Wait for the batch to settle, then resume at its first newly adopted sound.
+        // Existing history selections and structural edits keep the original bookmark rules.
+        const regenerated = c.playbackItems.find(item => item.validity === "matched" && item.audioId &&
+          previousPlayback.playbackItems.some(old => old.id === item.id && old.audioId !== item.audioId) &&
+          !previousPlayback.units?.some(unit => Object.values(unit.variants).some(variant =>
+            [variant.current, variant.previous, variant.approved].includes(item.audioId) || variant.history?.some(result => result.id === item.audioId))));
+        if (regenerated) bookmarks.current[id] = regenerated.unitId || regenerated.id;
+        chapterPlaybackSnapshots.current[id] = c;
+      }
       if (pendingPlay.current === id) {
         const master = c.masters.find((m) => m.arrangement === c.arrangement);
         if (master) {
           pendingPlay.current = null;
           const intent=pendingPlaySnapshot.current;pendingPlaySnapshot.current=null;
-          if(intent&&intent.intent===playIntent.current&&intent.arrangement===c.arrangement&&playbackIdentity(intent.items)===playbackIdentity(c.playbackItems)&&document.visibilityState==='visible'&&!s.jobs.some(j=>j.chapterId===id&&active(j.status))){
+          if(intent&&intent.intent===playIntent.current&&intent.arrangement===c.arrangement&&playbackIdentity(intent.items)===playbackIdentity(c.playbackItems)&&!s.jobs.some(j=>j.chapterId===id&&active(j.status))){
             const bookmark=bookmarks.current[id],point=master.mapping.find(x=>x.segmentId===bookmark||x.unitId===bookmark||x.memberIds?.includes(bookmark));
             if(bookmark&&!point){delete bookmarks.current[id];setNotice('断点已变化，试听已准备好，请重新选择播放位置。');}
             else setPlayer({kind:'masters',id:master.id,title:c.title,chapterId:id,arrangement:c.arrangement,playbackItems:c.playbackItems,master,intent:intent.intent,resumeAt:(point?.startFrame||0)/master.sampleRate});
@@ -254,7 +286,7 @@ export default function App() {
       const p = playerRef.current;
       const selectedUnit = p?.unitSession && c.units?.find(u=>u.id === p.unitSession!.id);
       const unitChanged = p?.unitSession && (!selectedUnit || selectedUnit.state !== p.unitSession.state || selectedUnit.variants[p.unitSession.mode].current !== p.unitSession.audioId || JSON.stringify(selectedUnit.variants[p.unitSession.mode].status.basis) !== JSON.stringify(p.unitSession.basis));
-      if (p?.chapterId === id && (p.arrangement !== c.arrangement || playbackIdentity(p.playbackItems) !== playbackIdentity(c.playbackItems) || unitChanged || s.jobs.some(j => j.chapterId === id && active(j.status)))) {
+      if (p?.chapterId === id && p.intent === playIntent.current && (p.arrangement !== c.arrangement || playbackIdentity(p.playbackItems) !== playbackIdentity(c.playbackItems) || unitChanged || s.jobs.some(j => j.chapterId === id && active(j.status)))) {
         playIntent.current++;
         audio.current?.pause();
         setPlayer(null);
@@ -287,7 +319,7 @@ export default function App() {
       setLoading(false);
     });
     const timer = setInterval(() => void refresh().catch(() => {}), 2500);
-    const onFocus = () => { playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;audio.current?.pause(); setConnectionReady(false); void refresh().catch((e) => setError(e.message)); };
+    const onFocus = () => { void refresh().catch((e) => setError(e.message)); };
     const onStorage = (e: StorageEvent) => { if (e.key?.startsWith("draft-")) setDraftSignal(n=>n+1); if (e.key === "workbench-change") void refresh().catch(e => setError(e.message)); };
     const onOffline = () => { playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;audio.current?.pause(); setConnectionReady(false); setError(connectionMessage); };
     window.addEventListener("focus", onFocus);
@@ -416,7 +448,7 @@ export default function App() {
     const current=stateRef.current;
     const remaining=current?.projects.filter(p=>p.id!==id) || [];
     if(projectRef.current===id){
-      for(const c of current?.chapters.filter(c=>c.projectId===id) || [])delete bookmarks.current[c.id];
+      for(const c of current?.chapters.filter(c=>c.projectId===id) || []){delete bookmarks.current[c.id];delete chapterPlaybackSnapshots.current[c.id];}
       pickProject(remaining[0]?.id || "",current);
     }
     setState(previous=>previous ? {...previous,projects:previous.projects.filter(p=>p.id!==id),chapters:previous.chapters.filter(c=>c.projectId!==id)} : previous);
@@ -489,6 +521,7 @@ export default function App() {
     const current=()=>intent===playIntent.current;
     pendingPlay.current=null;pendingPlaySnapshot.current=null;
     if(!master&&playerRef.current?.kind===kind&&playerRef.current?.id===id&&audio.current&&!audio.current.paused){audio.current.pause();setPlaying(false);return;}
+    audio.current?.pause();
     if (!connectionReady) { setError(connectionMessage); return; }
     if (kind !== "voices" && !standalone && chapter) {
       try {
@@ -515,7 +548,7 @@ export default function App() {
       audio.current
     ) {
       if (audio.current.paused)
-        setPlayer({...playerRef.current,intent,resumeAt:audio.current.currentTime});
+        setPlayer({...playerRef.current,intent,resumeAt:audio.current.ended || (Number.isFinite(audio.current.duration) && audio.current.duration > 0 && audio.current.currentTime >= audio.current.duration) ? 0 : audio.current.currentTime});
       else audio.current.pause();
       return;
     }
@@ -525,7 +558,6 @@ export default function App() {
       setNotice("原断点片段已拆分、合并或移除。请重新选择片段；再次点击试听将从开头播放。");
       return;
     }
-    audio.current?.pause();
     setPosition(0);
     setDuration(0);
     setTransitioning(false);
@@ -558,7 +590,10 @@ export default function App() {
       return;
     }
     const el = audio.current!;
-    if (player.master) { setFollow(true); setCurrentSegment(""); setCurrentMembers([]); }
+    if (player.master) {
+      if (chapter && chapter.id === player.chapterId) chapterPlaybackSnapshots.current[chapter.id] = chapter;
+      setFollow(true); setCurrentSegment(""); setCurrentMembers([]);
+    }
     el.src = player.kind === "demo" ? "/demo.mp3" : `/api/media/${player.kind}/${player.id}`;
     el.load();
     const intent=player.intent;
@@ -567,6 +602,7 @@ export default function App() {
   const playChapter = () => {
     const intent=++playIntent.current,current=()=>intent===playIntent.current&&chapterRef.current===chapter?.id;
     pendingPlay.current=null;pendingPlaySnapshot.current=null;
+    audio.current?.pause();
     return run(async()=>{
     if(!chapter)return;
     try{
@@ -577,6 +613,7 @@ export default function App() {
       if(fresh.playbackItems.some(item=>item.validity!=='matched'))throw new Error('有效修改已保存。请先生成待更新的声音，再整章试听。');
       const master=fresh.masters.find(m=>m.arrangement===fresh.arrangement);
       if(master){await startPlay('masters',master.id,fresh.title,master,false,undefined,intent);return;}
+      setPlayer(null);
       await api('/jobs',{kind:'master',chapterId:chapter.id,revision:fresh.revision,commandId:crypto.randomUUID()});
       if(!current())return;
       pendingPlay.current=chapter.id;pendingPlaySnapshot.current={intent,arrangement:fresh.arrangement,items:fresh.playbackItems};
@@ -584,7 +621,6 @@ export default function App() {
     });
     }catch(failure){if(current())throw failure;}
   });};
-  useEffect(()=>{const visibility=()=>{if(document.visibilityState!=='visible'){playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;audio.current?.pause();}};document.addEventListener('visibilitychange',visibility);return()=>document.removeEventListener('visibilitychange',visibility);},[]);
   const playDemo = () => {setModal(null);void startPlay("demo","welcome","免费演示 · 本机语音",undefined,true);};
   const closeOldPreview = () => {
     playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;
@@ -1198,14 +1234,10 @@ export default function App() {
               <button
                 className="icon"
                 aria-label="后退五秒"
+                aria-keyshortcuts="ArrowLeft"
+                title="后退 5 秒（←）"
                 disabled={!player}
-                onClick={() => {
-                  if (audio.current)
-                    audio.current.currentTime = Math.max(
-                      0,
-                      audio.current.currentTime - 5,
-                    );
-                }}
+                onClick={() => seekPlayback(-5)}
               >
                 <SkipBack size={17} />
               </button>
@@ -1228,14 +1260,10 @@ export default function App() {
               <button
                 className="icon"
                 aria-label="前进五秒"
+                aria-keyshortcuts="ArrowRight"
+                title="前进 5 秒（→）"
                 disabled={!player}
-                onClick={() => {
-                  if (audio.current)
-                    audio.current.currentTime = Math.min(
-                      duration,
-                      audio.current.currentTime + 5,
-                    );
-                }}
+                onClick={() => seekPlayback(5)}
               >
                 <SkipForward size={17} />
               </button>
@@ -1244,6 +1272,9 @@ export default function App() {
               <input
                 type="range"
                 aria-label="播放进度"
+                data-playback-progress
+                aria-keyshortcuts="ArrowLeft ArrowRight"
+                title="左右方向键后退或前进 5 秒"
                 min={0}
                 max={duration || 1}
                 step={0.01}
@@ -2878,9 +2909,9 @@ function Editor({
                 </button>
               </div>
             </details>
-            <div className="inspector-section">
+            <div className="inspector-section inspector-audio-version">
               <h3>音频版本</h3>
-              {enhancedUnit && <p className="hint">当前编排来自{enhancedUnit.kind === "group" ? "整组" : "单条"}{enhancedUnit.mode === "scene" ? "场景" : "干声"}版本。检查和返工以该单元的实际音频为准。</p>}
+              {enhancedUnit && <p className="hint">当前使用：{enhancedUnit.kind === "group" ? "整段" : "单条"}{enhancedUnit.mode === "scene" ? "带背景声" : "纯人声"}版本</p>}
               <dl className="details-list">
                 <div>
                   <dt>最近尝试</dt>
@@ -2895,24 +2926,28 @@ function Editor({
                   <dd>{names[activeVariant?.status.review || s.review]}</dd>
                 </div>
               </dl>
-              <div className="button-row">
+              <div className="inspector-audio-actions">
+              {enhancedUnit ? <button className="button secondary inspector-audio-manage" onClick={onUnit}><Headphones size={16} aria-hidden="true"/>检查与管理版本<ChevronRight size={16} aria-hidden="true"/></button> : <>
+              <div className="inspector-audio-restore">
                 <button
                   className="button small"
-                  disabled={!(activeVariant ? activeVariant.previous : s.previous) || locked || dirty}
-                  onClick={() => enhancedUnit ? onUnit() : setRestore(s.previous)}
+                  disabled={!s.previous || locked || dirty}
+                  title={!s.previous ? "还没有上一版声音" : "查看上一版的设置差异，再决定是否恢复"}
+                  onClick={() => setRestore(s.previous)}
                 >
-                  <RotateCcw size={13} />
-                  上一版
+                  <RotateCcw size={14} aria-hidden="true" />
+                  恢复上一版
                 </button>
                 <button
                   className="button small"
-                  disabled={!(activeVariant ? activeVariant.approved : s.approved) || locked || dirty}
-                  onClick={() => enhancedUnit ? onUnit() : setRestore(s.approved)}
+                  disabled={!s.approved || locked || dirty}
+                  title={!s.approved ? "还没有人工检查通过的声音版本" : "查看最近一次检查通过版的设置差异，再决定是否恢复"}
+                  onClick={() => setRestore(s.approved)}
                 >
-                  最近通过版
+                  恢复最近通过版
                 </button>
               </div>
-              {enhancedUnit ? <button className="button secondary small" onClick={onUnit}>查看单元检查与返工</button> : s.validity === "matched" && (
+              {s.validity === "matched" && (
                 <button
                   className="button secondary small warning"
                   disabled={!connectionReady || locked || dirty}
@@ -2930,6 +2965,8 @@ function Editor({
                   标记需返工
                 </button>
               )}
+              </>}
+              </div>
             </div>
           </>
         ) : tab === "original" ? (
@@ -3139,18 +3176,49 @@ function ExportDialog({
   const [gapRevision, setGapRevision] = useState(c.revision);
   const [confirmation, setConfirmation] = useState(c);
   const [submitted,setSubmitted]=useState(false);
+  const [opening,setOpening]=useState<string|null>(null),[openingError,setOpeningError]=useState(""),[opened,setOpened]=useState<string|null>(null);
   const live=useRef(true);useEffect(()=>()=>{live.current=false;},[]);
+  const currentExport=c.exports.slice().reverse().find(e=>e.current&&e.fileExists&&e.format===format);
+  const otherExports=c.exports.slice().reverse().filter(e=>e.id!==currentExport?.id);
+  const pendingReview=c.playbackItems.filter(item=>item.validity==='matched'&&item.review==='pending').length;
+  const exportJob=jobs.find(j=>j.chapterId===c.id&&j.kind==='export');
+  const exporting=!!exportJob&&active(exportJob.status);
+  const openExport=async(id:string)=>{
+    if(opening)return;
+    setOpening(id);setOpeningError("");setOpened(null);
+    try{await api('/exports/'+id+'/reveal',{});if(live.current)setOpened(id);}
+    catch(error){if(live.current)setOpeningError((error as Error).message);}
+    finally{if(live.current)setOpening(null);}
+  };
   return (
     <Dialog title="检查与导出" onClose={onClose}>
+      <div className="export-panel">
       <div className="export-overview">
         <Headphones size={26} />
         <div>
           <h3>{c.title}</h3>
           <p>
-            {ready} / {total} 句音频就绪 · {passed} 句检查通过 · {c.playbackItems.filter(item=>item.validity==='matched'&&item.review==='pending').length} 个声音单元待检查
+            {ready} / {total} 句就绪 · {passed} 句已检查
           </p>
         </div>
       </div>
+      <div className="export-destination">
+        <span><FolderOpen size={16}/>成品保存位置</span>
+        <p>{c.outputDirectory}</p>
+      </div>
+      {currentExport&&<section className="export-ready" aria-label="当前成品">
+        <div className="export-file-info">
+          <strong><Check size={17}/>{currentExport.format.toUpperCase()} 成品已保存</strong>
+          <span>编排 {currentExport.arrangement} · {new Date(currentExport.createdAt).toLocaleString()}</span>
+        </div>
+        <button className="button primary" disabled={!connectionReady||!!opening} aria-busy={opening===currentExport.id}
+          onClick={()=>void openExport(currentExport.id)}>
+          <FolderOpen size={18}/>{opening===currentExport.id?'正在打开…':'打开成品文件夹'}
+        </button>
+      </section>}
+      {openingError&&<p className="error-inline" role="alert">{openingError}</p>}
+      {opened&&<p className="success-text export-feedback" role="status">已在访达中定位成品</p>}
+      <div className="export-settings">
       <Field label="片段间隔（秒）">
         <input
           type="number"
@@ -3161,6 +3229,18 @@ function ExportDialog({
           onChange={(e) => setGap(Number(e.target.value))}
         />
       </Field>
+      <Field label="导出格式">
+        <Select
+          label="导出格式"
+          value={format}
+          options={[
+            { value: "wav", label: "WAV · 48 kHz 无损" },
+            { value: "mp3", label: "MP3 · 192 kbps" },
+          ]}
+          onChange={value=>{setFormat(value);setOpened(null);setOpeningError("");}}
+        />
+      </Field>
+      </div>
       {gap !== c.gap && (
         <Form
           label="保存间隔"
@@ -3175,23 +3255,13 @@ function ExportDialog({
             await onRefresh();
           }}
         >
-          <p className="hint">保存间隔后，将按新编排准备试听与导出。</p>
+          <p className="hint">请先保存新间隔，再导出。</p>
         </Form>
       )}
-      <Field label="导出格式">
-        <Select
-          label="导出格式"
-          value={format}
-          options={[
-            { value: "wav", label: "WAV · 48 kHz 无损母版" },
-            { value: "mp3", label: "MP3 · 192 kbps" },
-          ]}
-          onChange={setFormat}
-        />
-      </Field>
       <Form
-        label="确认检查并导出"
-        busy={!connectionReady || gap !== c.gap || !!c.arrangementIssues?.length}
+        label={exporting?'正在导出…':pendingReview?'确认检查并导出':currentExport?'重新导出':'导出成品'}
+        primary={!currentExport}
+        busy={!connectionReady || exporting || gap !== c.gap || !!c.arrangementIssues?.length}
         onSubmit={async () => {
           await withSavedDrafts("chapter:"+c.id, undefined,async()=>{
           const receipt=await submitOperation("export:"+c.id+":"+format,{
@@ -3211,36 +3281,26 @@ function ExportDialog({
           await onRefresh();
         }}
       >
-        {!!c.arrangementIssues?.length && <p className="error-inline" role="alert">当前编排需修复：{c.arrangementIssues.join("；")}。请先明确解除无效分组并核对单条。</p>}
-        {(confirmation.revision !== c.revision || confirmation.arrangement !== c.arrangement) && <p className="warning">本章内容或音频编排已变化，请关闭后重新打开，核对再导出。</p>}
-        <p className="hint">
-          将当前匹配音频的待检查项统一确认为通过。需返工、身份未确认、缺漏或过期音频必须先处理。
-        </p>
+        {!!c.arrangementIssues?.length && <p className="error-inline" role="alert">请先修复编排：{c.arrangementIssues.join("；")}</p>}
+        {(confirmation.revision !== c.revision || confirmation.arrangement !== c.arrangement) && <p className="warning">内容已变化，请重新打开此窗口核对。</p>}
+        {!!pendingReview&&<p className="hint">导出时会将 {pendingReview} 个待检查声音确认为通过，请先完成试听。</p>}
       </Form>
-      {submitted&&<p className="hint" role="status">导出任务已提交，在本机继续处理。成品完成后会显示在下方；关闭此面板不影响任务。</p>}
-      {c.exports.length > 0 && (
-        <div className="section-rule">
-          <h3>已导出的文件</h3>
-          {c.exports.some(e=>e.current&&e.fileExists)&&<p className="success-text" role="status">成品已就绪。点击对应格式即可直接下载；下方标明实际编排和完成时间。</p>}
-          {c.exports.some(e => !e.fileExists) && <p className="hint">缺失文件不能下载。源音频完整时，可在上方重新导出当前版本，不产生配音费用；历史版本请从备份恢复。</p>}
-          {c.exports.slice().reverse().map((e) => (
-            <a
-              className="download-row"
-              key={e.id}
-              download={`${c.title}-编排${e.arrangement}-${e.createdAt.replace(/[:.]/g, "-")}.${e.format}`}
-              href={e.fileExists ? `/api/media/exports/${e.id}` : undefined}
-              aria-disabled={!e.fileExists}
-            >
-              <Download size={16} />
-              {e.format.toUpperCase()}
-              <span>
-                <b>{!e.fileExists ? "文件缺失" : e.current ? "当前结果" : "非当前结果"}</b>
-                <small>编排 {e.arrangement} · {new Date(e.createdAt).toLocaleString()}</small>
-              </span>
-            </a>
-          ))}
-        </div>
+      {submitted&&exporting&&<p className="hint" role="status">正在生成成品，完成后自动保存。</p>}
+      {submitted&&exportJob?.status==='failed'&&<p className="error-inline" role="alert">{exportJob.error||'导出失败，请重试。'}</p>}
+      {otherExports.length > 0 && (
+        <details className="export-history">
+          <summary>其他已导出文件（{otherExports.length}）</summary>
+          {otherExports.map(e=><div className="export-history-row" key={e.id}>
+            <div className="export-file-info">
+              <strong>{e.format.toUpperCase()} · {!e.fileExists?'文件缺失':e.current?'当前结果':'历史版本'}</strong>
+              <span>编排 {e.arrangement} · {new Date(e.createdAt).toLocaleString()}</span>
+            </div>
+            <button className="button" disabled={!connectionReady||!e.fileExists||!!opening} aria-busy={opening===e.id}
+              onClick={()=>void openExport(e.id)}><FolderOpen size={16}/>{opening===e.id?'正在打开…':'打开文件夹'}</button>
+          </div>)}
+        </details>
       )}
+      </div>
     </Dialog>
   );
 }

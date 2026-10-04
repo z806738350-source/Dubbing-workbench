@@ -3,7 +3,7 @@ import { join, dirname, basename } from "node:path";
 import { fail, same, text, uid } from "./store.mjs";
 import { storedAudioUnavailable } from "./audio.mjs";
 import { compile, templateOf, templateCatalog, listTemplates, listUnitTemplates } from "./templates.mjs";
-import { createProjectFolder, renameProjectFolder, stageProjectDeletion, recoverProjectDeletions } from './workspace.mjs';
+import { createProjectFolder, renameProjectFolder, stageProjectDeletion, recoverProjectDeletions, projectFile } from './workspace.mjs';
 export { compile } from "./templates.mjs";
 import { createEnhancement, defaultFeatures } from "./enhancement.mjs";
 import { configurationDecided, decide, humanChanges, inheritStructure, outstandingAttempts, policyOf } from './experience.mjs';
@@ -429,6 +429,7 @@ export function createDomain(store) {
       });
       return {
         ...c,
+        outputDirectory: join(store.directory, projectFile(store, id, 'output', '')),
         segments: segments.map((s) => ({ ...s, ...segmentStatus(store, s) })),
         playbackItems: segments.filter(s => !s.excluded).map(s => ({id:s.id, audioId:s.current, basis:basisOf(s), validity:segmentStatus(store,s).validity})),
         coverage: coverage(c, segments),

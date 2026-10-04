@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { constants, existsSync, rmSync, statSync, renameSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { projectFile } from './workspace.mjs';
+import { projectFile, projectExportFile } from './workspace.mjs';
 import { fail, uid, text } from "./store.mjs";
 const exec = promisify(execFile);
 export const ffmpeg =
@@ -274,7 +274,7 @@ export async function buildMaster(store, segments, gap, id) {
   }
 }
 export async function exportMaster(store, master, id, format) {
-  const path = projectFile(store, master.chapterId, 'exports', `${id}.${format}`),
+  const path = projectExportFile(store, { chapterId: master.chapterId, arrangement: master.arrangement, id, format }),
     file = join(store.directory, path);
   await mkdir(dirname(file), { recursive: true });
   if (format === "wav")

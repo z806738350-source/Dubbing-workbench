@@ -16,7 +16,7 @@ import {
 } from "./audio.mjs";
 import { createAnalysis } from "./analysis.mjs";
 import { createExperience } from './experience.mjs';
-import { workspaceDirectory, workspaceIdentity, workspaceConfig as defaultWorkspaceConfig, copyWorkspace, saveWorkspaceLocation, recoverProjectFolders, chooseWorkspaceDirectory, readRuntime, workspaceDiagnostics } from './workspace.mjs';
+import { workspaceDirectory, workspaceIdentity, workspaceConfig as defaultWorkspaceConfig, copyWorkspace, saveWorkspaceLocation, recoverProjectFolders, chooseWorkspaceDirectory, readRuntime, workspaceDiagnostics, revealExport } from './workspace.mjs';
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 if (existsSync(join(root, ".env.kunpo")))
@@ -230,6 +230,8 @@ export async function startServer({
       if (req.method === "GET" && /^\/api\/voices\/[^/]+\/usage$/.test(path))
         return send(res, 200, domain.voiceUsage(path.split("/")[3]));
       if (req.method === 'GET' && path === '/api/workspace/diagnostics') return send(res,200,workspaceDiagnostics(store));
+      if (req.method === 'POST' && /^\/api\/exports\/[^/]+\/reveal$/.test(path))
+        return send(res, 200, await revealExport(store, decodeURIComponent(path.split('/')[3])));
       if (req.method === 'GET' && /^\/api\/projects\/[^/]+\/deletion-plan$/.test(path))
         return send(res, 200, domain.deletionPlan({id:path.split('/')[3]}));
       if (req.method === 'GET' && /^\/api\/chapters\/[^/]+\/structural-repair-plan$/.test(path))

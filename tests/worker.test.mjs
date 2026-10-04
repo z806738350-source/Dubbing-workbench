@@ -93,6 +93,89 @@ function setup(t) {
   return { store, d, c, project, v, worker, enqueue, dir };
 }
 
+function tailPulseWav(withResidual = false) {
+  const bytes = wav(48000);
+  bytes.fill(0, 44 + 32000 * 2);
+  for (let i = 45840; i < 46080; i++) bytes.writeInt16LE(Math.round(Math.sin((i - 45840) / 4) * 15000), 44 + i * 2);
+  if (withResidual) for (let i = 47232; i < 47472; i++) bytes.writeInt16LE(i % 2 ? 120 : -120, 44 + i * 2);
+  return bytes;
+}
+
+function longTailSilenceWav() {
+  const bytes = wav(96000);
+  bytes.fill(0, 44 + 32000 * 2);
+  return bytes;
+}
+
+test('生成自动清理干声尾脉冲和长空白，单条/声音单元/组合统一保存并供整章试听使用', async t => {
+  for (const tail of ['pulse', 'silence']) for (const kind of ['legacy', 'unit', 'group']) await t.test(`${tail}/${kind}`, async t => {
+    const { store, d, c, dir, worker, enqueue } = setup(t), raw = tail === 'pulse' ? tailPulseWav(true) : longTailSilenceWav(); let calls = 0;
+    t.mock.method(globalThis, 'fetch', async () => { calls++; return new Response(raw, { headers: { 'Content-Type': 'audio/wav' } }); });
+    let id = d.list(c.id)[0].id;
+    if (kind === 'group') id = d.mutate('unit.create', { chapterId: c.id, revision: store.get('chapters', c.id).revision, ids: d.list(c.id).map(s => s.id) }).id;
+    const job = kind === 'legacy' ? enqueue() : worker.enqueue({ kind: 'unit-generate', chapterId: c.id,
+      revision: store.get('chapters', c.id).revision, unitIds: kind === 'unit' ? d.list(c.id).map(s => s.id) : [id], mode: 'dry', commandId: uid() });
+    await worker.tick(); assert.equal(store.get('jobs', job.id).status, 'success');
+    const rows = d.enhancement.resolve(c.id);
+    for (const row of rows) {
+      const audio = row.a, bytes = readFileSync(join(dir, audio.path));
+      assert.equal(row.validity, 'matched'); assert.ok(audio.tailRepair);
+      assert.ok(tail === 'pulse' ? audio.duration < 0.955 && audio.duration > 0.94 : Math.abs(audio.duration - (32000 / 48000 + 0.25)) < 0.006);
+      assert.deepEqual(bytes.subarray(44), raw.subarray(44, bytes.length));
+    }
+    worker.enqueue({ kind: 'master', chapterId: c.id, revision: store.get('chapters', c.id).revision, commandId: uid() });
+    await worker.tick();
+    const master = store.all('masters', c.id).at(-1);
+    const duration = rows.reduce((sum, row) => sum + row.a.duration, 0) + store.get('chapters', c.id).gap * (rows.length - 1);
+    assert.ok(master); assert.ok(Math.abs(master.duration - duration) < 0.001);
+    assert.deepEqual(master.mapping.map(item => item.audioId), rows.map(row => row.a.id));
+    assert.deepEqual(master.mapping.map(item => item.endFrame - item.startFrame), rows.map(row => Math.round(row.a.duration * 48000)));
+    assert.equal(calls, rows.length, '清理和整章试听均不增加模型调用');
+  });
+});
+
+test('自动尾清理不改变正常音频、参考试音或有意的场景音效', async t => {
+  for (const [kind, tail] of [['clean'], ['silent'], ['voice-test', 'pulse'], ['voice-test', 'silence'], ['scene', 'pulse'], ['scene', 'silence']]) await t.test(`${kind}/${tail || 'unchanged'}`, async t => {
+    const { store, d, c, v, dir, worker, enqueue } = setup(t), raw = kind === 'clean' || kind === 'silent' ? wav(96000) : tail === 'pulse' ? tailPulseWav() : longTailSilenceWav();
+    if (kind === 'silent') raw.fill(0, 44);
+    t.mock.method(globalThis, 'fetch', async () => new Response(raw, { headers: { 'Content-Type': 'audio/wav' } }));
+    let job;
+    if (kind === 'clean' || kind === 'silent') job = enqueue();
+    if (kind === 'voice-test') job = worker.enqueue({ kind, voiceId: v.id, entityRevision: 1, text: '参考试音', commandId: uid() });
+    if (kind === 'scene') {
+      const id = d.list(c.id)[0].id, unit = d.enhancement.getUnit(id);
+      d.mutate('event.create', { chapterId: c.id, revision: store.get('chapters', c.id).revision, unitId: id,
+        entityRevision: unit.revision, kind: 'effect', description: '轻敲', memberId: id, position: 'after', state: 'adopted' });
+      job = worker.enqueue({ kind: 'unit-generate', chapterId: c.id, revision: store.get('chapters', c.id).revision, unitIds: [id], mode: 'scene', commandId: uid() });
+    }
+    await worker.tick(); assert.equal(store.get('jobs', job.id).status, 'success');
+    for (const attempt of store.all('attempts', job.id)) {
+      const audio = store.get('audios', attempt.id);
+      assert.equal(audio.tailRepair, undefined); assert.deepEqual(readFileSync(join(dir, audio.path)), raw);
+    }
+  });
+});
+
+test('中断恢复也自动清理已接收的尾脉冲和长空白，重复恢复不改写或重发', async t => {
+  for (const tail of ['pulse', 'silence']) for (const kind of ['legacy', 'unit', 'group']) await t.test(`${tail}/${kind}`, async t => {
+    const { store, d, c, dir, worker, enqueue } = setup(t), raw = tail === 'pulse' ? tailPulseWav(true) : longTailSilenceWav();
+    let id = d.list(c.id)[0].id;
+    if (kind === 'group') id = d.mutate('unit.create', { chapterId: c.id, revision: store.get('chapters', c.id).revision, ids: d.list(c.id).map(s => s.id) }).id;
+    const job = kind === 'legacy' ? enqueue({ ids: [id] }) : worker.enqueue({ kind: 'unit-generate', chapterId: c.id,
+      revision: store.get('chapters', c.id).revision, unitIds: [id], mode: 'dry', commandId: uid() });
+    const a = store.all('attempts', job.id)[0], { dirname } = await import('node:path');
+    mkdirSync(dirname(join(dir, a.path)), { recursive: true }); writeFileSync(join(dir, a.path), raw);
+    store.put('attempts', { ...a, status: 'sending' }, job.id);
+    store.put('jobs', { ...job, status: 'running' }, c.id);
+    t.mock.method(globalThis, 'fetch', () => assert.fail('恢复不得重发请求'));
+    await worker.recover();
+    const audio = store.get('audios', a.id), cleaned = readFileSync(join(dir, audio.path));
+    assert.ok(audio.tailRepair); assert.equal(d.enhancement.resolve(c.id).find(row => row.s.id === id).a.id, audio.id);
+    assert.ok(cleaned.length < raw.length); assert.deepEqual(cleaned.subarray(44), raw.subarray(44, cleaned.length));
+    await worker.recover(); assert.deepEqual(store.get('audios', a.id), audio); assert.deepEqual(readFileSync(join(dir, audio.path)), cleaned);
+  });
+});
+
 test('F03 选用旧匹配声音不清未决请求；一次明确决定后不再追问旧unknown',async t=>{
   const {store,d,c,worker,enqueue}=setup(t),id=d.list(c.id)[0].id;let calls=0;
   t.mock.method(globalThis,'fetch',async()=>{calls++;if(calls===2)throw Error('lost receipt');return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
@@ -1152,7 +1235,7 @@ test('恢复结束的旧构建只登记非当前历史，保留新任务结果',
     const fs=(await import('node:fs/promises')).default,{syncBuiltinESMExports}=await import('node:module'),rename=fs.rename;
     let release,arrive,held=false;const barrier=new Promise(r=>release=r),arrived=new Promise(r=>arrive=r);
     const mocked=t.mock.method(fs,'rename',async(from,to)=>{
-      if(!held&&String(to).startsWith(join(dir,kind==='master'?'masters':'exports'))){held=true;arrive();await barrier}
+      if(!held&&String(to).startsWith(join(dir,kind==='master'?'masters':'output'))){held=true;arrive();await barrier}
       return rename(from,to);
     });syncBuiltinESMExports();
     const pending=worker.tick();
@@ -1556,6 +1639,6 @@ test('按项目目录保存新生成音频、母版和导出', async t => {
   const master = await buildMaster(store, segments, 0.5, uid());
   assert.ok(master.path.startsWith(project.name + '/masters/'));
   const exported = await exportMaster(store, { ...master, chapterId: c.id }, uid(), 'wav');
-  assert.ok(exported.startsWith(project.name + '/exports/'));
+  assert.ok(exported.startsWith(project.name + '/output/'));
   assert.deepEqual(readFileSync(join(dir, exported)), readFileSync(join(dir, master.path)));
 });
