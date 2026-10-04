@@ -1,4 +1,4 @@
-import { templateCatalog, templateOf, sceneContract, validEventDescription, scenePresenceConflicts } from "./templates.mjs";
+import { templateCatalog, templateOf, sceneContract, validEventDescription, scenePresenceConflicts, inspectScenePresence } from "./templates.mjs";
 import { textModel, knownRoles } from "./domain.mjs";
 import { fail, uid, same } from "./store.mjs";
 import { policyOf, decide, reserveGrant, settleGrant } from './experience.mjs';
@@ -666,26 +666,58 @@ export function createAnalysis(store, domain, config) {
     state: "adopted", evidence: { kind: i.evidence, quote: i.sourceQuote, ...(i.sourceQuotes?.length ? { quotes: i.sourceQuotes } : {}), reason: i.reason || "", suggestionId: draft.id, itemId: i.id },
   });
   const sceneDefinition = e => ({kind:e.kind,description:e.description,memberId:e.memberId,position:e.position,startMemberId:e.startMemberId,endMemberId:e.endMemberId,startPosition:e.startMemberId ? e.startPosition || 'before' : undefined,endPosition:e.endMemberId ? e.endPosition || 'after' : undefined});
+  function reuseTarget(p) {
+    const draft = store.get('suggestions',p.id);
+    if (draft.kind !== 'scene' || !['ready','applied','partial'].includes(draft.status)) fail('本轮背景建议尚不可复用，请选择已有可用建议',409);
+    if (p.chapterId !== draft.chapterId || p.unitId !== draft.unitId) fail('历史建议不属于当前生成单元',409);
+    const c = domain.editable(draft.chapterId,p.revision), u = domain.enhancement.getUnit(p.unitId), project = store.get('projects',c.projectId);
+    if (u.chapterId !== c.id || ['dissolved','retired'].includes(u.state) || p.unitRevision !== u.revision) fail('声音背景目标已改变，请刷新后核对',409);
+    if (p.draftVersion !== draft.draftVersion) fail('草稿已改变，请刷新后核对再复用',409);
+    if (p.contextRevision !== undefined && p.contextRevision !== project.contextRevision) fail('项目共同要求已改变，请刷新后核对',409);
+    return {draft,c,u,project};
+  }
+  function inspectReuse({draft,c,u,project}) {
+    const checked = structuredClone(draft), presence = u.variants.scene.backgroundPresence ?? 'clear';
+    if (checked.batches) inspectDraft(checked,presence);
+    let memberError;
+    try { domain.enhancement.members(u); } catch (error) { memberError = error; }
+    const existing = domain.enhancement.events(u).filter(e => e.state === 'adopted' && e.validity === 'valid');
+    const items = checked.items.map(item => {
+      const currentIssues = checked.batches ? [...(item.issues || [])] : [], historicalIssues = draft.items.find(i => i.id === item.id)?.issues || [];
+      if (item.unitId !== u.id) currentIssues.push('建议指向了其他生成单元');
+      if (!evidenceKinds.includes(item.evidence)) currentIssues.push('请选择依据类别');
+      if (item.reason !== undefined && (typeof item.reason !== 'string' || item.reason.length > 2000)) currentIssues.push('判断说明格式无效');
+      let definition, validationError = memberError;
+      try {
+        if (memberError) throw memberError;
+        domain.enhancement.assertEventRange(u,item);
+        definition = domain.enhancement.validateEvent(u,sceneEvent(checked,item));
+      } catch (error) { validationError = error; currentIssues.push(error.message); }
+      const inspection = inspectScenePresence({backgroundPresence:presence,guidance:u.variants.scene.guidance,events:[definition || {...item,state:'adopted'}]});
+      currentIssues.push(...inspection.conflicts);
+      const alreadyIncluded = !!definition && existing.some(e => same(sceneDefinition(e),sceneDefinition(definition)));
+      return {itemId:item.id,historicalIssues:[...historicalIssues],currentIssues:[...new Set(currentIssues)],warnings:inspection.warnings,alreadyIncluded,canReuse:!currentIssues.length && !alreadyIncluded,definition,validationError};
+    });
+    return {id:draft.id,draftVersion:draft.draftVersion,chapterId:c.id,unitId:u.id,target:{chapterRevision:c.revision,unitRevision:u.revision,sceneRevision:u.variants.scene.revision,contextRevision:project.contextRevision,sourceVersion:c.sourceVersion || 1},items};
+  }
+  function previewReuse(p) {
+    const result = inspectReuse(reuseTarget(p));
+    return {...result,items:result.items.map(({definition,validationError,...item})=>item)};
+  }
   function reuse(p) {
     return store.transaction(() => {
-      const draft = store.get('suggestions',p.id);
-      if (draft.kind !== 'scene' || !['ready','applied','partial'].includes(draft.status)) fail('本轮背景建议尚不可复用，请选择已有可用建议',409);
-      if (p.chapterId !== draft.chapterId || p.unitId !== draft.unitId) fail('历史建议不属于当前生成单元',409);
-      const c = domain.editable(draft.chapterId,p.revision), u = domain.enhancement.getUnit(p.unitId);
-      if (u.chapterId !== c.id || ['dissolved','retired'].includes(u.state) || p.unitRevision !== u.revision) fail('声音背景目标已改变，请刷新后核对',409);
-      if (p.draftVersion !== draft.draftVersion) fail('草稿已改变，请刷新后核对再复用',409);
-      if (draft.batches) inspectDraft(draft,u.variants.scene.backgroundPresence ?? 'clear');
+      const target = reuseTarget(p), {draft,c,u} = target;
       if (!Array.isArray(p.selected) || !p.selected.length || p.selected.some(id => !draft.items.some(i => i.id === id))) fail('请勾选需要加入的历史声音事件');
-      domain.enhancement.members(u);
-      const selected = draft.items.filter(i => p.selected.includes(i.id));
-      if (selected.some(i => i.unitId !== u.id || i.issues?.length)) fail('所选历史建议的单元、范围或内容无效，请先核对',409);
-      selected.forEach(i => domain.enhancement.assertEventRange(u,i));
-      const definitions = selected.map(i => domain.enhancement.validateEvent(u,sceneEvent(draft,i)));
-      const conflicts = scenePresenceConflicts({backgroundPresence:u.variants.scene.backgroundPresence ?? 'clear',guidance:u.variants.scene.guidance,events:definitions});
-      if (conflicts.length) fail(conflicts.join('；'),409);
+      const selected = inspectReuse(target).items.filter(i => p.selected.includes(i.itemId));
+      for (const item of selected) {
+        if (draft.batches && item.currentIssues.length) fail(item.currentIssues.join('；'),409);
+        if (item.validationError) throw item.validationError;
+        if (item.currentIssues.length) fail(item.currentIssues.join('；'),409);
+      }
+      const definitions = selected.map(i => i.definition);
       const existing = domain.enhancement.events(u).filter(e => e.state === 'adopted' && e.validity === 'valid'), additions = [], skippedItemIds = [];
       definitions.forEach((e,index) => {
-        if ([...existing,...additions].some(current => same(sceneDefinition(current),sceneDefinition(e)))) skippedItemIds.push(selected[index].id);
+        if ([...existing,...additions].some(current => same(sceneDefinition(current),sceneDefinition(e)))) skippedItemIds.push(selected[index].itemId);
         else additions.push(e);
       });
       const added = additions.length ? domain.enhancement.addEvents(u.id,additions,p.unitRevision) : [];
@@ -872,6 +904,7 @@ export function createAnalysis(store, domain, config) {
     edit,
     apply,
     reuse,
+    previewReuse,
     stop() {
       closing = true;
     },

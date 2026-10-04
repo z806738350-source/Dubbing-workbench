@@ -264,6 +264,11 @@ export async function startServer({
         return send(res, 200, analysis.apply(await body(req)));
       if (req.method === "POST" && path === "/api/analysis/reuse")
         return send(res, 200, analysis.reuse(await body(req)));
+      if (req.method === "GET" && path === "/api/analysis/reuse-preview") {
+        const p = Object.fromEntries(new URL(req.url, `http://${host}`).searchParams);
+        for (const field of ['revision','unitRevision','draftVersion','contextRevision']) if (p[field] !== undefined) p[field] = Number(p[field]);
+        return send(res, 200, analysis.previewReuse(p));
+      }
       if (req.method === "POST" && path === "/api/analysis/edit")
         return send(res, 200, analysis.edit(await body(req)));
       if (req.method === "POST" && path === "/api/analysis/resume")
@@ -361,7 +366,7 @@ export async function startServer({
             : e.code === "ENOENT"
               ? "音频文件缺失，请重新准备或恢复备份"
               : "本地服务处理失败，请保留当前编辑",
-          ...(e.status && e.retryClass ? { code: e.code, scope: e.scope, retryClass: e.retryClass } : {}),
+          ...(e.status && e.retryClass ? { code: e.code, scope: e.scope, retryClass: e.retryClass, ...(e.notApplied === true ? {outcome:e.outcome,notApplied:true,fieldErrors:e.fieldErrors} : {}) } : {}),
         });
       else res.destroy();
     } finally { if (counted) activeRequests--; }

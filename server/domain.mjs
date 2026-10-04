@@ -8,6 +8,7 @@ export { compile } from "./templates.mjs";
 import { createEnhancement, defaultFeatures } from "./enhancement.mjs";
 import { configurationDecided, decide, humanChanges, inheritStructure, outstandingAttempts, policyOf } from './experience.mjs';
 import { shortRanges } from './semantic.mjs';
+import { importProblems } from './import-validation.mjs';
 
 export const defaultConfig = templateOf("dry-v1").defaults;
 export const active = (j) => ["queued", "running"].includes(j.status);
@@ -520,15 +521,19 @@ export function createDomain(store) {
             if (!same(receipt.request,p)) fail('同一操作标识的内容不同',409);
             return store.get('chapters',receipt.chapterId);
           }
+          const fieldErrors = importProblems(p);
+          if (Object.keys(fieldErrors).length) fail(Object.values(fieldErrors).join('；'),400,{
+            code:'import-validation-rejected',outcome:'notApplied',notApplied:true,fieldErrors,
+            scope:{kind:'operation',action:'chapter.create',projectId:p.projectId,operationId:p.operationId},
+          });
           const source =
             typeof p.source === "string"
               ? p.source.replace(/\r\n?/g, "\n")
               : "";
-          if (source.length > 1000000 || (typeof p.importedSource === "string" && p.importedSource.length > 1000000)) fail("单章文字过长，请按章导入");
           const c = {
             id: uid(),
             projectId: p.projectId,
-            title: text(p.title, "章节名称", 150),
+            title: p.title,
             source,
             sourceVersion: 1,
             importedSource:

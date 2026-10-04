@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compile, compileNativeScene, listTemplates, listUnitTemplates, templateCatalog, resolveCompiler, scenePresenceConflicts } from '../server/templates.mjs';
+import { compile, compileNativeScene, listTemplates, listUnitTemplates, templateCatalog, resolveCompiler, scenePresenceConflicts, inspectScenePresence } from '../server/templates.mjs';
 
 const single = () => ({
   template: 'scene-v3-native',
@@ -165,4 +165,69 @@ test('存在感守卫独立于历史编译，已保存v4及旧模板仍逐字复
   }
   s.events[1].transition={memberId:'s1',quote:'缓缓睁开眼睛',occurrence:1,development:'宁静旋律继续',volumeChange:'对白期间压到几乎不可闻'};
   const savedTransition=compile(s);assert.match(savedTransition,/音量变化：对白期间压到几乎不可闻/);assert.equal(resolveCompiler(s,savedTransition),'scene-v4-presence-1');assert.equal(scenePresenceConflicts(s).length,2);assert.equal(compile(s),savedTransition);
+});
+
+test('H02-1 人声清晰度要求不成为背景冲突，原指导与历史提示保持',()=>{
+  const input={...single(),template:'scene-v4-presence-1',backgroundPresence:'clear',guidance:'不要让人声听不清'},before=structuredClone(input),prompt=compile(input);
+  assert.deepEqual(scenePresenceConflicts(input),[]);
+  assert.deepEqual(input,before);assert.ok(prompt.includes(input.guidance));assert.equal(compile(input),prompt);
+});
+
+test('H02-2 背景清楚与避免旁白听不清共享规则不误报',()=>{
+  const input={backgroundPresence:'clear',guidance:'背景清楚，但避免旁白听不清'},before=structuredClone(input);
+  assert.deepEqual(scenePresenceConflicts(input),[]);assert.deepEqual(input,before);
+});
+
+test('H02-3 明确背景全程不可闻仍阻断并指出背景来源',()=>{
+  const conflicts=scenePresenceConflicts({backgroundPresence:'clear',guidance:'背景音乐全程几乎不可闻'});
+  assert.equal(conflicts.length,1);assert.match(conflicts[0],/清楚.*整体场景指导.*几乎不可闻/);
+});
+
+test('H02-4 否定背景不可闻不冲突，但否定不得豁免同段另一要求',()=>{
+  assert.deepEqual(scenePresenceConflicts({backgroundPresence:'clear',guidance:'不要让背景音乐几乎不可闻'}),[]);
+  for(const guidance of ['不要让人声听不清；背景音乐全程几乎不可闻','不要让背景音乐几乎不可闻，但环境声全程听不到']){
+    const conflicts=scenePresenceConflicts({backgroundPresence:'clear',guidance});assert.equal(conflicts.length,1,guidance);assert.match(conflicts[0],/整体场景指导/);
+  }
+});
+
+test('H02-5 轻背景盖过旁白与相应否定按对象和极性区分',()=>{
+  assert.equal(scenePresenceConflicts({backgroundPresence:'subtle',guidance:'背景音乐明确盖过旁白'}).length,1);
+  assert.deepEqual(scenePresenceConflicts({backgroundPresence:'subtle',guidance:'不要让背景音乐盖过旁白'}),[]);
+  assert.equal(scenePresenceConflicts({backgroundPresence:'subtle',guidance:'不要让音乐盖过旁白；环境声压过台词'}).length,1);
+});
+
+test('H02-6 局部尾声、全程和removed来源互不扩大范围',()=>{
+  for(const backgroundPresence of ['clear','natural']){
+    const event={kind:'music',state:'adopted',description:'旋律清楚可辨',transition:{volumeChange:'尾声渐弱，直到几乎不可闻'}};
+    assert.deepEqual(scenePresenceConflicts({backgroundPresence,events:[event]}),[]);
+    const whole={...event,transition:{volumeChange:'全程几乎不可闻，尾声渐弱'}};
+    const conflicts=scenePresenceConflicts({backgroundPresence,events:[whole]});assert.equal(conflicts.length,1);assert.match(conflicts[0],/转折音量/);
+    assert.deepEqual(scenePresenceConflicts({backgroundPresence,events:[{...whole,state:'removed'}]}),[]);
+  }
+});
+
+test('H02 明确人声对象在指导及已采用事件仍保留，不借来源误判背景',()=>{
+  for(const backgroundPresence of ['clear','natural'])for(const guidance of ['人声听不清','旁白的声音极微弱','不要让人声听不清','背景清楚且避免旁白听不清']){
+    const input={backgroundPresence,guidance,events:[{kind:'music',state:'adopted',description:guidance,transition:{volumeChange:guidance}}]},before=structuredClone(input);
+    assert.deepEqual(inspectScenePresence(input),{conflicts:[],warnings:[]},guidance);assert.deepEqual(input,before);
+  }
+  assert.deepEqual(inspectScenePresence({backgroundPresence:'subtle',guidance:'旁白盖过人声'}),{conflicts:[],warnings:[]});
+});
+
+test('H02 对象不明或人声背景共同要求仅提醒，同一来源不复制正则',()=>{
+  for(const guidance of ['听不清','极微弱','背景与人声都听不清','几乎不可闻的背景与人声']){
+    const input={backgroundPresence:'clear',guidance},before=structuredClone(input),inspection=inspectScenePresence(input);
+    assert.deepEqual(inspection.conflicts,[],guidance);assert.equal(inspection.warnings.length,1,guidance);assert.match(inspection.warnings[0],/整体场景指导.*对象.*范围.*可继续/);
+    assert.deepEqual(scenePresenceConflicts(input),inspection.conflicts);assert.deepEqual(input,before);
+  }
+  const event={kind:'music',state:'adopted',description:'听不清'},inspection=inspectScenePresence({backgroundPresence:'clear',events:[event]});
+  assert.equal(inspection.conflicts.length,1);assert.match(inspection.conflicts[0],/已采用音乐.*背景/);assert.deepEqual(inspection.warnings,[]);
+});
+
+test('H02 同一局部尾声范围在指导、事件描述和转折音量共享依据',()=>{
+  for(const backgroundPresence of ['clear','natural']){
+    const description='背景音乐尾声渐弱，直到几乎不可闻',input={backgroundPresence,guidance:description,events:[{kind:'music',state:'adopted',description,transition:{volumeChange:description}}]},before=structuredClone(input);
+    assert.deepEqual(inspectScenePresence(input),{conflicts:[],warnings:[]});assert.deepEqual(input,before);
+    input.guidance='背景音乐全程几乎不可闻，末尾渐弱';assert.equal(inspectScenePresence(input).conflicts.length,1);
+  }
 });

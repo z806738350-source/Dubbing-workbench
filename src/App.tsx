@@ -37,6 +37,7 @@ import {
   ArrowDown,
 } from "lucide-react";
 import { api, action } from "./api";
+import { importLimits, importProblems } from "../server/import-validation.mjs";
 import { bindDraftWorkspace, draftWorkspace, readDraft, writeDraft, clearDraft, hasDraft, listDrafts, recoverDraft, discardDraft, finishDraftSave } from "./drafts";
 import type { DraftRecord } from "./drafts";
 import AnalysisDialog from "./AnalysisDialog";
@@ -1422,16 +1423,20 @@ export default function App() {
       )}
       {modal === "chapter" && (
         <ImportChapter
+          key={draftWorkspace()+"/"+projectId}
           projectId={projectId}
           onClose={() => setModal(null)}
           onCreated={async (id,prepare) => {
-            if(projectRef.current!==projectId)return;
+            if(projectRef.current!==projectId)return false;
+            const workspaceIdentity=draftWorkspace();
             pickChapter(id);
             setModal(null);
             setPanelMode(prepare ? "analysis" : "settings");
             if(prepare&&window.innerWidth<1216)setInspectorOpen(true);
             await refresh();
+            if(projectRef.current!==projectId||draftWorkspace()!==workspaceIdentity)return false;
             if(prepare)setNotice("原文已导入。选择AI协作方式和本章文本授权后，开始准备。");
+            return true;
           }}
         />
       )}
@@ -1866,37 +1871,78 @@ function RenameProject({ project, save, onClose }: { project: Project; save: (a:
   </Dialog>;
 }
 
-type ImportDraft = {source:string;title:string;prepare:boolean;imported:{text:string;name:string}|null;command?:{operationId:string;payload:Record<string,unknown>;chapterId?:string}};
-function ImportChapter({projectId,onClose,onCreated}:{projectId:string;onClose:()=>void;onCreated:(id:string,prepare?:boolean)=>Promise<void>}) {
+type ImportCommand = {operationId:string;payload:Record<string,unknown>;chapterId?:string;rejection?:{message:string;fieldErrors:Record<string,string>;at:string}};
+type ImportDraft = {source:string;title:string;prepare:boolean;imported:{text:string;name:string}|null;command?:ImportCommand;history?:ImportCommand[]};
+function ImportChapter({projectId,onClose,onCreated}:{projectId:string;onClose:()=>void;onCreated:(id:string,prepare?:boolean)=>Promise<void|boolean>}) {
   const draftId="import-chapter/"+projectId;
   const workspaceIdentity=useRef(draftWorkspace()).current;
   const [draft,setDraft]=useState<ImportDraft>(()=>readDraft<ImportDraft>(draftId)?.draft||{source:"",title:"",prepare:true,imported:null});
   const [error,setError]=useState(""),[pending,setPending]=useState(false),[reading,setReading]=useState(false),[saved,setSaved]=useState(true);
   const live=useRef(true),fileIntent=useRef(0),draftRef=useRef(draft);draftRef.current=draft;
   useEffect(()=>()=>{live.current=false;fileIntent.current++;},[]);
-  const persist=(value:ImportDraft)=>{
-    if(live.current){draftRef.current=value;setDraft(value);}
-    try{if(value.source||value.title||value.command)writeDraft(draftId,value,0,workspaceIdentity);else clearDraft(draftId,undefined,false,workspaceIdentity);if(live.current)setSaved(true);}
-    catch{if(live.current){setSaved(false);setError("未能可靠暂存到浏览器。请复制原文保存；恢复存储后再导入，本次尚未创建章节。");}throw new Error("未能可靠保存导入草稿，请复制原文并恢复浏览器存储后重试。");}
+  const current=()=>live.current&&draftWorkspace()===workspaceIdentity;
+  const persist=(value:ImportDraft,update=current())=>{
+    try{
+      const history=new Map([...(readDraft<ImportDraft>(draftId,workspaceIdentity)?.draft.history||[]),...(value.history||[])].map(command=>[command.operationId,command]));
+      if(history.size)value={...value,history:[...history.values()]};
+      if(update){draftRef.current=value;setDraft(value);}
+      if(value.source||value.title||value.command||value.history?.length)writeDraft(draftId,value,0,workspaceIdentity);else clearDraft(draftId,undefined,false,workspaceIdentity);if(update)setSaved(true);
+    }catch{if(update){draftRef.current=value;setDraft(value);setSaved(false);setError("未能可靠暂存到浏览器。请复制原文保存；恢复存储后再核对导入回执。");}throw new Error("未能可靠保存导入草稿，请复制原文并恢复浏览器存储后重试。");}
   };
-  const edit=(change:Partial<ImportDraft>)=>{if(change.source!==undefined){fileIntent.current++;setReading(false);}try{persist({...draftRef.current,...change});setError("");}catch{/* The full editable text remains in this page for copying. */}};
-  const close=()=>{fileIntent.current++;onClose();};
+  const recordCommand=(command:ImportCommand)=>{
+    const stored=readDraft<ImportDraft>(draftId,workspaceIdentity)?.draft;
+    const owns=stored?.command?.operationId===command.operationId;
+    const value=owns?{...stored!,command}:{...(stored||{source:"",title:"",prepare:true,imported:null}),history:[...(stored?.history||[]).filter(item=>item.operationId!==command.operationId),command]};
+    persist(value,current()&&draftRef.current.command?.operationId===command.operationId&&owns);
+    return owns;
+  };
+  const payloadOf=(value:ImportDraft):Record<string,unknown>=>JSON.parse(JSON.stringify({projectId,title:value.title.trim()||"新章节",source:value.source,importedSource:value.imported?.text||value.source,sourceFilename:value.imported?.name,segment:!value.prepare}));
+  const locked=!!draft.command&&!draft.command.rejection;
+  const problems={...(draft.command?.rejection&&JSON.stringify(draft.command.payload)===JSON.stringify(payloadOf(draft))?draft.command.rejection.fieldErrors:{}),...importProblems(payloadOf(draft))};
+  const edit=(change:Partial<ImportDraft>)=>{if(!current()||(draftRef.current.command&&!draftRef.current.command.rejection))return;if(change.source!==undefined){fileIntent.current++;setReading(false);}try{persist({...draftRef.current,...change});setError("");}catch{/* The full editable text remains in this page for copying. */}};
+  const close=()=>{live.current=false;fileIntent.current++;onClose();};
   const submit=async()=>{
+    if(!current()||pending)return;
     if(!draftRef.current.source.trim())throw new Error("请先选择文件或粘贴原文");
     fileIntent.current++;setPending(true);
     try{
       let next=draftRef.current;
-      if(!next.command){next={...next,command:{operationId:crypto.randomUUID(),payload:{projectId,title:next.title.trim()||"新章节",source:next.source,importedSource:next.imported?.text||next.source,sourceFilename:next.imported?.name,segment:!next.prepare}}};persist(next);}
-      if(!next.command!.chapterId){const chapter=await action<{id:string}>("chapter.create",{...next.command!.payload,operationId:next.command!.operationId});next={...next,command:{...next.command!,chapterId:chapter.id}};persist(next);}
-      if(!live.current||draftWorkspace()!==workspaceIdentity)return;
-      await onCreated(next.command!.chapterId!,next.prepare);
-      clearDraft(draftId,undefined,false,workspaceIdentity);
+      if(!next.command||next.command.rejection){
+        const payload=payloadOf(next),fieldErrors=importProblems(payload);
+        if(Object.keys(fieldErrors).length){setError(Object.values(fieldErrors).join('；'));return;}
+        if(next.command&&JSON.stringify(next.command.payload)===JSON.stringify(payload)){setError("上次导入明确未创建章节，请修改后重新导入。");return;}
+        next={...next,history:next.command?[...(next.history||[]),next.command]:next.history,command:{operationId:crypto.randomUUID(),payload}};
+      }
+      if(!next.command!.chapterId){
+        persist(next);
+        const command=next.command!;
+        try{
+          const chapter=await action<{id:string}>("chapter.create",{...command.payload,operationId:command.operationId});
+          if(!chapter?.id)throw new Error("未取得这次导入的章节回执，请核对原操作后重试。");
+          next={...next,command:{...command,chapterId:chapter.id}};
+        }catch(failure){
+          const rejected=failure as Error&{status?:number;code?:string;outcome?:string;notApplied?:boolean;scope?:Record<string,unknown>;fieldErrors?:Record<string,string>};
+          if(rejected.status===400&&rejected.code==='import-validation-rejected'&&rejected.outcome==='notApplied'&&rejected.notApplied===true&&rejected.scope?.action==='chapter.create'&&rejected.scope.operationId===command.operationId&&rejected.scope.projectId===projectId){
+            recordCommand({...command,rejection:{message:rejected.message,fieldErrors:rejected.fieldErrors||{},at:new Date().toISOString()}});
+            return;
+          }
+          throw failure;
+        }
+        if(!recordCommand(next.command!))return;
+      }
+      if(!current()||draftRef.current.command?.operationId!==next.command!.operationId)return;
+      if(await onCreated(next.command!.chapterId!,next.prepare)===false)return;
+      const stored=readDraft<ImportDraft>(draftId,workspaceIdentity);
+      if(stored?.draft.command?.operationId===next.command!.operationId){
+        if(stored.draft.history?.length)persist({source:"",title:"",prepare:true,imported:null,history:[...stored.draft.history,next.command!]},false);
+        else clearDraft(draftId,JSON.stringify(stored),false,workspaceIdentity);
+      }
     }finally{if(live.current)setPending(false);}
   };
   const readFile=async(file:File)=>{
-    const intent=++fileIntent.current,current=()=>live.current&&fileIntent.current===intent;
+    const intent=++fileIntent.current,current=()=>live.current&&draftWorkspace()===workspaceIdentity&&fileIntent.current===intent;
     setError("");setReading(false);
-    if(file.size>4*1024*1024){setError("文件超过4 MB，请按章节拆成较小文件后导入。");return;}
+    if(file.size>importLimits.fileBytes){setError("文件超过4 MB，请按章节拆成较小文件后导入。");return;}
     setReading(true);
     try{
       let bytes:ArrayBuffer;
@@ -1904,23 +1950,24 @@ function ImportChapter({projectId,onClose,onCreated}:{projectId:string;onClose:(
       if(!current())return;
       let text:string;
       try{text=new TextDecoder("utf-8",{fatal:true}).decode(bytes);}catch{setError("文件不是 UTF-8 编码，请转换编码后重试。");return;}
-      if(text.length>1000000){setError("单章文字超过100万字符，请按章拆分后导入。");return;}
+      if(text.length>importLimits.source){setError("单章文字超过100万字符，请按章拆分后导入。");return;}
       persist({...draftRef.current,imported:{text,name:file.name},source:text.replace(/\r\n?/g,"\n"),title:file.name.replace(/\.(txt|md)$/i,"")});
     }catch(failure){if(current())setError((failure as Error).message);}finally{if(current())setReading(false);}
   };
   return <Dialog title="导入章节" onClose={close} wide>
-    <Form label={draft.command?.chapterId?"打开已导入章节":draft.command?"恢复这次导入回执":draft.prepare?"导入并进入AI准备":"仅导入并本地分段"} busy={reading||pending} onSubmit={submit}>
-      <label className="upload-zone"><Upload size={22}/><strong>{reading?"正在读取文件…":"选择 TXT / Markdown 文件"}</strong><span>UTF-8 编码 · 最多4 MB · Markdown 按纯文本保留</span><input type="file" accept=".txt,.md" disabled={pending||!!draft.command} onChange={event=>{const file=event.target.files?.[0];if(file)void readFile(file);}}/></label>
-      <Field label="章节名称"><input value={draft.title} disabled={pending||!!draft.command} onChange={event=>edit({title:event.target.value})} placeholder="例如：第一章"/></Field>
-      <Field label="原文预览" hint="原文完整保留；编辑预览不会改写导入文件来源。"><textarea value={draft.source} disabled={pending||!!draft.command} onChange={event=>edit({source:event.target.value})} rows={9} placeholder="在这里粘贴本章原文"/></Field>
-      <label className="check-label"><input type="checkbox" checked={draft.prepare} disabled={pending||!!draft.command} onChange={event=>edit({prepare:event.target.checked})}/>导入后进入AI准备</label>
+    <Form label={draft.command?.chapterId?"打开已导入章节":draft.command?.rejection?"修改后重新导入":draft.command?"恢复这次导入回执":draft.prepare?"导入并进入AI准备":"仅导入并本地分段"} busy={reading||pending} onSubmit={submit}>
+      <label className="upload-zone"><Upload size={22}/><strong>{reading?"正在读取文件…":"选择 TXT / Markdown 文件"}</strong><span>UTF-8 编码 · 最多4 MB · Markdown 按纯文本保留</span><input type="file" accept=".txt,.md" disabled={pending||locked} onChange={event=>{const file=event.target.files?.[0];if(file)void readFile(file);}}/></label>
+      <Field label="章节名称" hint={`${draft.title.trim().length} / ${importLimits.title} 字符 · 留空使用“新章节”`}><input value={draft.title} disabled={pending||locked} aria-invalid={!!problems.title} aria-describedby={problems.title?"import-title-error":undefined} onChange={event=>edit({title:event.target.value})} placeholder="例如：第一章"/>{problems.title&&<p id="import-title-error" className="error-inline" role="alert">{problems.title}</p>}</Field>
+      <Field label="原文预览" hint="原文完整保留；编辑预览不会改写导入文件来源。"><textarea value={draft.source} disabled={pending||locked} aria-invalid={!!(problems.source||problems.importedSource)} onChange={event=>edit({source:event.target.value})} rows={9} placeholder="在这里粘贴本章原文"/>{(problems.source||problems.importedSource)&&<p className="error-inline" role="alert">{problems.source||problems.importedSource}</p>}</Field>
+      <label className="check-label"><input type="checkbox" checked={draft.prepare} disabled={pending||locked} onChange={event=>edit({prepare:event.target.checked})}/>导入后进入AI准备</label>
       <p className="hint">非空草稿关闭后仍可找回。仅本地分段不产生 API 费用。</p>
-      {draft.command&&<p className="hint">{draft.command.chapterId?"章节已经创建。继续只打开原章节，不会再次创建或发起AI请求。":"本次导入命令已保存。重试只核对同一次命令，不会创建第二章。"}</p>}
+      {draft.command&&<p className="hint" role="status">{draft.command.chapterId?"章节已经创建。继续只打开原章节，不会再次创建或发起AI请求。":draft.command.rejection?"上次导入明确未创建章节。原文仍保留，请修改后重新导入。":"本次导入回执尚未确认。重试只核对同一次命令，不会创建第二章。"}</p>}
       <p className={saved?"hint":"warning"} role="status">{saved?"导入草稿已暂存在本机":"草稿尚未可靠暂存，请先复制原文"}</p>
       {error&&<p className="error-inline" role="alert">{error}</p>}
       <div className="source-summary"><span>{Array.from(draft.source).length.toLocaleString()} 字符</span><span>只统一换行，不润色正文</span></div>
+      {!!draft.history?.length&&<details><summary>导入命令记录 · {draft.history.length}</summary>{draft.history.map(command=><p className="hint" key={command.operationId}>{String(command.payload.title)} · {command.rejection?`未创建：${command.rejection.message}`:command.chapterId?"已创建章节":"回执待核对"}<br/>操作标识：{command.operationId}</p>)}</details>}
     </Form>
-    {!!draft.source&&!draft.command&&<button className="text-button" disabled={pending||reading} onClick={()=>{clearDraft(draftId);setDraft({source:"",title:"",prepare:true,imported:null});setError("");}}>放弃这份导入草稿</button>}
+    {!!draft.source&&!draft.command&&<button className="text-button" disabled={pending||reading} onClick={()=>{try{persist({source:"",title:"",prepare:true,imported:null});setError("");}catch{/* Keep the draft available when storage is unavailable. */}}}>放弃这份导入草稿</button>}
   </Dialog>;
 }
 

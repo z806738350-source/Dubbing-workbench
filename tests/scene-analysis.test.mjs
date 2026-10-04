@@ -299,3 +299,57 @@ test('旧无presence批次明确重分析时冻结当前选择并实际发送，
     assert.deepEqual(next.batches[0].attempts[0],old.batches[0].attempts[0]);
   });
 });
+
+test('H01免费预检在当前subtle核对旧clear问题，保留历史且正式复用只加入一次',async t=>{
+  const {store,chapter,unit,analysis,start,change,item,result}=setup(t);let calls=0;
+  global.fetch=async()=>{calls++;return result([{...item,kind:'music',description:'极微弱，几乎不可闻的音乐'}]);};
+  const r=await start();await analysis.close();const draft=store.get('suggestions',r.id);assert.ok(draft.items[0].issues.length);
+  change('unit.update',{mode:'scene',backgroundPresence:'subtle'});
+  const p=reusePayload(store,chapter,unit,draft),before={c:store.get('chapters',chapter.id),u:store.get('units',unit.id),events:store.all('events',unit.id)};
+  const preview=analysis.previewReuse(p),row=preview.items[0];
+  assert.deepEqual(row.historicalIssues,draft.items[0].issues);assert.deepEqual(row.currentIssues,[]);assert.equal(row.canReuse,true);assert.equal(row.alreadyIncluded,false);
+  assert.equal(preview.target.chapterRevision,p.revision);assert.equal(preview.target.unitRevision,p.unitRevision);
+  assert.deepEqual(store.get('chapters',chapter.id),before.c);assert.deepEqual(store.get('units',unit.id),before.u);assert.deepEqual(store.all('events',unit.id),before.events);assert.deepEqual(store.get('suggestions',r.id),draft);
+  assert.equal(analysis.reuse(p).addedCount,1);const again=reusePayload(store,chapter,unit,draft);
+  assert.equal(analysis.previewReuse(again).items[0].alreadyIncluded,true);assert.equal(analysis.reuse(again).addedCount,0);assert.equal(store.all('events',unit.id).length,1);assert.deepEqual(store.get('suggestions',r.id),draft);assert.equal(calls,1);
+});
+
+test('H01免费预检用当前clear与指导区分合法项，旧subtle结论不豁免正式复用',async t=>{
+  const {store,chapter,unit,analysis,start,change,item,result}=setup(t);let calls=0;
+  change('unit.update',{mode:'scene',backgroundPresence:'subtle'});global.fetch=async()=>{calls++;return result([{...item,kind:'music',description:'极微弱，几乎不可闻的音乐'},item]);};
+  const r=await start();await analysis.close();const draft=store.get('suggestions',r.id);assert.deepEqual(draft.items[0].issues,[]);change('unit.update',{mode:'scene',backgroundPresence:'clear'});
+  const p=reusePayload(store,chapter,unit,draft),preview=analysis.previewReuse(p);
+  assert.equal(preview.items[0].canReuse,false);assert.ok(preview.items[0].currentIssues.length);assert.equal(preview.items[1].canReuse,true);assert.throws(()=>analysis.reuse(p),{status:409});assert.equal(store.all('events',unit.id).length,0);
+  assert.equal(analysis.reuse({...p,selected:[draft.items[1].id]}).addedCount,1);change('unit.update',{mode:'scene',guidance:'背景全程几乎不可闻'});
+  const checked=analysis.previewReuse(reusePayload(store,chapter,unit,draft));assert.ok(checked.items.every(i=>!i.canReuse&&i.currentIssues.length));assert.deepEqual(store.get('suggestions',r.id),draft);assert.equal(calls,1);
+});
+
+test('H01免费预检拒绝当前失效成员、引文和范围；历史与未选项目保持完整',async t=>{
+  for(const invalid of ['member','quote','range','length'])await t.test(invalid,async t=>{
+    const {store,chapter,segment,unit,analysis,start,item,result}=setup(t);global.fetch=async()=>result([item,{...item,position:'before'}]);const r=await start();await analysis.close();const draft=store.get('suggestions',r.id);
+    if(invalid==='member'){const current=store.get('segments',segment.id);current.retired=true;store.put('segments',current,chapter.id);}
+    if(invalid==='quote'){const current=store.get('chapters',chapter.id);current.source='当前原文没有对应引文。';store.put('chapters',current,current.projectId);}
+    if(invalid==='range')Object.assign(draft.batches[0].items[0],{startMemberId:segment.id,endMemberId:segment.id,startPosition:'after',endPosition:'before'});
+    if(invalid==='length')draft.batches[0].items[0].description='💧'.repeat(1501);
+    store.put('suggestions',draft,chapter.id);const p=reusePayload(store,chapter,unit,draft),c=store.get('chapters',chapter.id),u=store.get('units',unit.id);
+    const preview=analysis.previewReuse(p);assert.equal(preview.items[0].canReuse,false);assert.ok(preview.items[0].currentIssues.length);assert.throws(()=>analysis.reuse(p),error=>[400,409].includes(error.status));
+    assert.deepEqual(store.get('suggestions',r.id),draft);assert.deepEqual(store.get('chapters',chapter.id),c);assert.deepEqual(store.get('units',unit.id),u);assert.equal(store.all('events',unit.id).length,0);
+    if(['range','length'].includes(invalid))assert.equal(preview.items[1].canReuse,true,'单项错误不禁用合法候选');
+  });
+});
+
+test('H01免费预检后presence或内容更新使旧版本不可提交，无部分写入',async t=>{
+  for(const action of ['presence','guidance','source'])await t.test(action,async t=>{
+    const {store,domain,chapter,unit,analysis,start,change,item,result}=setup(t);global.fetch=async()=>result([item]);const r=await start();await analysis.close();const draft=store.get('suggestions',r.id),p=reusePayload(store,chapter,unit,draft);
+    assert.equal(analysis.previewReuse(p).items[0].canReuse,true);
+    if(action==='source'){const c=store.get('chapters',chapter.id);c.source='新原文。';c.sourceVersion=(c.sourceVersion||1)+1;domain.touch(c,true,false);}
+    else change('unit.update',{mode:'scene',...(action==='presence'?{backgroundPresence:'subtle'}:{guidance:'背景清楚且保持正文清晰'})});
+    assert.throws(()=>analysis.reuse(p),{status:409});assert.throws(()=>analysis.previewReuse(p),{status:409});assert.equal(store.all('events',unit.id).length,0);assert.deepEqual(store.get('suggestions',r.id),draft);
+  });
+});
+
+test('H01免费预检共享不确定提醒不作硬阻断，正式复用不改历史说明',async t=>{
+  const {store,chapter,unit,analysis,start,change,item,result}=setup(t);global.fetch=async()=>result([item]);const r=await start();await analysis.close();const draft=store.get('suggestions',r.id);
+  change('unit.update',{mode:'scene',guidance:'听不清'});const p=reusePayload(store,chapter,unit,draft),preview=analysis.previewReuse(p);
+  assert.deepEqual(preview.items[0].currentIssues,[]);assert.ok(preview.items[0].warnings.length);assert.equal(preview.items[0].canReuse,true);assert.equal(analysis.reuse(p).addedCount,1);assert.deepEqual(store.get('suggestions',r.id),draft);
+});

@@ -99,35 +99,54 @@ export function sceneIntentConflicts(s) {
   return [['music',['无音乐','不要音乐','不添加音乐']],['environment',['无环境声','不要环境声','不添加环境声']],['effect',['无音效','不要音效','不添加音效']]].filter(([kind,words])=>(s.events || []).some(e=>e.kind===kind) && clauses.some(clause=>words.includes(clause))).map(([kind])=>`整体场景指导明确禁止${({music:'音乐',environment:'环境声',effect:'音效'})[kind]}，但已采用同类事件，请一次核对这段的指导和事件`);
 }
 
-export function scenePresenceConflicts({backgroundPresence, guidance, events = []}) {
-  // ponytail: match only explicit audibility phrases and bounded negations;
-  // other prose stays unchanged for review instead of attempting general NLP.
+export function inspectScenePresence({backgroundPresence, guidance, events = []}) {
+  // ponytail: finite sound subjects, polarity and ending phrases, not general
+  // NLP. Unresolved subjects get advice; clarify their object/range in place.
   const patterns = {
     clear: /几乎(?:不可闻|听不(?:清|到|见))|听不(?:清|到|见)|极(?:其|度)?微弱|极弱|微弱(?:的)?底噪/gu,
     natural: /几乎(?:不可闻|听不(?:清|到|见))|听不(?:清|到|见)|极(?:其|度)?微弱/gu,
     subtle: /(?:压过|盖过|盖住|压住|淹没)(?:人声|旁白|对白|台词)|喧宾夺主/gu,
   }, pattern = patterns[backgroundPresence];
-  if (!pattern) return [];
-  const negated = /(?:不要|不能|不会|无需|避免|防止|勿|别|禁止|并非|不是|并不|不再|不应|不用|不必|不需要|不)(?:把|将|让|使|音乐|背景|环境声|音效|声音|声响|音量|压低|降低|降到|淡出|减弱|保持|变得|仅|只|到|成|为|得|的|\s)*$/u;
-  const sources = [{label:'整体场景指导',value:guidance}, ...events.filter(event=>event.state === undefined || event.state === 'adopted').flatMap((event,index)=>{
+  if (!pattern) return {conflicts:[],warnings:[]};
+  const negated = /(?:不要|不能|不会|无需|避免|防止|勿|别|禁止|并非|不是|并不|不再|不应|不用|不必|不需要|不)(?:把|将|让|使|音乐|背景|环境声|音效|声音|声响|音量|压低|降低|降到|淡出|减弱|保持|变得|明确|全程|始终|一直|仅|只|到|成|为|得|的|\s)*$/u;
+  const subjects = /(?<background>背景(?:音乐|声)?|环境声|音乐|音效|声响|底噪|水滴|配乐|伴奏)|(?<voice>人声|旁白|对白|台词|讲话|说话|叙述|字词|吐字)/gu;
+  const whole = /全程|全段|整段|全部|始终|一直|从头到尾|整个|(?:对白|讲话|说话|叙述|旁白)期间/u;
+  const sources = [{label:'整体场景指导',value:guidance,object:'unknown'}, ...events.filter(event=>event.state === undefined || event.state === 'adopted').flatMap((event,index)=>{
     const label = `已采用${({music:'音乐',environment:'环境声',effect:'音效'})[event.kind] || '声音'}（第${index+1}个事件）`;
-    return [{label,value:event.description}, {label:label+'的转折音量',value:event.transition?.volumeChange,allowEnding:true}];
+    const object = ['music','environment','effect'].includes(event.kind) ? 'background' : 'unknown';
+    return [{label,value:event.description,object}, {label:label+'的转折音量',value:event.transition?.volumeChange,object,transition:true}];
   })];
-  return sources.flatMap(({label,value,allowEnding})=>{
+  const warnings = [], conflicts = sources.flatMap(({label,value,object:sourceObject,transition})=>{
     if (typeof value !== 'string') return [];
-    let ending = false;
+    let ending = false, warned = false;
     for (const clause of value.split(/[，,；;。\n!?！？]|但|而是|而非|却/u)) {
       const localEnding = /(?:末尾|尾声|收尾|最后|结束后).*(?:淡出|渐弱|减弱)|(?:淡出|渐弱|减弱).*(?:末尾|尾声|收尾|结束后)/u.test(clause);
-      const endingOnly = allowEnding && backgroundPresence !== 'subtle' && (localEnding || ending && /^\s*(?:直到|直至|淡出至|渐弱至)/u.test(clause)) && !/全程|全段|整段|全部|始终|一直|从头到尾|整个|(?:对白|讲话|说话|叙述|旁白)期间/u.test(clause);
+      const endingOnly = backgroundPresence !== 'subtle' && (localEnding || ending && /^\s*(?:直到|直至|淡出至|渐弱至)/u.test(clause)) && !whole.test(clause);
       for (const match of clause.matchAll(pattern)) {
-        if (negated.test(clause.slice(0,match.index)) || endingOnly) continue;
-        return [`背景存在感已选“${({clear:'清楚',natural:'自然',subtle:'轻'})[backgroundPresence]}”，但${label}要求“${match[0]}”，请核对存在感和声音要求`];
+        const before = clause.slice(0,match.index), after = clause.slice(match.index+match[0].length);
+        // A speech-period marker in an event's volume field is its range, not
+        // the voice being made inaudible; explicit voice subjects still win.
+        const preceding = [...before.matchAll(subjects)].filter(subject=>!subject.groups.voice || !/^(?:期间|时|过程中|之间|结束后)/u.test(before.slice(subject.index+subject[0].length)) && !(transition && /(?:整段|全段|整个)$/u.test(before.slice(0,subject.index))));
+        const following = [...after.matchAll(subjects)], targets = preceding.length ? preceding : following;
+        const target = preceding.length ? targets.at(-1) : targets[0], adjacent = preceding.length ? targets.at(-2) : targets[1];
+        const text = preceding.length ? before : after;
+        const joined = target && adjacent && /^(?:和|与|及|、|跟|\s)+$/u.test(text.slice(Math.min(target.index+target[0].length,adjacent.index+adjacent[0].length),Math.max(target.index,adjacent.index)));
+        const object = joined && !!target.groups.voice !== !!adjacent.groups.voice ? 'mixed' : target ? target.groups.voice ? 'voice' : 'background' : /底噪/u.test(match[0]) ? 'background' : sourceObject;
+        const candidate = {object,polarity:negated.test(before)?'negated':'required',range:endingOnly?'localEnding':whole.test(clause)?'whole':'adoptedRange',source:label,phrase:match[0]};
+        if (candidate.object === 'voice' || candidate.polarity === 'negated' || candidate.range === 'localEnding') continue;
+        if (candidate.object !== 'background') {
+          if (!warned) warnings.push(`${candidate.source}中的“${candidate.phrase}”尚未明确背景或人声对象，请核对对象和范围；原文保留，可继续操作`);
+          warned = true;continue;
+        }
+        return [`背景存在感已选“${({clear:'清楚',natural:'自然',subtle:'轻'})[backgroundPresence]}”，但${candidate.source}对背景要求“${candidate.phrase}”，请核对存在感和声音要求`];
       }
       ending = !!endingOnly;
     }
     return [];
   });
+  return {conflicts,warnings};
 }
+export const scenePresenceConflicts = input => inspectScenePresence(input).conflicts;
 
 function compilePresenceScene(s) {
   const conflicts = sceneIntentConflicts(s);

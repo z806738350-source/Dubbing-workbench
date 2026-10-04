@@ -4,7 +4,7 @@ import { Select } from "./components";
 import { draftScopeRevision, withSavedDrafts } from "./autosave";
 import TaskAuthorization from "./TaskAuthorization";
 import { submitOperation } from "./taskOperations";
-import type { ChapterDetail, GenerationUnit, SoundEvent } from "./types";
+import type { ChapterDetail, GenerationUnit, SoundEvent, SceneReusePreview } from "./types";
 
 type Suggestion = { id: string; kind: string; unitId: string; unitRevision: number; revision: number; contextRevision: number; draftVersion: number; status: string; error?: string; issues?: string[]; createdAt?: string; model: string; items: {
   id: string; description: string; kind: string; memberId: string; position: string; startMemberId?: string; startPosition?: string; endMemberId?: string; endPosition?: string; evidence: string; reason?: string; sourceQuote?: string; issues?: string[];
@@ -18,11 +18,28 @@ export default function SceneSuggestions({ unit, chapter, contextRevision, model
   const [historyOpen, setHistoryOpen] = useState(false);
   const [grantId, setGrantId] = useState<string | null>(null), [pending, setPending] = useState<"analysis" | "apply" | null>(null), [error, setError] = useState(""), [applyError, setApplyError] = useState("");
   const [appliedMessage, setAppliedMessage] = useState("");
+  const [reusePreview, setReusePreview] = useState<{key:string;result:SceneReusePreview} | null>(null), [previewError,setPreviewError] = useState(""), [previewRetry,setPreviewRetry] = useState(0);
   const live=useRef(true);useEffect(()=>()=>{live.current=false;},[]);
   const record = records.find(record => record.id === view) || records.at(-1);
-  useEffect(() => { setSelected([]); setAppliedMessage(""); }, [record?.id, record?.draftVersion]);
+  useEffect(() => { setSelected([]); setAppliedMessage("");setApplyError(""); }, [chapter.id,unit.id,record?.id, record?.draftVersion]);
   const current = record?.status === "ready" && record.revision === chapter.revision && record.contextRevision === contextRevision && record.unitRevision === unit.revision;
   const reusable = historyOpen && !!record && ["ready", "applied", "partial"].includes(record.status);
+  const previewKey = JSON.stringify([chapter.id,chapter.revision,chapter.sourceVersion,contextRevision,unit.id,unit.revision,unit.members,unit.variants.scene.revision,unit.variants.scene.backgroundPresence,unit.variants.scene.guidance,record?.id,record?.draftVersion,historyOpen,previewRetry]);
+  const activePreview = useRef(previewKey); activePreview.current = previewKey;
+  const preview = reusePreview?.key === previewKey ? reusePreview.result : null;
+  useEffect(() => {
+    let cancelled = false;
+    setPreviewError("");
+    setPending(value=>value==='apply'?null:value);
+    if (!reusable) return;
+    const query = new URLSearchParams({id:record!.id,chapterId:chapter.id,unitId:unit.id,revision:String(chapter.revision),unitRevision:String(unit.revision),draftVersion:String(record!.draftVersion),contextRevision:String(contextRevision)});
+    void api<SceneReusePreview>("/analysis/reuse-preview?" + query).then(result => {
+      if (cancelled || !live.current || activePreview.current !== previewKey) return;
+      setReusePreview({key:previewKey,result});
+      setSelected(value => value.filter(id => result.items.some(item => item.itemId === id && item.canReuse)));
+    }).catch(failure => { if (!cancelled && live.current && activePreview.current === previewKey) setPreviewError((failure as Error).message); });
+    return () => { cancelled = true; };
+  }, [previewKey]);
   const included = (item: Suggestion["items"][number]) => (chapter.events || []).some(event => event.unitId === unit.id && event.state === "adopted" && event.validity === "valid" && soundFields.every(field => soundValue(event, field) === soundValue(item, field)));
   const hasMembers = (item: Suggestion["items"][number]) => {
     const positions = ["before", "during", "after"];
@@ -53,27 +70,32 @@ export default function SceneSuggestions({ unit, chapter, contextRevision, model
       <div className="scene-analysis-result-head"><h3>{historyOpen ? "这份历史建议" : "本次分析结果"}</h3><span className="scene-analysis-count">{record.items.length} 条建议</span></div>
       <p className="scene-analysis-meta">{!historyOpen && record.createdAt && new Date(record.createdAt).toLocaleString("zh-CN") + " · "}{record.model}</p>
       <p role="status" className={current || reusable || record.status === "applied" ? "scene-analysis-status" : "warning"}>{record.status === "running" ? "正在分析，关闭面板不会取消。" : reusable && record.items.length ? "勾选需要的旧建议，可重新加入当前场景。" : current ? record.items.length ? `分析完成，新增 ${record.items.length} 个声音建议。请选择想加入这次场景的声音。` : "分析完成，本次没有新增声音建议。已有背景与共同要求保持原样。" : ["ready", "applied", "partial"].includes(record.status) ? "这份建议已保留，可在「历史建议」中重新加入。" : "这份建议尚未完成或需要处理，请核对任务记录。"}</p>
-      {record.error && <p className="error-inline">{record.error}</p>}{record.issues?.map((issue, index) => <p className="warning" key={index}>{issue}</p>)}
-      <div className="scene-analysis-list">{record.items.map(item => <section className="task-event-card" key={item.id}>
-        <label className="check-label"><input type="checkbox" aria-label={"加入声音 " + item.description} checked={selected.includes(item.id)} disabled={!(current || reusable) || !hasMembers(item) || included(item) || !!pending || !!item.issues?.length} onChange={event => setSelected(value => event.target.checked ? [...value, item.id] : value.filter(id => id !== item.id))} /><span>{item.description}</span></label>
-        {included(item) ? <p className="success-text">已在当前场景，无需重复加入</p> : !hasMembers(item) && <p className="warning">原台词或声音位置已变化，请在当前台词上添加声音。</p>}
+      {historyOpen ? (record.error || !!record.issues?.length) && <details><summary>当时的分析说明</summary>{record.error && <p>{record.error}</p>}{record.issues?.map((issue,index)=><p key={index}>{issue}</p>)}</details> : <>{record.error && <p className="error-inline">{record.error}</p>}{record.issues?.map((issue, index) => <p className="warning" key={index}>{issue}</p>)}</>}
+      {reusable && previewError && <p className="error-inline" role="alert">{previewError}<button type="button" className="button secondary" onClick={()=>setPreviewRetry(value=>value+1)}>免费重新核对</button></p>}
+      <div className="scene-analysis-list">{record.items.map(item => { const eligibility = preview?.items.find(row=>row.itemId===item.id); return <section className="task-event-card" key={item.id}>
+        <label className="check-label"><input type="checkbox" aria-label={"加入声音 " + item.description} checked={selected.includes(item.id)} disabled={!!pending || (historyOpen ? !reusable || !eligibility?.canReuse || included(item) : !current || !hasMembers(item) || included(item) || !!item.issues?.length)} onChange={event => setSelected(value => event.target.checked ? [...value, item.id] : value.filter(id => id !== item.id))} /><span>{item.description}</span></label>
+        {included(item) || (reusable && eligibility?.alreadyIncluded) ? <p className="success-text">已在当前场景，无需重复加入</p> : historyOpen ? reusable && !eligibility && !previewError && <p className="hint" role="status">正在免费核对当前场景…</p> : !hasMembers(item) && <p className="warning">原台词或声音位置已变化，请在当前台词上添加声音。</p>}
+        {reusable && eligibility?.currentIssues.map((issue,index)=><p className="warning" key={index}>{issue} 请核对当前背景要求、台词与声音位置后重新核对。</p>)}
+        {reusable && eligibility?.warnings.map((warning,index)=><p className="hint" key={index}>{warning}</p>)}
         <p className="hint">{({ environment: "环境", effect: "音效", music: "音乐" } as Record<string, string>)[item.kind] || item.kind} · 第 {(chapter.segments.find(segment => segment.id === item.memberId)?.order ?? -1) + 1} 句{({ before: "之前", during: "期间", after: "之后" } as Record<string, string>)[item.position]}{item.endMemberId && "，持续至第 " + ((chapter.segments.find(segment => segment.id === item.endMemberId)?.order ?? -1) + 1) + " 句"} · {item.evidence}</p>
-        {(item.reason || item.sourceQuote) && <details><summary>为什么推荐</summary>{item.reason && <p>{item.reason}</p>}{item.sourceQuote && <p className="original-excerpt">{item.sourceQuote}</p>}</details>}{item.issues?.map((issue, index) => <p className="warning" key={index}>{issue}</p>)}
-      </section>)}</div>
-      {(current || reusable) && !!record.items.length && <div className="scene-analysis-apply"><button className="button primary" disabled={!selected.length || !enabled || !!pending} aria-busy={pending === "apply"} onClick={() => void (async () => {
+        {(item.reason || item.sourceQuote) && <details><summary>为什么推荐</summary>{item.reason && <p>{item.reason}</p>}{item.sourceQuote && <p className="original-excerpt">{item.sourceQuote}</p>}</details>}{historyOpen ? !!item.issues?.length && <details><summary>当时的核对问题</summary>{item.issues.map((issue,index)=><p key={index}>{issue}</p>)}</details> : item.issues?.map((issue, index) => <p className="warning" key={index}>{issue}</p>)}
+      </section>; })}</div>
+      {(current || reusable) && !!record.items.length && <div className="scene-analysis-apply"><button className="button primary" disabled={!selected.length || !enabled || !!pending || (reusable && (!preview || selected.some(id=>!preview.items.some(item=>item.itemId===id && item.canReuse))))} aria-busy={pending === "apply"} onClick={() => void (async () => {
+        const receiptKey = previewKey;
         setPending("apply"); setError(""); setApplyError(""); setAppliedMessage("");
         try {
           await withSavedDrafts("chapter:" + chapter.id, ["unit:" + unit.id + "/scene", "events:" + unit.id, ...unit.members.map(id => "segment:" + id)], async () => {
             const base = savedBase ? await savedBase() : { revision: draftScopeRevision("chapter:" + chapter.id, chapter.revision), entityRevision: unit.revision };
             if (!live.current) return;
+            if (activePreview.current !== receiptKey) return;
             if (base.revision !== draftScopeRevision("chapter:" + chapter.id, chapter.revision)) throw new Error("声音背景在准备期间发生了变化，请核对后再加入。");
-            const result = await api<{ addedEventIds: string[]; skippedItemIds: string[] }>(reusable ? "/analysis/reuse" : "/analysis/apply", { id: record.id, draftVersion: record.draftVersion, revision: base.revision, unitRevision: base.entityRevision, selected, ...(reusable ? { chapterId: chapter.id, unitId: unit.id } : {}) });
-            if (live.current) { setSelected([]); if (reusable) setAppliedMessage(result.addedEventIds.length ? `已重新加入 ${result.addedEventIds.length} 个声音，没有模型请求或费用。` : "所选声音已在当前场景，没有重复加入。" ); }
-            await refresh();
+            if (reusable && (!preview || base.revision !== preview.target.chapterRevision || base.entityRevision !== preview.target.unitRevision)) { setPreviewRetry(value=>value+1); throw new Error("保存后当前场景已变化，请等待免费核对完成后重新选择。"); }
+            const result = await api<{ addedEventIds: string[]; skippedItemIds: string[] }>(reusable ? "/analysis/reuse" : "/analysis/apply", { id: record.id, draftVersion: record.draftVersion, revision: base.revision, unitRevision: base.entityRevision, selected, ...(reusable ? { chapterId: chapter.id, unitId: unit.id,contextRevision:preview!.target.contextRevision } : {}) });
+            if (live.current && activePreview.current === receiptKey) { setSelected([]); if (reusable) setAppliedMessage(result.addedEventIds.length ? `已重新加入 ${result.addedEventIds.length} 个声音，没有模型请求或费用。` : "所选声音已在当前场景，没有重复加入。" ); await refresh(); }
           });
         }
-        catch (failure) { if(live.current)setApplyError((failure as Error).message); }
-        finally { if(live.current)setPending(null); }
+        catch (failure) { if(live.current && activePreview.current === receiptKey)setApplyError((failure as Error).message); }
+        finally { if(live.current && activePreview.current === receiptKey)setPending(null); }
       })()}>{pending === "apply" ? reusable ? "正在重新加入…" : "正在加入…" : `${reusable ? "重新加入" : "加入"}选中的 ${selected.length} 个声音`}</button><span className="hint">{reusable ? "免费复用 · 不重新分析或生成音频" : "加入场景不发生成请求"}</span>{applyError && <p className="error-inline" role="alert">{applyError}</p>}{appliedMessage && <p className="success-text" role="status">{appliedMessage}</p>}</div>}
     </section>;
   return <details className="task-panel-section scene-suggestions"><summary>让 AI 提供声音建议</summary>

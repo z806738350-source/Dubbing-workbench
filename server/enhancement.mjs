@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fail, same, text, uid } from './store.mjs';
-import { compile, templateOf, resolveCompiler, sceneContract, validEventDescription, assertQuoteAnchor, sceneIntentConflicts, scenePresenceConflicts } from './templates.mjs';
+import { compile, templateOf, resolveCompiler, sceneContract, validEventDescription, assertQuoteAnchor, sceneIntentConflicts, scenePresenceConflicts, inspectScenePresence } from './templates.mjs';
 import { storedAudioUnavailable } from './audio.mjs';
 import { configurationDecided } from './experience.mjs';
 
@@ -188,8 +188,8 @@ export function createEnhancement(store, d) {
     chapter ||= store.maybe('chapters',u.chapterId);
     const diagnostics = []; try { members(u); } catch (error) { diagnostics.push(error.message); }
     const states = Object.fromEntries(['dry','scene'].map(mode=>[mode,status(u,mode,chapter)]));
-    let sceneConflicts=[];try { const input=states.scene.input || buildInput(u,'scene',undefined,false,false,chapter);sceneConflicts=[...sceneIntentConflicts(input),...scenePresenceConflicts(input)]; } catch { /* Structural diagnostics above retain the root reason. */ }
-    return { ...u, diagnostics, sceneConflicts, guidance: u.variants[u.mode].guidance ?? (u.mode === 'dry' ? u.guidance || '' : ''), variants: Object.fromEntries(['dry', 'scene'].map(mode => [mode, { ...u.variants[mode], status: states[mode], history:history(u,mode,chapter,states[mode]) }])), status: states[u.mode], events: events(u) };
+    let sceneConflicts=[], scenePresenceWarnings=[];try { const input=states.scene.input || buildInput(u,'scene',undefined,false,false,chapter), presence=inspectScenePresence(input);sceneConflicts=[...sceneIntentConflicts(input),...presence.conflicts];scenePresenceWarnings=presence.warnings; } catch { /* Structural diagnostics above retain the root reason. */ }
+    return { ...u, diagnostics, sceneConflicts, scenePresenceWarnings, guidance: u.variants[u.mode].guidance ?? (u.mode === 'dry' ? u.guidance || '' : ''), variants: Object.fromEntries(['dry', 'scene'].map(mode => [mode, { ...u.variants[mode], status: states[mode], history:history(u,mode,chapter,states[mode]) }])), status: states[u.mode], events: events(u) };
   }
   function resolve(chapterId, chapter) {
     const all = d.list(chapterId);

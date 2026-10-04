@@ -260,8 +260,14 @@ export interface UnitVariant {
   template?: string;
   status: {validity: string; review: string; audio: AudioRecord | null; prompt: string; promptIssues: string[]; basis: Record<string, unknown>;input?:{template:string}|null};
 }
+export interface SceneReusePreview {
+  id:string;draftVersion:number;chapterId:string;unitId:string;
+  target:{chapterRevision:number;unitRevision:number;sceneRevision:number;contextRevision:number;sourceVersion:number};
+  items:{itemId:string;historicalIssues:string[];currentIssues:string[];warnings:string[];alreadyIncluded:boolean;canReuse:boolean}[];
+}
 export interface GenerationUnit {
   sceneConflicts?: string[];
+  scenePresenceWarnings?: string[];
   outstandingAttemptIds?: string[];
   readiness?: {generate:ActionReadiness;play:ActionReadiness;export:ActionReadiness};
   diagnostics?: string[];
