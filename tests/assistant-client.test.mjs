@@ -7,21 +7,21 @@ const client = await import('data:text/javascript;base64,'+Buffer.from(compile('
 const compiled=compile('../src/AssistantPanel.tsx');
 const nodes = node => !node||typeof node!=='object'?[]:[node,...(node.props?.children||[]).flat(Infinity).flatMap(nodes)];
 const text=node=>node==null||typeof node==='boolean'?'':typeof node!=='object'?String(node):(node.props?.children||[]).flat(Infinity).map(text).join('');
-const find=(tree,label)=>nodes(tree).find(n=>n.props?.['aria-label']===label||n.type==='button'&&text(n)===label);
+const find=(tree,label)=>nodes(tree).find(n=>n.props?.['aria-label']===label||n.type==='Select'&&n.props.label===label||n.type==='button'&&text(n)===label);
 const tick=()=>new Promise(done=>setImmediate(done));
 const config={revision:1,enabled:true,configured:true,hasKey:true,baseUrl:'https://example.invalid/v1',model:'test',credentialSource:'audio',vision:true,visionVerified:true};
 const session=id=>({id,projectId:'p',chapterId:'c'+id,title:id,state:'active'});
 const detail=id=>({session:session(id),messages:[],runs:[],steps:[],attachments:[],capabilities:[]});
 let sequence=0;
-async function setup({request,initial,records=new Map(),component="default"}={}){
+async function setup({request,initial,records=new Map(),component="default",sessionRows=[session('A'),session('B')]}={}){
   let index=0,queued=[],rendered;const values=[],effects=[],calls=[],saved=[],unmounts=[];
-  const api=async(path,body,method)=>{calls.push([path,body,method]);if(path==='/assistant/config'&&!body)return config;if(path==='/assistant/sessions'&&!body)return [session('A'),session('B')];if(request){const value=await request(path,body,method);if(value!==undefined)return value;}return detail(path.endsWith('/B')?'B':'A');};
+  const api=async(path,body,method)=>{calls.push([path,body,method]);if(path==='/assistant/config'&&!body)return config;if(path==='/assistant/sessions'&&!body)return sessionRows;if(request){const value=await request(path,body,method);if(value!==undefined)return value;}return detail(path.endsWith('/B')?'B':'A');};
   const state={settings:{workspaceIdentity:'w'},projects:[{id:'p',name:'测试'}],chapters:[{id:'cA',projectId:'p',title:'甲章'},{id:'cB',projectId:'p',title:'乙章'}],voices:[],roles:[]};
   const props={state,config,connected:true,onSaved:()=>{},projectId:'p',chapterId:'cA',selectedSegmentIds:['segment'],connected:true,pane:'settings',onClose:()=>{},onManual:()=>{},onNavigate:()=>{},onUIAction:async()=>{},withSavedScope:async(binding,work)=>{saved.push(binding);await work();},refresh:async()=>{},...initial};
   globalThis.window={setInterval:()=>1,clearInterval:()=>{}};
   globalThis.createImageBitmap=async()=>({width:2,height:2,close(){}});
   globalThis.FileReader=class {readAsDataURL(){this.result='data:image/png;base64,YWJj';this.onload();}};
-  globalThis.assistantClientTest={...client,React:{createElement:(type,props,...children)=>({type,props:{...props,children}})},useRef:value=>{const i=index++;return values[i]||=( {current:value});},useState:value=>{const i=index++;if(!(i in values))values[i]=typeof value==='function'?value():value;return[values[i],v=>{values[i]=typeof v==='function'?v(values[i]):v;}];},useEffect:(fn,deps)=>{const i=index++;if(!effects[i]||deps.some((v,n)=>v!==effects[i].deps[n]))queued.push(()=>{effects[i]?.cleanup?.();effects[i]={deps,cleanup:fn()};});},api,readDraft:key=>records.has(key)?{draft:records.get(key),revision:1}:null,writeDraft:(key,value)=>records.set(key,structuredClone(value)),draftWorkspace:()=> 'w',Dialog:'Dialog',Field:'Field',ArrowDown:'Icon',ArrowUp:'Icon',ImagePlus:'Icon',MessageSquare:'Icon',Plus:'Icon',Settings2:'Icon',X:'Icon'};
+  globalThis.assistantClientTest={...client,React:{createElement:(type,props,...children)=>({type,props:{...props,children}})},useRef:value=>{const i=index++;return values[i]||=( {current:value});},useState:value=>{const i=index++;if(!(i in values))values[i]=typeof value==='function'?value():value;return[values[i],v=>{values[i]=typeof v==='function'?v(values[i]):v;}];},useEffect:(fn,deps)=>{const i=index++;if(!effects[i]||deps.some((v,n)=>v!==effects[i].deps[n]))queued.push(()=>{effects[i]?.cleanup?.();effects[i]={deps,cleanup:fn()};});},api,readDraft:key=>records.has(key)?{draft:records.get(key),revision:1}:null,writeDraft:(key,value)=>records.set(key,structuredClone(value)),draftWorkspace:()=> 'w',Dialog:'Dialog',Field:'Field',Select:'Select',ArrowDown:'Icon',ArrowUp:'Icon',ImagePlus:'Icon',MessageSquare:'Icon',Plus:'Icon',Settings2:'Icon',X:'Icon'};
   const module=await import('data:text/javascript;base64,'+Buffer.from('const {'+Object.keys(globalThis.assistantClientTest).join(',')+'}=globalThis.assistantClientTest;\n'+compiled+'\n//'+sequence++).toString('base64'));
   const render=()=>{index=0;rendered=module[component](props);const work=queued;queued=[];work.forEach(fn=>fn());return rendered;};
   render();await tick();render();await tick();render();
@@ -54,7 +54,7 @@ test('未知回执保留原消息ID，重开只核对不自动重发；显式重
 test('迟到截图仅归属原会话；跨会话切换保留各自草稿',async()=>{
   let resolveUpload;const f=await setup({request:async(path)=>{if(path==='/assistant/attachments')return new Promise(done=>{resolveUpload=done;});}});
   f.change('甲草稿');const file={type:'image/png',size:3};const fileInput=nodes(f.render()).find(n=>n.type==='input'&&n.props.type==='file');fileInput.props.onChange({target:{files:[file],value:'x'}});await tick();
-  f.find('助手会话').props.onChange({target:{value:'B'}});await tick();f.change('乙草稿');resolveUpload({id:'late',sessionId:'A',mime:'image/png',width:2,height:2,bytes:3});await tick();
+  f.find('助手会话').props.onChange('B');await tick();f.change('乙草稿');resolveUpload({id:'late',sessionId:'A',mime:'image/png',width:2,height:2,bytes:3});await tick();
   assert.deepEqual(f.records.get('assistant:A').attachments.map(a=>a.id),['late']);assert.equal(f.records.get('assistant:B').text,'乙草稿');assert.deepEqual(f.records.get('assistant:B').attachments,[]);assert.equal(f.find('给助手的消息').props.value,'乙草稿');f.unmount();
 });
 
@@ -91,9 +91,11 @@ test('结果不明的重发必须再次授权，核对只包含明确步骤与�
 
 test('调整任务总额度不得低于已用次数，集中音色仅提交明确角色选择',async()=>{
   const changed=[],run={budget:{limits:{assistant:12,analysis:3,audio:100},used:{assistant:2,analysis:1,audio:5}},voicePolicy:'askMissing',materials:['text'],voiceQuestions:[{roleId:'r',roleName:'旁白',segmentIds:['s'],availableVoiceIds:['voice']}]};
-  const f=await setup({component:'AssistantMandate',initial:{run,voices:[{id:'voice',name:'声音',state:'active'}],busy:false,amend:async body=>changed.push(body)}});
+  const f=await setup({component:'AssistantMandate',initial:{run,voices:[{id:'voice',name:'声音',state:'active'},{id:'retired',name:'已停用',state:'retired'},{id:'outside',name:'非候选',state:'active'}],busy:false,amend:async body=>changed.push(body)}});
+  assert.deepEqual(nodes(f.render()).filter(n=>n.type==='Select').map(n=>n.props.label),['旁白使用音色','后续缺少音色时']);assert.equal(nodes(f.render()).some(n=>n.type==='select'),false);assert.deepEqual(f.find('旁白使用音色').props.options.map(o=>o.value),['','voice']);
+  f.props.busy=true;assert.ok(nodes(f.render()).filter(n=>n.type==='input'||n.type==='Select').every(n=>n.props.disabled));f.props.busy=false;
   const numeric=nodes(f.render()).filter(n=>n.type==='input'&&n.props.type==='number');assert.equal(numeric[0].props.min,2);numeric[0].props.onChange({target:{value:'1'}});assert.equal(f.find('保存本次任务范围').props.disabled,true);
-  numeric[0].props.onChange({target:{value:'20'}});f.find('旁白使用音色').props.onChange({target:{value:'voice'}});f.find('保存本次任务范围').props.onClick();await tick();assert.equal(changed[0].limits.assistant,20);assert.deepEqual(changed[0].roleVoiceChoices,{r:'voice'});assert.equal(changed[0].acceptCurrentConnection,undefined);assert.deepEqual(changed[0].workflowKinds,['dry']);assert.equal(changed[0].stepLimit,40);
+  numeric[0].props.onChange({target:{value:'20'}});f.find('旁白使用音色').props.onChange('voice');f.find('保存本次任务范围').props.onClick();await tick();assert.equal(changed[0].limits.assistant,20);assert.deepEqual(changed[0].roleVoiceChoices,{r:'voice'});assert.equal(changed[0].acceptCurrentConnection,undefined);assert.deepEqual(changed[0].workflowKinds,['dry']);assert.equal(changed[0].stepLimit,40);
   const workflow=nodes(f.render()).find(n=>n.type==='label'&&text(n)==='允许场景制作');nodes(workflow).find(n=>n.type==='input').props.onChange({target:{checked:true}});const steps=nodes(f.render()).find(n=>n.type==='label'&&text(n).startsWith('本任务步骤上限'));nodes(steps).find(n=>n.type==='input').props.onChange({target:{value:'80'}});f.find('保存本次任务范围').props.onClick();await tick();assert.deepEqual(changed[1].workflowKinds,['dry','scene']);assert.equal(changed[1].stepLimit,80);f.unmount();
 });
 
@@ -127,4 +129,40 @@ test('正常发送中与暂停后仍在收尾的助手请求不误显示结果�
   const run={id:'r',state,revision:3,mode:'ask',binding:{projectId:'p',chapterId:'cA'},budget:{limits:{assistant:3,analysis:0,audio:0},used:{assistant:1,analysis:0,audio:0}},reconciliation:{assistantRequest:{id:'request',state:requestState},steps:[]}};
   const f=await setup({request:async path=>path==='/assistant/sessions/A'?{...detail('A'),runs:[run]}:undefined});assert.equal(nodes(f.render()).some(n=>typeof n.type==='function'&&n.type.name==='AssistantReconciliation'),visible);f.unmount();
  }
+});
+
+test('助手会话和任务选择复用统一控件；选择只更新本会话草稿，不触发模型请求',async()=>{
+  const f=await setup({records:new Map([['assistant:A',{...client.newAssistantDraft(),text:'继续保留',mode:'task'}]])});
+  assert.deepEqual(nodes(f.render()).filter(n=>n.type==='Select').map(n=>n.props.label),['助手会话','完成目标','音色选择']);
+  assert.equal(nodes(f.render()).some(n=>n.type==='select'),false);
+  f.find('完成目标').props.onChange('chapter-master');f.find('音色选择').props.onChange('chooseFromApprovedSet');
+  const stored=f.records.get('assistant:A');assert.equal(stored.completionTarget,'chapter-master');assert.equal(stored.voicePolicy,'chooseFromApprovedSet');assert.equal(stored.text,'继续保留');
+  assert.equal(f.calls.filter(([,body])=>!!body).length,0);
+  f.props.connected=false;assert.equal(f.find('助手会话').props.disabled,true);assert.equal(f.find('完成目标').props.disabled,false);f.unmount();
+});
+
+test('连接保存未返回时表单禁止继续改写，返回后恢复编辑且不暗发识图验证',async()=>{
+  let finishSave,posted;
+  const f=await setup({component:'AssistantConnection',request:async(path,body,method)=>{
+    if(path==='/assistant/config'&&method==='PUT'){posted=body;return new Promise(done=>{finishSave=done;});}
+  }});
+  assert.equal(nodes(f.render()).some(n=>n.type==='select'),false);
+  f.find('连接凭据').props.onChange('separate');assert.ok(nodes(f.render()).some(n=>n.type==='input'&&n.props.type==='password'));
+  assert.equal(f.calls.filter(([,body])=>!!body).length,0);
+  f.find('保存连接').props.onClick();await tick();assert.equal(posted.credentialSource,'separate');
+  const locked=nodes(f.render()).filter(n=>n.type==='input'||n.type==='Select');assert.ok(locked.length>=6);assert.ok(locked.every(n=>n.props.disabled===true));
+  finishSave({...config,revision:2,credentialSource:'separate',visionVerified:false});await tick();
+  assert.equal(f.find('连接凭据').props.disabled,false);assert.equal(f.find('连接凭据').props.value,'separate');assert.equal(f.find('验证识图能力').props.disabled,true);
+  assert.equal(f.calls.filter(([path])=>path==='/assistant/verify').length,0);f.unmount();
+});
+
+
+test('连接设置入口独立于被抽屉隐藏的标题，空会话和归档会话均可打开且不创建任务',async()=>{
+  for(const archived of [false,true]){
+    const f=await setup({sessionRows:archived?[{...session('A'),state:'archived'}]:[],request:async path=>path==='/assistant/sessions/A'?{...detail('A'),session:{...session('A'),state:'archived'}}:undefined});
+    const tree=f.render(),heading=nodes(tree).find(n=>n.props?.className==='assistant-heading'),row=nodes(tree).find(n=>n.props?.className==='assistant-session-row');
+    assert.equal(find(heading,'助手连接设置'),undefined);assert.ok(find(row,'助手连接设置'));assert.equal(find(tree,'给助手的消息'),undefined);
+    f.find('助手连接设置').props.onClick();const connection=nodes(f.render()).find(n=>typeof n.type==='function'&&n.type.name==='AssistantConnection');assert.ok(connection);connection.props.onClose();assert.equal(nodes(f.render()).some(n=>typeof n.type==='function'&&n.type.name==='AssistantConnection'),false);
+    assert.equal(f.calls.filter(([,body])=>!!body).length,0);f.unmount();
+  }
 });

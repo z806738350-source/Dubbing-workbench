@@ -902,7 +902,7 @@ export default function App() {
           ) : (
             <>
               <section className="chapter-heading">
-                <div><button className="title-button" title={chapter.title} onClick={()=>setModal("rename")} disabled={locked}><h1>{chapter.title}</h1><MoreHorizontal size={18}/></button><p>{total} 句台词 · {chapter.playbackItems.length} 个声音单元 · {ready} 句声音就绪 · {passed} 句听评通过 <progress max={total||1} value={ready} aria-label="声音准备进度"/></p></div>
+                <div><button className="title-button" onClick={()=>setModal("rename")} disabled={locked}><h1>{chapter.title}</h1><MoreHorizontal size={18}/></button><p>{total} 句台词 · {chapter.playbackItems.length} 个声音单元 · {ready} 句声音就绪 · {passed} 句听评通过 <progress max={total||1} value={ready} aria-label="声音准备进度"/></p></div>
                 <div className="chapter-actions">
                   <button className="button" onClick={()=>setModal("issues")}>{issues.length?`查看问题 · ${issues.length} 项`:"查看问题"}</button>
                   {!locked&&<button className="button primary" disabled={busy||!connectionReady} onClick={()=>{
@@ -1185,7 +1185,7 @@ export default function App() {
                                   >
                                     <Play size={14} />
                                   </button>
-                                  <button className="icon" aria-label={`重新生成第 ${s.order + 1} 条`} title="保存有效修改后，只重做受影响声音" disabled={locked || busy} onClick={()=>void run(()=>generate([s.id],false,{regenerate:true}))}><RefreshCw size={14}/></button>
+                                  <button className="icon" aria-label={`重新生成第 ${s.order + 1} 条`} disabled={locked || busy} onClick={()=>void run(()=>generate([s.id],false,{regenerate:true}))}><RefreshCw size={14}/></button>
                                   <button
                                     className="icon"
                                     aria-label={`检查通过第 ${s.order + 1} 条`}
@@ -1275,7 +1275,7 @@ export default function App() {
                 className="icon"
                 aria-label="后退五秒"
                 aria-keyshortcuts="ArrowLeft"
-                title="后退 5 秒（←）"
+                aria-description="快捷键：左方向键"
                 disabled={!player}
                 onClick={() => seekPlayback(-5)}
               >
@@ -1301,7 +1301,7 @@ export default function App() {
                 className="icon"
                 aria-label="前进五秒"
                 aria-keyshortcuts="ArrowRight"
-                title="前进 5 秒（→）"
+                aria-description="快捷键：右方向键"
                 disabled={!player}
                 onClick={() => seekPlayback(5)}
               >
@@ -1314,7 +1314,6 @@ export default function App() {
                 aria-label="播放进度"
                 data-playback-progress
                 aria-keyshortcuts="ArrowLeft ArrowRight"
-                title="左右方向键后退或前进 5 秒"
                 min={0}
                 max={duration || 1}
                 step={0.01}
@@ -1348,7 +1347,6 @@ export default function App() {
                 className={`button secondary small ${follow ? "is-active" : ""}`}
                 aria-label={currentHidden ? "当前播放被筛选隐藏，回到当前播放" : follow ? "暂停跟随播放" : "回到当前播放"}
                 aria-pressed={follow}
-                title={follow && !currentHidden ? "正在跟随播放；点击或手动滚动可暂停跟随" : "回到正在播放的台词，并恢复自动跟随"}
                 disabled={!currentSegment}
                 onClick={() => {
                   if (follow && !currentHidden) { setFollow(false); return; }
@@ -1667,7 +1665,9 @@ export default function App() {
       {voiceTarget && chapter && state && <VoicePicker key={chapter.id+':'+voiceTarget.roleId+':'+voiceTarget.segmentId} state={state} chapter={chapter} roles={roles} initialTarget={voiceTarget} onClose={()=>setVoiceTarget(null)} onRefresh={refresh} playingId={playing?player?.id:undefined} play={(kind,id,title)=>void startPlay(kind,id,title,undefined,true)} onUsed={()=>{setVoiceTarget(null);setNotice('声音已应用，返回原处继续制作。');}}/>}
       {modal === "settings" && state && (
         <Dialog title="设置与连接" onClose={() => setModal(null)}>
+          <div className="settings-sections">
           <ConcurrencySettings key={state.settings.workspaceIdentity} status={state.settings.scheduler} connected={connectionReady} refresh={refresh}/>
+          <section className="settings-audio" aria-label="配音连接">
           <div className="settings-status">
             <span className="brand-mark">
               <AudioLines size={22} />
@@ -1705,6 +1705,7 @@ export default function App() {
               声音接口因权限或额度错误暂停。请核对连接与额度，返回声音生成、创建候选或一起演绎面板，勾选“恢复本次声音请求”后再点击生成；已有授权无需重复添加。
             </p>
           )}
+          </section>
           <WorkspaceLocation directory={state.settings.workspaceDirectory} projectCount={state.projects.length} projectName={state.projects.find(p => p.id === projectId)?.name} projectFolders={state.settings.projectFolders} onMoved={async () => {
             playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;
             audio.current?.pause();
@@ -1766,6 +1767,7 @@ export default function App() {
               关闭网页不会停止后台任务；关闭终端或电脑可能中断工作。终端按 Ctrl+C 会停止后续派发并等待在途任务结束。
               关闭本地服务后备份上方显示的整个工作区目录，包含数据库、参考声音和成品文件。恢复时使用新目录，避免覆盖原数据。
             </p>
+          </div>
           </div>
         </Dialog>
       )}
@@ -2981,7 +2983,6 @@ function Editor({
                 <button
                   className="button small"
                   disabled={!s.previous || locked || dirty}
-                  title={!s.previous ? "还没有上一版声音" : "查看上一版的设置差异，再决定是否恢复"}
                   onClick={() => setRestore(s.previous)}
                 >
                   <RotateCcw size={14} aria-hidden="true" />
@@ -2990,12 +2991,12 @@ function Editor({
                 <button
                   className="button small"
                   disabled={!s.approved || locked || dirty}
-                  title={!s.approved ? "还没有人工检查通过的声音版本" : "查看最近一次检查通过版的设置差异，再决定是否恢复"}
                   onClick={() => setRestore(s.approved)}
                 >
                   恢复最近通过版
                 </button>
               </div>
+              <p className="hint">{!s.previous && !s.approved ? "还没有可恢复的历史声音。" : "恢复前会先显示设置差异，确认后应用。"}</p>
               {s.validity === "matched" && (
                 <button
                   className="button secondary small warning"

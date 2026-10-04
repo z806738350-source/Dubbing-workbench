@@ -40,7 +40,7 @@ test('SVG说明只开关嵌套弹窗；原面板、编辑与授权保留，零�
     controller.edit({guidance:'尚未完成的表演稿'});controller.dirty=true;controller.composing=true;controller.flush=async()=>{flushed++;};
     const before=JSON.stringify(f.props.unit),trigger=tree.props.headerActions;
     assert.equal(trigger.type,'button');assert.match(trigger.props.className,/\bicon\b/);assert.match(trigger.props.className,/unit-help-trigger/);
-    assert.equal(trigger.props['aria-label'],mode==='scene'?'声音背景操作说明':'纯人声操作说明');assert.equal(trigger.props.title,'操作说明');assert.equal(trigger.props['aria-haspopup'],'dialog');assert.equal(trigger.props['aria-expanded'],false);
+    assert.equal(trigger.props['aria-label'],mode==='scene'?'声音背景操作说明':'纯人声操作说明');assert.equal(trigger.props.title,undefined);assert.equal(trigger.props['aria-haspopup'],'dialog');assert.equal(trigger.props['aria-expanded'],false);
     assert.ok(nodes(trigger).some(node=>node.type==='CircleHelp'&&node.props['aria-hidden']==='true'));
     assert.doesNotMatch(text(tree),/已选用，无需再次点击|检查通过只记录人工听评|位置是创作意图/);
     trigger.props.onClick();tree=f.render();

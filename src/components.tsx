@@ -113,28 +113,26 @@ export function Select({
   const root = useRef<HTMLDivElement>(null),
     trigger = useRef<HTMLButtonElement>(null);
   const listId = useRef("list-" + crypto.randomUUID());
+  const activeIndex = Math.min(cursor, Math.max(0, options.length - 1));
   useEffect(() => {
     if (!open) return;
+    if (disabled || !options.length) { setOpen(false); return; }
     const place = () => {
       const rect = trigger.current!.getBoundingClientRect();
-      const height = Math.min(
-        280,
-        options.length * 44 + 8,
-        window.innerHeight - 32,
-      );
-      const above =
-        window.innerHeight - rect.bottom < height + 12 &&
-        rect.top > height + 12;
+      const height = Math.min(280, options.length * 44 + 8);
+      const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 12);
+      const spaceAbove = Math.max(0, rect.top - 12);
+      const above = spaceBelow < height && spaceAbove > spaceBelow;
+      const maxHeight = Math.min(height, above ? spaceAbove : spaceBelow);
+      const width = Math.min(rect.width, window.innerWidth - 16);
       setPlacement({
-        top: above ? rect.top - height - 4 : rect.bottom + 4,
+        top: above ? rect.top - maxHeight - 4 : rect.bottom + 4,
         left: Math.max(
           8,
-          Math.min(rect.left, window.innerWidth - rect.width - 8),
+          Math.min(rect.left, window.innerWidth - width - 8),
         ),
-        width: rect.width,
-        maxHeight: above
-          ? height
-          : Math.min(height, window.innerHeight - rect.bottom - 12),
+        width,
+        maxHeight,
       });
     };
     place();
@@ -149,20 +147,24 @@ export function Select({
       window.removeEventListener("resize", place);
       document.removeEventListener("scroll", place, true);
     };
-  }, [open, options.length]);
+  }, [open, options.length, disabled]);
+  useEffect(() => {
+    if (open && !onDelete) root.current?.querySelector<HTMLElement>(`[id="${listId.current}-${activeIndex}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [open, activeIndex, onDelete]);
   const focusOption = (index: number) => root.current?.querySelector<HTMLButtonElement>(`[data-choice-index="${index}"]`)?.focus();
   useEffect(() => {
     if (open && onDelete) focusOption(cursor);
   }, [open]);
   const choose = (v: string) => {
+    if (disabled || !options.some(option => option.value === v)) return;
     onChange(v);
     setOpen(false);
     trigger.current?.focus();
   };
   return (
-    <div className="select" ref={root} onBlur={onDelete ? e => {
+    <div className="select" ref={root} onBlur={e => {
       if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false);
-    } : undefined}>
+    }}>
       <button
         ref={trigger}
         className="select-trigger"
@@ -172,7 +174,7 @@ export function Select({
         aria-label={label}
         aria-expanded={open}
         aria-controls={listId.current}
-        aria-activedescendant={open && !onDelete ? `${listId.current}-${cursor}` : undefined}
+        aria-activedescendant={open && !onDelete ? `${listId.current}-${activeIndex}` : undefined}
         disabled={disabled || !options.length}
         onClick={() => {
           if (!open) onOpen?.();
@@ -185,6 +187,7 @@ export function Select({
           setOpen(!open);
         }}
         onKeyDown={(e) => {
+          if (disabled || !options.length) return;
           if (e.key === "Escape") {
             if (open) {
               e.preventDefault();
@@ -201,7 +204,7 @@ export function Select({
             return;
           e.preventDefault();
           if (e.key === "Enter" && open) {
-            choose(options[cursor].value);
+            choose(options[activeIndex].value);
             return;
           }
           if (!open) onOpen?.();
@@ -216,7 +219,7 @@ export function Select({
                       0,
                       options.findIndex((o) => o.value === value),
                     )
-                  : (cursor + (e.key === "ArrowUp" ? -1 : 1) + options.length) %
+                  : (activeIndex + (e.key === "ArrowUp" ? -1 : 1) + options.length) %
                     options.length,
           );
         }}
@@ -247,12 +250,12 @@ export function Select({
           } : undefined}
         >
           {options.map((o, i) => onDelete ? <div className="select-option-row" key={o.value}>
-            <button type="button" data-choice-index={i} aria-pressed={o.value === value} title={o.label}
+            <button type="button" data-choice-index={i} aria-pressed={o.value === value}
               className={"select-option" + (i === cursor ? " cursor" : "")} disabled={disabled}
               onFocus={() => setCursor(i)} onClick={() => choose(o.value)}>
               <span>{o.label}</span>{o.value === value && <Check size={14} />}
             </button>
-            <button type="button" className="select-delete" aria-label={"删除" + o.label} title={"删除" + o.label} disabled={disabled}
+            <button type="button" className="select-delete" aria-label={"删除" + o.label} disabled={disabled}
               onFocus={() => setCursor(i)} onClick={e => {
                 e.stopPropagation(); setOpen(false); trigger.current?.focus(); onDelete(o.value);
               }}><Trash2 size={16} aria-hidden="true" /></button>
@@ -264,7 +267,7 @@ export function Select({
               role="option"
               tabIndex={-1}
               aria-selected={o.value === value}
-              className={i === cursor ? "cursor" : ""}
+              className={i === activeIndex ? "cursor" : ""}
               onPointerMove={() => setCursor(i)}
               onClick={() => choose(o.value)}
             >

@@ -242,7 +242,7 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
     </div>
   </div>;
   return <Dialog title={preview ? preview.kind === "dissolve" ? "取消一起演绎" : preview.kind === "template" ? "切换提示模板" : "恢复历史声音" : mode === "scene" ? "声音背景" : unit.kind === "group" ? "一起演绎" : "这句声音"} presentation="sidepanel" onClose={close} onBack={preview ? () => setPreview(null) : undefined} footer={footer}
-    headerActions={<button type="button" className="icon unit-help-trigger" aria-label={mode === "scene" ? "声音背景操作说明" : "纯人声操作说明"} title="操作说明" aria-haspopup="dialog" aria-expanded={showHelp} onClick={() => setShowHelp(true)}><CircleHelp size={18} aria-hidden="true" /></button>}>
+    headerActions={<button type="button" className="icon unit-help-trigger" aria-label={mode === "scene" ? "声音背景操作说明" : "纯人声操作说明"} aria-haspopup="dialog" aria-expanded={showHelp} onClick={() => setShowHelp(true)}><CircleHelp size={18} aria-hidden="true" /></button>}>
     {preview ? <section className="task-panel-section unit-preview">
       {preview.kind === "dissolve" ? <>
         <p>将恢复以下单句纯人声；对话历史保留，不裁切、不自动补生成。</p>

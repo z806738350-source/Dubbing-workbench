@@ -1,11 +1,10 @@
 .concurrency-settings { border: 1px solid var(--color-rule); border-radius: var(--radius-md); min-width: 0; }
 .concurrency-settings > summary { cursor: pointer; min-height: 44px; padding: var(--space-sm) var(--space-md); }
 .concurrency-settings > summary:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
-.concurrency-settings > summary .hint { margin-left: var(--space-xs); }
-.concurrency-content { padding: 0 var(--space-md) var(--space-md); }
+.concurrency-content { display: grid; gap: var(--space-sm); padding: 0 var(--space-md) var(--space-md); }
 .concurrency-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-xs); }
 .concurrency-options .button { min-height: 44px; min-width: 0; }
-.concurrency-options .button[aria-pressed="true"] { background: var(--color-ink); color: var(--color-paper); border-color: var(--color-ink); }
-.concurrency-content p { overflow-wrap: anywhere; }
+.concurrency-options .button[aria-pressed="true"] { background: var(--color-selected); color: var(--color-ink); border-color: var(--color-selected-border); }
+.concurrency-content > p { margin: 0; overflow-wrap: anywhere; }
 .concurrency-status { margin-block: var(--space-xs); }
 @media (max-width: 375px) { .concurrency-options { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

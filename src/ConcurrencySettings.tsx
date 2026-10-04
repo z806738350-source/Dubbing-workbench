@@ -38,8 +38,9 @@ export function ConcurrencySettings({ status, connected, refresh }: {
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   const current = saved && (!status || saved.revision > status.revision) ? saved : status;
   if (!current) return null;
+  const selected = Math.min(current.desiredAudioConcurrency, current.routeConcurrencyCap);
   const change = async (count: number) => {
-    if (!connected || sending.current || count === current.desiredAudioConcurrency) return;
+    if (!connected || sending.current || count > current.routeConcurrencyCap || count === current.desiredAudioConcurrency) return;
     sending.current = true; setPending(true); setError('');
     try {
       const result = await api<SchedulerStatus>('/scheduler', { revision: current.revision, desiredAudioConcurrency: count }, 'PUT');
@@ -53,16 +54,19 @@ export function ConcurrencySettings({ status, connected, refresh }: {
     } finally { sending.current = false; if (live.current) setPending(false); }
   };
   return <details className="concurrency-settings">
-    <summary>同时制作：{current.effectiveAudioConcurrency} 段 <span className="hint">调整</span></summary>
+    <summary><span>同时制作：最多 {current.effectiveAudioConcurrency} 段</span><span className="hint">{current.routeConcurrencyCap > 1 ? '调整' : '查看'}</span></summary>
     <div className="concurrency-content">
-      <div className="concurrency-options" role="group" aria-label="期望同时制作段数">
+      <div className="concurrency-options" role="group" aria-label="同时制作段数">
         {[1, 2, 3, 4].map(count => <button key={count} type="button" className="button secondary small"
-          aria-pressed={current.desiredAudioConcurrency === count} disabled={!connected || pending}
+          aria-pressed={selected === count} disabled={!connected || pending || count > current.routeConcurrencyCap}
           onClick={() => void change(count)}>{count} 段</button>)}
       </div>
-      <p className="hint">{current.routeConcurrencyCap === 1 ? '当前按 1 段运行；配置并验证账号并发上限后可提速。' : `当前账号上限 ${current.routeConcurrencyCap} 段。`}
-        {current.desiredAudioConcurrency !== current.effectiveAudioConcurrency && ` 已选择 ${current.desiredAudioConcurrency} 段，实际同时 ${current.effectiveAudioConcurrency} 段。`}</p>
-      <p className="hint">所有章节和试音共用。降低段数会让已发送的音频继续完成；调整不增加生成份数。</p>
+      {current.routeConcurrencyCap < 4 && <p className="hint">当前已开放 {current.routeConcurrencyCap} 段，灰色档位暂不可用。</p>}
+      {current.desiredAudioConcurrency > current.routeConcurrencyCap ?
+        <p className="hint" role="status">此前保存的 {current.desiredAudioConcurrency} 段超出当前开放上限，未生效。可点选已开放档位更新设置。</p> :
+        current.desiredAudioConcurrency !== current.effectiveAudioConcurrency &&
+        <p className="hint" role="status">已保存 {current.desiredAudioConcurrency} 段；本地处理上限为 {current.effectiveAudioConcurrency} 段。</p>}
+      <p className="hint">所有章节和试音共用此设置；降档后，已发出的音频会继续完成。</p>
       <ConcurrencyStatus status={current} />
       {pending && <p className="hint" role="status">正在调整…</p>}
       {!connected && <p className="warning" role="status">连接恢复后可调整。</p>}

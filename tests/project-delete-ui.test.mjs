@@ -17,7 +17,8 @@ const select=find(node=>ts.isJsxSelfClosingElement(node)&&node.tagName.getText(f
 
 function selectFixture(onDelete){
   const hooks=[],effects=[];let index=0,effectIndex=0,pendingEffects=[],tree;
-  const calls={chosen:[],deleted:[],focus:[]};
+  const calls={chosen:[],deleted:[],focus:[],scrolled:[]};
+  const rect={top:50,bottom:86,left:8,width:200};
   const env={React,Check:'Check',ChevronDown:'ChevronDown',Trash2:'Trash2',crypto,
     useState:initial=>{const key=index++;if(!(key in hooks))hooks[key]=typeof initial==='function'?initial():initial;return [hooks[key],value=>{hooks[key]=typeof value==='function'?value(hooks[key]):value;}];},
     useRef:initial=>hooks[index++]||=( {current:initial} ),
@@ -32,8 +33,8 @@ function selectFixture(onDelete){
   const render=()=>{
     index=0;effectIndex=0;pendingEffects=[];tree=Select(props);
     const trigger=nodes(tree).find(node=>node.props.className==='select-trigger');
-    trigger.props.ref.current={focus:()=>calls.focus.push('trigger'),getBoundingClientRect:()=>({top:50,bottom:86,left:8,width:200})};
-    tree.props.ref.current={contains:target=>target==='inside',querySelector:selector=>{const match=selector.match(/data-choice-index="(\d+)"/);return match?{focus:()=>calls.focus.push(Number(match[1]))}:null;}};
+    trigger.props.ref.current={focus:()=>calls.focus.push('trigger'),getBoundingClientRect:()=>rect};
+    tree.props.ref.current={contains:target=>target==='inside',querySelector:selector=>{const match=selector.match(/data-choice-index="(\d+)"/);if(match)return {focus:()=>calls.focus.push(Number(match[1]))};const active=selector.match(/-(\d+)"\]$/);return active?{scrollIntoView:options=>calls.scrolled.push({index:Number(active[1]),options})}:null;}};
     for(const effect of pendingEffects)effect();return tree;
   };
   const trigger=()=>nodes(tree).find(node=>node.props.className==='select-trigger');
@@ -41,8 +42,27 @@ function selectFixture(onDelete){
   const menu=()=>nodes(tree).find(node=>node.props.className==='select-menu');
   const choose=i=>nodes(tree).filter(node=>node.props.className?.includes('select-option')&&node.type==='button')[i];
   const remove=i=>nodes(tree).filter(node=>node.props.className==='select-delete')[i];
-  render();return {props,calls,render,open,trigger,menu,choose,remove};
+  render();return {props,calls,render,open,trigger,menu,choose,remove,rect,viewport:env.window};
 }
+
+test('长下拉键盘定位保持可见；选项异步收缩、禁用和移出焦点都不误选',()=>{
+  const f=selectFixture(false);f.props.options=Array.from({length:20},(_,i)=>({value:String(i),label:'声音 '+i}));f.props.value='0';f.render();f.open();
+  f.trigger().props.onKeyDown(event('End'));f.render();
+  assert.deepEqual(f.calls.scrolled.at(-1),{index:19,options:{block:'nearest'}});
+  f.props.options=[f.props.options[0]];f.render();f.trigger().props.onKeyDown(event('Enter'));
+  assert.deepEqual(f.calls.chosen,['0']);f.render();f.open();
+  f.props.disabled=true;f.render();
+  nodes(f.menu()).find(node=>node.props.role==='option').props.onClick();
+  assert.deepEqual(f.calls.chosen,['0'],'禁用过程中旧浮层不能继续改值');f.render();assert.equal(f.menu(),undefined);
+  f.props.disabled=false;f.render();f.open();f.render().props.onBlur({currentTarget:{contains:()=>false},relatedTarget:null});f.render();assert.equal(f.menu(),undefined);
+  f.open();f.props.options=[];f.render();assert.doesNotThrow(()=>f.trigger().props.onKeyDown(event('Enter')));f.render();assert.equal(f.menu(),undefined);
+});
+
+test('下拉浮层选择空间更多的一侧，窄屏时宽度不越界',()=>{
+  const f=selectFixture(false);f.props.options=Array.from({length:20},(_,i)=>({value:String(i),label:'会话 '+i}));
+  f.viewport.innerHeight=400;Object.assign(f.rect,{top:210,bottom:246,left:4,width:500});f.render();f.open();f.render();
+  const style=f.menu().props.style;assert.equal(style.maxHeight,198);assert.equal(style.top,8);assert.equal(style.width,304);assert.equal(style.left,8);
+});
 
 test('项目下拉选择和SVG删除是并列按钮，删除不选择项目、不弹确认',()=>{
   const f=selectFixture(true);f.open();
@@ -50,7 +70,7 @@ test('项目下拉选择和SVG删除是并列按钮，删除不选择项目、�
   assert.equal(f.menu().props.role,'dialog');assert.ok(!nodes(f.menu()).some(node=>node.props.role==='option'));
   const remove=f.remove(1),click=event();assert.equal(remove.props['aria-label'],'删除'+f.props.options[1].label);
   assert.ok(nodes(remove).some(node=>node.type==='Trash2'&&node.props['aria-hidden']==='true'));
-  assert.equal(f.choose(1).props.title,f.props.options[1].label);
+  assert.equal(f.choose(1).props.title,undefined);assert.match(text(f.choose(1)),/很长的项目名称/);
   remove.props.onClick(click);assert.deepEqual(f.calls.deleted,['two']);assert.deepEqual(f.calls.chosen,[]);assert.equal(click.stopped,true);
   assert.equal(f.render().props.children.some?.(child=>child?.props?.className==='select-menu'),false);
   assert.equal(f.calls.focus.at(-1),'trigger');

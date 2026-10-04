@@ -40,6 +40,6 @@ test('没有历史/未保存/任务锁定时恢复仍不可用，浏览实际单
   for(const state of [{s:{previous:null,approved:null}},{dirty:true},{locked:true}]){
     const f=fixture(state);for(const label of ['恢复上一版','恢复最近通过版'])assert.equal(f.button(label).props.disabled,true);
   }
-  const empty=fixture({s:{previous:null,approved:null}});assert.match(empty.button('恢复上一版').props.title,/还没有/);assert.match(empty.button('恢复最近通过版').props.title,/还没有人工检查通过/);
+  const empty=fixture({s:{previous:null,approved:null}});assert.match(text(empty.tree),/还没有可恢复的历史声音/);assert.equal(empty.button('恢复上一版').props.title,undefined);
   const busy=fixture({locked:true,dirty:true,enhancedUnit:{kind:'single',mode:'scene'}});assert.notEqual(busy.button('检查与管理版本').props.disabled,true);
 });
