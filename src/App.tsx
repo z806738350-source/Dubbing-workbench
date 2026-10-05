@@ -26,6 +26,7 @@ import {
   Sparkles,
   Square,
   Upload,
+  Trash2,
   Users,
   Volume2,
   X,
@@ -125,11 +126,13 @@ type Modal =
   | "export"
   | "source"
   | "rename"
+  | "deleted-segments"
   | null;
 
 export default function App() {
   const [deleteTarget,setDeleteTarget]=useState<Project|null>(null);
   const [renameTarget,setRenameTarget]=useState<Project|null>(null);
+  const segmentDeletionIntent=useRef(0);
   const [rebindOpen, setRebindOpen] = useState(false);
   const [assistantOpen,setAssistantOpen]=useState(false),[assistantNarrow,setAssistantNarrow]=useState(window.innerWidth<1216),[assistantPrompt,setAssistantPrompt]=useState<{id:string;text:string}>();
   const assistantButton=useRef<HTMLButtonElement>(null),assistantWasOpen=useRef(false);
@@ -244,7 +247,7 @@ export default function App() {
     const s = await api<State>("/state");
     const identity=s.settings.workspaceIdentity||s.settings.workspaceDirectory,changedWorkspace=!!draftWorkspace()&&draftWorkspace()!==identity;
     bindDraftWorkspace(identity);
-    if(changedWorkspace){playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;generationIntent.current++;setGenerationPlan(null);setGrantId(null);setDeleteTarget(null);setRenameTarget(null);setUnitPanelId(null);setVoiceTarget(null);setOldPreview(null);setModal(null);setChapter(null);setDraftSignal(value=>value+1);bookmarks.current={};chapterPlaybackSnapshots.current={};audio.current?.pause();setPlayer(null);}
+    if(changedWorkspace){playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;generationIntent.current++;setGenerationPlan(null);setGrantId(null);setDeleteTarget(null);setRenameTarget(null);segmentDeletionIntent.current++;setUnitPanelId(null);setVoiceTarget(null);setOldPreview(null);setModal(null);setChapter(null);setDraftSignal(value=>value+1);bookmarks.current={};chapterPlaybackSnapshots.current={};audio.current?.pause();setPlayer(null);}
     setState(s);
     let id = chapterRef.current;
     if (!s.chapters.some((c) => c.id === id))
@@ -398,6 +401,24 @@ export default function App() {
     locked = !!job;
   const selectedUnit = chapter?.units?.find(u=>u.kind === "group" && u.state === "active" && u.members.includes(selected)) || chapter?.units?.find(u=>u.kind === "single" && u.members.includes(selected));
   const openMember = (id:string) => { setUnitPanelId(null); setSelected(id); if(window.innerWidth < 1216)setInspectorOpen(true); };
+  const onDeleteSegments = async (ids: string[], restore = false) => {
+    if (!chapter || !connectionReady || locked) return;
+    const targetIds = [...ids], chapterId = chapter.id, workspace = draftWorkspace(), intent = ++segmentDeletionIntent.current;
+    const current = () => chapterRef.current === chapterId && draftWorkspace() === workspace && segmentDeletionIntent.current === intent;
+    try { await withSavedDrafts("chapter:"+chapterId, targetIds.map(id=>"segment:"+id), async () => {
+      if (!current()) return;
+      if (targetIds.some(id=>hasDraft(id))) throw new Error("相关台词还有其他页面或遗留的编辑，请先在本机暂存中处理。");
+      const fresh = await api<ChapterDetail>("/chapters/"+chapterId);
+      if (!current()) return;
+      const rows = (restore ? fresh.deletedSegments || [] : fresh.segments).filter(s=>targetIds.includes(s.id));
+      if (fresh.id !== chapterId || !targetIds.length || new Set(targetIds).size !== targetIds.length || rows.length !== targetIds.length) throw new Error("所选台词已变化，请重新选择后核对。");
+      await mutate(restore ? "segment.restore-deleted" : "segment.delete", {chapterId, revision:fresh.revision, ids:targetIds});
+      if (current()) {
+        setChecked(previous=>previous.filter(id=>!targetIds.includes(id)));
+        setNotice(restore ? "台词已恢复，请按当前设置核对已有声音。" : "台词已删除，不再参与整章试听与导出；可从已删除台词中恢复。");
+      }
+    }); } catch (error) { if (current()) throw error; }
+  };
   const saveStatus = useDraftSaveStatus("chapter:"+chapterId);
   const issues = chapter ? chapterIssues(chapter,roles,voices) : [];
   const criticalIssues = issues.filter(i=>i.kind !== "audio" && i.kind !== "request" && i.kind !== "advice");
@@ -430,6 +451,7 @@ export default function App() {
   const pickChapter = (id: string) => {
     setDeleteTarget(null);
     setRenameTarget(null);
+    segmentDeletionIntent.current++;
     playIntent.current++;
     chapterRef.current=id;
     pendingPlay.current=null;pendingPlaySnapshot.current=null;
@@ -538,11 +560,13 @@ export default function App() {
         if(!current()||chapterRef.current!==chapter.id)return;
         const now = await api<State>("/state");
         if(!current()||chapterRef.current!==chapter.id)return;
+        const latest = now.chapters.find(c=>c.id===chapter.id), observed = stateRef.current?.chapters.find(c=>c.id===chapter.id);
+        const superseded = !latest || latest.revision !== fresh.revision || latest.arrangement !== fresh.arrangement || observed && (observed.revision > fresh.revision || observed.arrangement > fresh.arrangement);
         const existing = playerRef.current;
         const expected = existing?.chapterId === chapter.id && existing.kind === kind && existing.id === id ? existing.playbackItems : chapter.playbackItems;
         const target = unitSession && fresh.units?.find(u=>u.id === unitSession.id);
         const unitChanged = unitSession && (!target || target.state !== unitSession.state || target.variants[unitSession.mode].current !== unitSession.audioId || JSON.stringify(target.variants[unitSession.mode].status.basis) !== JSON.stringify(unitSession.basis));
-        if (fresh.arrangement !== chapter.arrangement || playbackIdentity(fresh.playbackItems) !== playbackIdentity(expected) || unitChanged || now.jobs.some(j => j.chapterId === chapter.id && active(j.status))) {
+        if (superseded || fresh.arrangement !== chapter.arrangement || playbackIdentity(fresh.playbackItems) !== playbackIdentity(expected) || unitChanged || now.jobs.some(j => j.chapterId === chapter.id && active(j.status))) {
           await refresh();
           if(!current())return;
           setError("章节版本或任务状态已变化，请核对后重新选择试听。");
@@ -988,6 +1012,7 @@ export default function App() {
                     <button className="button small" disabled={locked||state?.settings.features?.groups===false} onClick={()=>{if(checked.length<2){setNotice("勾选两条或更多连续对白，再点一起演绎。");return;}openUnit("create");}}><Users size={15}/>一起演绎</button>
                     <button className="button small" disabled={locked||!selectedUnit||state?.settings.features?.scenes===false} onClick={()=>selectedUnit&&openUnit(selectedUnit.id,"scene")}><AudioLines size={15}/>声音背景</button>
                     <button className="button secondary small" onClick={()=>openUnit("list")}>历史与版本</button>
+                    {!!chapter.deletedSegments?.length && <button className="button secondary small" onClick={()=>setModal("deleted-segments")}>已删除台词 · {chapter.deletedSegments.length}</button>}
                     <details className="workspace-more"><summary>更多</summary><div><button onClick={()=>setModal("source")}>查看原文</button><button onClick={()=>setModal("manual")}>添加台词</button><button onClick={()=>setModal("roles")}>角色资料</button><button onClick={()=>{const value=density==="compact"?"comfortable":"compact";setDensity(value);localStorage.setItem("reading-density",value);}}>切换{density==="compact"?"舒适":"紧凑"}密度</button><label>正文字号<input aria-label="正文字号" type="range" min="17" max="34" value={readingSize} onChange={e=>{setReadingSize(Number(e.target.value));localStorage.setItem("reading-size",e.target.value);}}/></label></div></details>
                   </div>
                   {checked.length > 0 && (
@@ -1004,7 +1029,7 @@ export default function App() {
                       <button
                         className="text-button"
                         disabled={locked}
-                        onClick={() => run(() => generate(checked))}
+                        onClick={() => run(() => generate(checked,false,{regenerate:true}))}
                       >
                         <AudioLines size={14} aria-hidden="true" />生成所选
                       </button>
@@ -1024,6 +1049,7 @@ export default function App() {
                       >
                         <X size={14} />
                       </button>
+                      <button className="text-button danger" disabled={locked || busy || !connectionReady} onClick={()=>void run(()=>onDeleteSegments(checked))}><Trash2 size={14} aria-hidden="true"/>删除所选</button>
                     </div>
                   )}
 
@@ -1159,7 +1185,10 @@ export default function App() {
                                   "running",
                                   "queued",
                                 ].includes(rowStatus.latest) ? names[rowStatus.latest] : ""}</span>
+                              </>
+                            )}
                                 <div className="row-actions">
+                                  {!s.excluded && <>
                                   <button className="icon" aria-label={`为第 ${s.order+1} 条选声音`} onClick={()=>openVoice(s.roleId,s.id)}><Users size={15}/></button>
                                   {!grouped&&<><button
                                     className="icon"
@@ -1187,28 +1216,10 @@ export default function App() {
                                     <Play size={14} />
                                   </button>
                                   <button className="icon" aria-label={`重新生成第 ${s.order + 1} 条`} disabled={locked || busy} onClick={()=>void run(()=>generate([s.id],false,{regenerate:true}))}><RefreshCw size={14}/></button>
-                                  <button
-                                    className="icon"
-                                    aria-label={`检查通过第 ${s.order + 1} 条`}
-                                    disabled={
-                                      !connectionReady || rowStatus.validity !== "matched" || locked
-                                    }
-                                    onClick={() =>
-                                      run(() =>
-                                        mutate("segment.review", {
-                                          id: s.id,
-                                          audioId: s.current,
-                                          basis: basis(s),
-                                          state: "passed",
-                                        }),
-                                      )
-                                    }
-                                  >
-                                    <Check size={16} />
-                                  </button></>}
+                                  </>}
+                                  </>}
+                                  <button className="icon" aria-label={`删除第 ${s.order+1} 条台词`} title="删除台词" disabled={locked || busy || !connectionReady} onClick={()=>void run(()=>onDeleteSegments([s.id]))}><Trash2 size={14}/></button>
                                 </div>
-                              </>
-                            )}
                           </div>
                         </article>
                       );
@@ -1864,8 +1875,16 @@ export default function App() {
         />
       )}
       {deleteTarget&&<ProjectDeleteDialog project={deleteTarget} onClose={()=>setDeleteTarget(null)} onDelete={async scope=>{await deleteProject(deleteTarget.id,scope);await refresh();}}/>}
+      {modal==="deleted-segments"&&chapter&&<DeletedSegments chapter={chapter} locked={locked||busy||!connectionReady} onClose={()=>setModal(null)} onRestore={ids=>void run(()=>onDeleteSegments(ids,true))}/>}
     </ErrorContext.Provider>
   );
+}
+
+function DeletedSegments({chapter,locked,onClose,onRestore}:{chapter:ChapterDetail;locked:boolean;onClose:()=>void;onRestore:(ids:string[])=>void}) {
+  return <Dialog title="已删除台词" onClose={onClose}>
+    <p className="hint">原文和已有声音仍保留；恢复后按当前设置核对。原编号保留，便于定位。</p>
+    {chapter.deletedSegments?.length ? chapter.deletedSegments.map(s=><div key={s.id}><strong>第 {s.order+1} 条</strong><p className="original-excerpt">{s.text}</p><button className="button small" disabled={locked} onClick={()=>onRestore([s.id])}>恢复第 {s.order+1} 条</button></div>) : <p>暂无已删除台词。</p>}
+  </Dialog>;
 }
 
 type ProjectDeletionPlan={projectId:string;name:string;scope:Record<string,unknown>;counts:{chapters:number;audios:number;masters:number;exports:number};chapters:{id:string;title:string;revision:number;arrangement:number}[];blockers?:{code:string;message:string}[]};

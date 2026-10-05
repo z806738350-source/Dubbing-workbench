@@ -79,10 +79,10 @@ export async function startServer({
     audioTools = await toolsAvailable();
     if (audioTools) {
       const audios = store.all("audios");
-      if (audios.length > 20) console.log(`正在校验已有音频（${audios.length} 份），原文件与历史保留，请稍候…`);
+      if (audios.length > 20) console.log(`正在检查音频文件（${audios.length} 份），未变化的文件复用已有校验结果…`);
       for (const [i, a] of audios.entries()) {
         await validateStoredAudio(store, a);
-        if (audios.length > 20 && (i + 1 === audios.length || (i + 1) % 25 === 0)) console.log(`音频校验：${i + 1} / ${audios.length}`);
+        if (audios.length > 20 && (i + 1 === audios.length || (i + 1) % 25 === 0)) console.log(`音频文件检查：${i + 1} / ${audios.length}`);
       }
     }
   } catch (e) {

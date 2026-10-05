@@ -262,7 +262,7 @@ export function createEnhancement(store, d) {
   function assertStructural(action, p) {
     const ids = p.ids || (p.id ? [p.id] : []);
     if (action === 'segment.merge') { const rows = d.list(p.chapterId), next = rows[rows.findIndex(s => s.id === p.id) + 1]; if (next) ids.push(next.id); }
-    const structural = ['segment.split', 'segment.merge', 'chapter.source', 'chapter.resegment'].includes(action) || action === 'segment.update' && p.excluded !== undefined && p.excluded !== store.get('segments',p.id).excluded;
+    const structural = ['segment.split', 'segment.merge', 'segment.delete', 'segment.restore-deleted', 'chapter.source', 'chapter.resegment'].includes(action) || action === 'segment.update' && p.excluded !== undefined && p.excluded !== store.get('segments',p.id).excluded;
     if (structural && store.all('units', p.chapterId).some(u => u.kind === 'group' && ['active', 'pending'].includes(u.state) && (!ids.length || u.members.some(id => ids.includes(id))))) fail('结构修改前请先解除相关活动或待生成组', 409);
     if (['segment.review','segment.restore'].includes(action) && store.all('units', p.chapterId).some(u => u.kind === 'group' && u.state === 'active' && u.members.includes(p.id))) fail('当前按整组检查或恢复，请使用组版本操作', 409);
   }

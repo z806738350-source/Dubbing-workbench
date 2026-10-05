@@ -115,10 +115,10 @@ test('普通Select继续使用combobox/listbox与原Enter选择；项目忙碌�
 
 function appFixture(){
   const calls={actions:[],updates:[],refresh:0,paused:0,errors:[]};
-  const state={settings:{workspaceDirectory:'/fixture'},projects:[{id:'one',name:'第一项目'},{id:'two',name:'第二项目'}],chapters:[{id:'old',projectId:'one'},{id:'next',projectId:'two'}]};
+  const state={settings:{workspaceDirectory:'/fixture'},projects:[{id:'one',name:'第一项目'},{id:'two',name:'第二项目'}],chapters:[{id:'old',projectId:'one',revision:1,arrangement:1},{id:'next',projectId:'two',revision:1,arrangement:1}]};
   const env={React,Select:'Select',state,projectId:'one',busy:false,connectionReady:true,
     stateRef:{current:state},projectRef:{current:'one'},chapterRef:{current:'old'},refreshPending:{current:null},bookmarks:{current:{old:'line-old',next:'line-next'}},chapterPlaybackSnapshots:{current:{old:{id:'old'},next:{id:'next'}}},
-    playIntent:{current:0},pendingPlay:{current:'old'},pendingPlaySnapshot:{current:{arrangement:1}},recoveryTarget:{current:{chapterId:'old'}},
+    playIntent:{current:0},segmentDeletionIntent:{current:0},setSegmentDeletion(){},pendingPlay:{current:'old'},pendingPlaySnapshot:{current:{arrangement:1}},recoveryTarget:{current:{chapterId:'old'}},
     bindDraftWorkspace(){},draftWorkspace:()=>'',playbackIdentity:items=>JSON.stringify(items),generationIntent:{current:0},generationPlan:{id:'old-plan'},audio:{current:{pause(){calls.paused++;}}},
     action:async(name,payload)=>calls.actions.push({name,payload}),refresh:async()=>{calls.refresh++;},
   };
@@ -216,10 +216,10 @@ test('真实刷新回调读取旧章期间清空项目，迟到章节不回填�
 
 test('真实播放核对旧章期间切走，不迟到播放已删除项目的声音',async()=>{
   const f=appFixture();let release;const reads=[];
-  f.env.chapter={id:'old',arrangement:1,playbackItems:[]};f.env.chapterId='old';f.env.playerRef={current:null};
+  f.env.chapter={id:'old',revision:1,arrangement:1,playbackItems:[]};f.env.chapterId='old';f.env.playerRef={current:null};
   f.env.api=async path=>{reads.push(path);return new Promise(resolve=>release=resolve);};
   const play=project(declaration('startPlay'),f.env),pending=play('audios','old-audio','旧声音');
-  f.env.pickProject('two');release({id:'old',arrangement:1,playbackItems:[]});await pending;
+  f.env.pickProject('two');release({id:'old',revision:1,arrangement:1,playbackItems:[]});await pending;
   assert.deepEqual(reads,['/chapters/old']);assert.equal(f.env.player,null);assert.equal(f.env.chapterRef.current,'next');
   assert.ok(!f.calls.updates.some(update=>update.name==='Player'&&update.value?.id==='old-audio'));
 });

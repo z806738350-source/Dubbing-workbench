@@ -59,7 +59,7 @@
         ]
       },
       "access": "local-write",
-      "delegation": "explicit-proposal",
+      "delegation": "allowed-in-mandate",
       "cost": "local-only",
       "helpRefs": [
         "projects"
@@ -226,7 +226,7 @@
         ]
       },
       "access": "local-write",
-      "delegation": "explicit-proposal",
+      "delegation": "allowed-in-mandate",
       "cost": "local-only",
       "helpRefs": [
         "structure"
@@ -564,6 +564,76 @@
       "sourceFile": "server/domain.mjs",
       "handler": "domain.mutate",
       "help": "roles"
+    },
+    {
+      "id": "segment.delete",
+      "version": 1,
+      "description": "删除已明确选择的台词，保留原文与历史声音",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "structure"
+      ],
+      "action": "segment.delete",
+      "target": "segments",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "structure"
+    },
+    {
+      "id": "segment.restore-deleted",
+      "version": 1,
+      "description": "恢复已删除台词及其原先不朗读设置",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "explicit-proposal",
+      "cost": "local-only",
+      "helpRefs": [
+        "structure"
+      ],
+      "action": "segment.restore-deleted",
+      "target": "segments",
+      "sourceFile": "server/domain.mjs",
+      "handler": "domain.mutate",
+      "help": "structure"
     },
     {
       "id": "segment.split",
@@ -1008,7 +1078,7 @@
         ]
       },
       "access": "local-write",
-      "delegation": "explicit-proposal",
+      "delegation": "allowed-in-mandate",
       "cost": "local-only",
       "helpRefs": [
         "voice-create"
@@ -1753,7 +1823,7 @@
         ]
       },
       "access": "local-write",
-      "delegation": "explicit-proposal",
+      "delegation": "allowed-in-mandate",
       "cost": "local-only",
       "helpRefs": [
         "tasks"
@@ -2369,7 +2439,7 @@
         ]
       },
       "access": "local-write",
-      "delegation": "explicit-proposal",
+      "delegation": "allowed-in-mandate",
       "cost": "local-only",
       "helpRefs": [
         "analysis"
@@ -2722,7 +2792,7 @@
         ]
       },
       "access": "local-write",
-      "delegation": "explicit-proposal",
+      "delegation": "allowed-in-mandate",
       "cost": "local-only",
       "helpRefs": [
         "original-audio"
@@ -2859,7 +2929,7 @@
     {
       "id": "read.chapter",
       "version": 1,
-      "description": "分页读取当前任务章节的台词与声音单元；full仅指声明字段，事件与历史另读",
+      "description": "分页读取当前任务章节的台词与声音单元；deleted=true发现已删除台词及原先不朗读设置；full仅指声明字段，事件与历史另读",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -2873,6 +2943,9 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 40
+          },
+          "deleted": {
+            "type": "boolean"
           }
         },
         "required": []
@@ -3631,7 +3704,7 @@
           "ids"
         ]
       },
-      "delegation": "explicit-proposal",
+      "delegation": "allowed-in-mandate",
       "access": "local-write",
       "cost": "local-only",
       "ui": {
@@ -4216,7 +4289,7 @@
           "id"
         ]
       },
-      "delegation": "explicit-proposal",
+      "delegation": "allowed-in-mandate",
       "access": "local-write",
       "cost": "local-only",
       "ui": {
@@ -4355,7 +4428,7 @@
           "name"
         ]
       },
-      "delegation": "explicit-proposal",
+      "delegation": "allowed-in-mandate",
       "access": "local-write",
       "cost": "local-only",
       "ui": {
@@ -5756,7 +5829,7 @@
           "id"
         ]
       },
-      "delegation": "explicit-proposal",
+      "delegation": "allowed-in-mandate",
       "access": "local-write",
       "cost": "local-only",
       "ui": {
@@ -5994,6 +6067,110 @@
       ],
       "undo": "无通用撤销；按对应历史或业务恢复处理",
       "assistantAdaptation": "inspection为人工听评专门入口，模型不允许自由写checked=true"
+    },
+    {
+      "action": "segment.delete",
+      "capabilityId": "segment.delete",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 852,
+        "anchor": "action === 'segment.delete' || action === 'segment.restore-deleted'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "ids"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "delegation": "explicit-proposal",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "台词列表删除按钮／删除所选"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "具体台词与章节版本需核对；共同演绎成员先解除组。",
+      "sideEffects": [
+        "更新删除与不朗读状态，变更当前编排；原文、音频和顺序保留"
+      ],
+      "undo": "可在已删除台词中恢复",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "segment.restore-deleted",
+      "capabilityId": "segment.restore-deleted",
+      "handler": "domain.mutate",
+      "source": {
+        "file": "server/domain.mjs",
+        "line": 852,
+        "anchor": "action === 'segment.delete' || action === 'segment.restore-deleted'"
+      },
+      "legacyParameterNames": [
+        "chapterId",
+        "revision",
+        "ids"
+      ],
+      "modelInputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
+      "delegation": "explicit-proposal",
+      "access": "local-write",
+      "cost": "local-only",
+      "ui": {
+        "file": "src/App.tsx",
+        "entry": "已删除台词／恢复"
+      },
+      "versions": [
+        "chapter.revision",
+        "unit/entity/event revision when applicable",
+        "audioId+basis for review; plan scope for restore"
+      ],
+      "prerequisites": "具体台词与章节版本需核对；共同演绎成员先解除组。",
+      "sideEffects": [
+        "更新删除与不朗读状态，变更当前编排；原文、音频和顺序保留"
+      ],
+      "undo": "可重新删除",
+      "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
     }
   ],
   "operations": [
@@ -6031,7 +6208,7 @@
         "grantId"
       ],
       "capabilityId": "operation.prepareChapter",
-      "delegation": "see capability",
+      "delegation": "allowed-in-mandate",
       "idempotency": "operationId + exact request; step receipts and partial completion survive",
       "notes": "inherit every underlying domain/worker guard"
     },
@@ -6054,7 +6231,7 @@
         "updateDefault"
       ],
       "capabilityId": "operation.useVoice",
-      "delegation": "see capability",
+      "delegation": "allowed-in-mandate",
       "idempotency": "operationId + exact request; step receipts and partial completion survive",
       "notes": "chapterOnly UI value currently is not read by experience; handler uses updateDefault!==true. Default safely stays chapter-specific."
     },
@@ -6072,7 +6249,7 @@
         "resumeRoute"
       ],
       "capabilityId": "operation.groupAndGenerate",
-      "delegation": "see capability",
+      "delegation": "allowed-in-mandate",
       "idempotency": "operationId + exact request; step receipts and partial completion survive",
       "notes": "inherit every underlying domain/worker guard"
     },
@@ -6093,7 +6270,7 @@
         "resumeRoute"
       ],
       "capabilityId": "operation.sceneAndGenerate",
-      "delegation": "see capability",
+      "delegation": "allowed-in-mandate",
       "idempotency": "operationId + exact request; step receipts and partial completion survive",
       "notes": "inherit every underlying domain/worker guard"
     },
@@ -6117,7 +6294,7 @@
         "resumeRoute"
       ],
       "capabilityId": "operation.generateSelection",
-      "delegation": "see capability",
+      "delegation": "allowed-in-mandate",
       "idempotency": "operationId + exact request; step receipts and partial completion survive",
       "notes": "inherit every underlying domain/worker guard"
     },
@@ -6137,7 +6314,7 @@
         "resumeRoute"
       ],
       "capabilityId": "operation.voiceCandidate",
-      "delegation": "see capability",
+      "delegation": "allowed-in-mandate",
       "idempotency": "operationId + exact request; step receipts and partial completion survive",
       "notes": "inherit every underlying domain/worker guard"
     },
@@ -6155,7 +6332,7 @@
         "format"
       ],
       "capabilityId": "operation.export",
-      "delegation": "see capability",
+      "delegation": "allowed-in-mandate",
       "idempotency": "operationId + exact request; step receipts and partial completion survive",
       "notes": "ordinary confirm=true means human confirms actual reviewItems; assistant export must force false"
     }
@@ -6259,7 +6436,8 @@
         "draftVersion for existing draft",
         "unit/scene revisions for scene"
       ],
-      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history",
+      "delegation": "allowed-in-mandate"
     },
     {
       "method": "start",
@@ -6273,7 +6451,8 @@
         "draftVersion for existing draft",
         "unit/scene revisions for scene"
       ],
-      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history",
+      "delegation": "allowed-in-mandate"
     },
     {
       "method": "edit",
@@ -6287,7 +6466,8 @@
         "draftVersion for existing draft",
         "unit/scene revisions for scene"
       ],
-      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history",
+      "delegation": "allowed-in-mandate"
     },
     {
       "method": "apply",
@@ -6301,7 +6481,8 @@
         "draftVersion for existing draft",
         "unit/scene revisions for scene"
       ],
-      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history",
+      "delegation": "allowed-in-mandate"
     },
     {
       "method": "resume",
@@ -6315,7 +6496,8 @@
         "draftVersion for existing draft",
         "unit/scene revisions for scene"
       ],
-      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history",
+      "delegation": "allowed-in-mandate"
     },
     {
       "method": "previewReuse",
@@ -6329,7 +6511,8 @@
         "draftVersion for existing draft",
         "unit/scene revisions for scene"
       ],
-      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history",
+      "delegation": "allowed-in-mandate"
     },
     {
       "method": "reuse",
@@ -6343,7 +6526,8 @@
         "draftVersion for existing draft",
         "unit/scene revisions for scene"
       ],
-      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history"
+      "notes": "unknown retry and received replacement distinct decisions; historical reuse validates current conditions without rewriting history",
+      "delegation": "allowed-in-mandate"
     }
   ],
   "enhancementPreviewKinds": [

@@ -106,6 +106,7 @@ export interface Segment {
   config: { speech_rate: number; loudness_rate: number; pitch_rate: number };
   template: string;
   excluded: boolean;
+  deletion?: { at: string; excluded: boolean };
   editHistory?: { revision: number; text: string }[];
   source: {
     text?: string;
@@ -307,6 +308,7 @@ export interface ChapterDetail extends Chapter {
   events?: SoundEvent[];
   knownRoles: Role[];
   segments: Segment[];
+  deletedSegments?: Segment[];
   coverage: { valid: boolean; gaps: number; overlaps: number };
   masters: Master[];
   exports: ExportRecord[];

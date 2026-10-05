@@ -7,10 +7,20 @@ export type UIAction = {type:'navigate'|'play';kind?:'voices'|'audios'|'masters'
 export type AssistantEffects = {voiceAssignments:{segmentId?:string;segmentText?:string;roleId:string;before:string|null;after:string|null;source?:string}[];readingRange?:{before:{text:string;spans:unknown[]};after:{text:string;spans:unknown[]}}};
 export type AssistantStep = {id:string;runId:string;ordinal:number;capabilityId:string;description:string;state:string;input?:Record<string,unknown>;preview?:Record<string,unknown>&{effects?:AssistantEffects};error?:string;resultRefs?:{uiAction?:UIAction;audioId?:string;jobIds?:string[]}};
 export type AssistantDetail = {session:Session;messages:{id:string;role:string;content:string;attachmentIds:string[]}[];runs:AssistantRun[];steps:AssistantStep[];attachments:Attachment[];capabilities:{id:string;description:string}[]};
-export type AssistantDraft = {text:string;attachments:Attachment[];mode:'ask'|'task';workflowKinds?:('dry'|'group'|'scene')[];stepLimit?:number;completionTarget?:'requested-actions'|'chapter-master';limits:Limits;voicePolicy:'askMissing'|'chooseFromApprovedSet';allowedVoiceIds:string[];materials:string[];textMutationPolicy:'preserveExact'|'explicitSpecifiedEdit';pending?:Record<string,unknown>};
-export const newAssistantDraft = ():AssistantDraft => ({text:'',attachments:[],mode:'ask',workflowKinds:['dry'],stepLimit:40,completionTarget:'requested-actions',limits:{assistant:12,analysis:3,audio:100},voicePolicy:'askMissing',allowedVoiceIds:[],materials:['text'],textMutationPolicy:'preserveExact'});
+export type AssistantDraft = {text:string;attachments:Attachment[];mode:'ask'|'task';workflowKinds?:('dry'|'group'|'scene')[];workflowCustomized?:boolean;stepLimit?:number;stepLimitCustomized?:boolean;completionTarget?:'requested-actions'|'chapter-master';completionCustomized?:boolean;limits:Limits;limitsCustomized?:(keyof Limits)[];voicePolicy:'askMissing'|'chooseFromApprovedSet';allowedVoiceIds:string[];materials:string[];materialsCustomized?:boolean;textMutationPolicy:'preserveExact'|'explicitSpecifiedEdit';pending?:Record<string,unknown>};
+export const newAssistantDraft = ():AssistantDraft => ({text:'',attachments:[],mode:'task',workflowCustomized:false,stepLimit:40,stepLimitCustomized:false,completionTarget:'requested-actions',completionCustomized:false,limits:{assistant:12,analysis:3,audio:100},limitsCustomized:[],voicePolicy:'askMissing',allowedVoiceIds:[],materials:['text','reference'],materialsCustomized:false,textMutationPolicy:'preserveExact'});
+export function assistantTaskOptions(draft:AssistantDraft) {
+  const defaults={assistant:12,analysis:3,audio:100},keys=draft.limitsCustomized ?? (Object.keys(defaults) as (keyof Limits)[]).filter(key=>draft.limits[key]!==defaults[key]);
+  return {
+    ...(keys.length?{limits:Object.fromEntries(keys.map(key=>[key,draft.limits[key]]))}:{}),
+    ...((draft.workflowCustomized ?? (!!draft.workflowKinds&&JSON.stringify(draft.workflowKinds)!==JSON.stringify(['dry'])))?{workflowKinds:draft.workflowKinds}:{}),
+    ...((draft.materialsCustomized ?? JSON.stringify(draft.materials)!==JSON.stringify(['text']))?{materials:[...new Set([...draft.materials,...(draft.attachments.length?['image']:[])])]}:{}),
+    ...((draft.stepLimitCustomized ?? (draft.stepLimit!==undefined&&draft.stepLimit!==40))?{stepLimit:draft.stepLimit}:{}),
+    ...((draft.completionCustomized ?? (draft.completionTarget!==undefined&&draft.completionTarget!=='requested-actions'))?{completionTarget:draft.completionTarget}:{}),
+  };
+}
 export const assistantTerminal = (state:string) => ['completed','cancelled','failed','rejected'].includes(state);
-export const assistantState:Record<string,string> = {planning:'正在整理任务',awaitingApproval:'等你确认',executing:'执行中',waitingJobs:'等待声音结果',awaitingUser:'需要你补充',paused:'已暂停',completed:'已完成',needsReconciliation:'结果待核对',cancelled:'已停止',rejected:'未批准',proposed:'待确认',approved:'已批准',running:'执行中',success:'已完成',succeeded:'已完成',failed:'未完成',skipped:'已跳过'};
+export const assistantState:Record<string,string> = {planning:'正在整理任务',awaitingApproval:'等你确认',executing:'执行中',waitingJobs:'等待声音结果',awaitingUser:'需要你补充',paused:'已暂停',completed:'已完成',needsReconciliation:'结果待核对',cancelled:'已停止',rejected:'未批准',proposed:'待确认',approved:'已批准',running:'执行中',success:'已完成',succeeded:'已完成',failed:'未完成',skipped:'已跳过',superseded:'已调整计划'};
 export function checkAssistantFiles(files:File[],held:Attachment[]) {
   if (files.length+held.length>2) throw Error('每条消息最多附两张截图');
   if(files.some(f=>!['image/png','image/jpeg','image/webp'].includes(f.type))) throw Error('请使用 PNG、JPEG 或 WebP 静态截图');

@@ -35,14 +35,14 @@ const proposal = (capabilityId, input) => ({ reply: '已准备修改方案，请
 for (const policy of ['askMissing','chooseFromApprovedSet']) test(`delegated segment voice assignment obeys ${policy} across generic writes`,async t=>{
  const f=fixture(t,[]),s=f.domain.list(f.chapter.id)[0],a={id:uid(),name:'A',state:'active'},b={id:uid(),name:'B',state:'active'};f.store.put('voices',a);f.store.put('voices',b);
  f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('segment.update',{id:s.id,voiceId:b.id}),{reply:'完成'});
- await send(f,{mode:'task',voicePolicy:policy,allowedVoiceIds:[a.id],limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
+ await send(f,{mode:'task',voicePolicy:policy,allowedVoiceIds:[a.id],limits:{assistant:5,audio:0}});await idle(f.assistant);
  const state=f.assistant.get(f.session.id);assert.equal(f.store.get('segments',s.id).voiceId,null);assert.equal(state.runs[0].state,'awaitingUser');assert.ok(state.runs[0].voiceQuestions.some(q=>q.segmentIds.includes(s.id)));
 });
 
 test('delegation cannot remove a sentence from preserved reading scope; a specific approved exclusion can',async t=>{
  const f=fixture(t,[]),s=f.domain.list(f.chapter.id)[1];
  f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('segment.update',{id:s.id,excluded:true}),{reply:'完成'});
- await send(f,{mode:'task',limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
+ await send(f,{mode:'task',limits:{assistant:5,audio:0}});await idle(f.assistant);
  let state=f.assistant.get(f.session.id);assert.equal(f.store.get('segments',s.id).excluded,false);assert.equal(state.runs[0].state,'awaitingApproval');assert.match(state.runs[0].error,/朗读范围|省略/);
  f.assistant.approve(state.runs[0].id,{decisionId:uid(),revision:state.runs[0].revision,accepted:false});f.answers.length=0;
  f.answers.push(proposal('segment.update',{id:s.id,excluded:true}),{reply:'这句已按决定不朗读'});
@@ -53,13 +53,13 @@ test('delegation cannot remove a sentence from preserved reading scope; a specif
 test('allowed voice selection and unchanged saves continue without repeated approval',async t=>{
  const f=fixture(t,[]),s=f.domain.list(f.chapter.id)[0],v={id:uid(),name:'A',state:'active'};f.store.put('voices',v);
  f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('segment.update',{id:s.id,voiceId:v.id}),proposal('segment.update',{id:s.id,voiceId:v.id}),{reply:'完成'});
- await send(f,{mode:'task',voicePolicy:'chooseFromApprovedSet',allowedVoiceIds:[v.id],limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
- assert.equal(f.store.get('segments',s.id).voiceId,v.id);assert.equal(f.assistant.get(f.session.id).runs[0].state,'completed');assert.equal(f.store.all('assistantDecisions').length,1);
+ await send(f,{mode:'task',voicePolicy:'chooseFromApprovedSet',allowedVoiceIds:[v.id],limits:{assistant:5,audio:0}});await idle(f.assistant);
+ assert.equal(f.store.get('segments',s.id).voiceId,v.id);assert.equal(f.assistant.get(f.session.id).runs[0].state,'completed');assert.equal(f.store.all('assistantDecisions').length,0);
 });
 
 test('task completion rechecks preserved reading scope after external omission',async t=>{
  const f=fixture(t,[]),s=f.domain.list(f.chapter.id)[1];f.answers.push(proposal('chapter.update',{gap:0.6}),()=>{f.store.put('segments',{...s,excluded:true},f.chapter.id);return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({reply:'全部完成',complete:true})}}]}));});
- await send(f,{mode:'task',limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
+ await send(f,{mode:'task',limits:{assistant:5,audio:0}});await idle(f.assistant);
  const r=f.assistant.get(f.session.id).runs[0];assert.equal(r.state,'awaitingUser');assert.match(r.error,/朗读范围/);
 });
 
@@ -70,15 +70,15 @@ for(const action of ['resetVoice','roleId','segment.rebind','segment.merge'])tes
  if(action==='roleId'||action==='segment.rebind'){const other=f.domain.mutate('role.create',{projectId:f.project.id,name:'另一角色'});f.store.put('roles',{...other,voiceId:b.id},f.project.id);if(action==='roleId')input={id:s.id,roleId:other.id};else {capabilityId='segment.rebind';input={ids:[s.id],roleId:other.id};}}
  if(action==='segment.merge'){capabilityId=action;input={id:s.id,choice:'second'};}
  f.answers.push(proposal('chapter.update',{gap:0.6}),proposal(capabilityId,input),{reply:'完成'});
- await send(f,{mode:'task',voicePolicy:'chooseFromApprovedSet',allowedVoiceIds:[a.id],limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
+ await send(f,{mode:'task',voicePolicy:'chooseFromApprovedSet',allowedVoiceIds:[a.id],limits:{assistant:5,audio:0}});await idle(f.assistant);
  assert.equal(f.assistant.get(f.session.id).runs[0].state,'awaitingUser');assert.equal(f.store.get('segments',s.id).voiceId,a.id);assert.equal(f.store.get('segments',s.id).retired,undefined);assert.equal(f.domain.list(f.chapter.id).length,2);
 });
 
 test('exact split and merge preserve reading scope without extra approvals or repeated voice decisions',async t=>{
  const f=fixture(t,[]),s=f.domain.list(f.chapter.id)[0];
  f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('segment.split',{id:s.id,offset:2}),()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(proposal('segment.merge',{id:f.domain.list(f.chapter.id)[0].id}))}}]})),{reply:'完成'});
- await send(f,{mode:'task',limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
- const state=f.assistant.get(f.session.id);assert.equal(state.runs[0].state,'completed',state.runs[0].error);assert.equal(f.store.all('assistantDecisions').length,1);assert.equal(f.domain.list(f.chapter.id)[0].text,s.text);
+ await send(f,{mode:'task',limits:{assistant:5,audio:0}});await idle(f.assistant);
+ const state=f.assistant.get(f.session.id);assert.equal(state.runs[0].state,'completed',state.runs[0].error);assert.equal(f.store.all('assistantDecisions').length,0);assert.equal(f.domain.list(f.chapter.id)[0].text,s.text);
 });
 
 test('ordinary question reads real context and ends without writes; message replay never resends', async t => {
@@ -109,13 +109,12 @@ test('specific proposal requires exact approval, refuses changed targets and per
   assert.equal(f2.store.get('chapters', f2.chapter.id).title, '第1章');
 });
 
-test('approved bounded task progresses through multiple local steps with AI source, preserves text and never marks listened', async t => {
+test('sending a bounded task directly progresses through local steps with AI source, preserved text and no fake listening', async t => {
   const f = fixture(t, []), segment = f.domain.list(f.chapter.id)[0];
   f.answers.push(proposal('segment.update', { id: segment.id, performance: '轻声' }), proposal('chapter.update', { gap: 0.7 }), { reply: '安排已保存，仍需生成和试听。', complete: true });
   await send(f, { mode: 'task', limits: { assistant: 6, audio: 0, analysis: 0 } }); await idle(f.assistant);
-  let run = f.assistant.get(f.session.id).runs[0];
-  f.assistant.approve(run.id, { decisionId: uid(), revision: run.revision, accepted: true }); await idle(f.assistant);
-  run = f.assistant.get(f.session.id).runs[0];
+  const run = f.assistant.get(f.session.id).runs[0];
+  assert.equal(f.store.all('assistantDecisions',run.id).length,0);
   assert.equal(run.state, 'completed', run.error);
   assert.equal(f.store.get('segments', segment.id).performance, '轻声');
   assert.equal(f.store.get('segments', segment.id).text, segment.text);
@@ -123,6 +122,16 @@ test('approved bounded task progresses through multiple local steps with AI sour
   assert.equal(f.store.get('chapters', f.chapter.id).gap, 0.7);
   assert.equal(f.requests.length, 3);
   assert.equal(f.assistant.get(f.session.id).steps.filter(s => s.state === 'completed').length, 2);
+});
+
+test('a 138-line chapter receives the free-plan audio scope while explicit limits remain exact',async t=>{
+  const f=fixture(t,[{reply:'已读取本章范围。'}]),v=voice(f),chapter=f.domain.mutate('chapter.create',{projectId:f.project.id,title:'长章夹具',source:Array.from({length:138},(_,i)=>'第'+i+'句。').join('\n'),segment:true});
+  f.session=f.assistant.create({projectId:f.project.id,chapterId:chapter.id}).session;
+  await send(f,{mode:'task',materials:undefined,limits:{assistant:16},completionTarget:'requested-actions'});await idle(f.assistant);
+  const run=f.assistant.get(f.session.id).runs[0];assert.equal(run.budget.limits.audio,138);assert.ok(run.budget.limits.analysis>0);assert.equal(run.budget.limits.assistant,16);assert.equal(run.stepLimit,200);assert.ok(run.materials.includes('reference'));assert.ok(run.allowedVoiceIds.includes(v.id));assert.ok(f.store.get('assistantRuns',run.id).mandate);assert.equal(f.store.all('assistantDecisions',run.id).length,0);
+  f.answers.push({reply:'遵守本次明确限制。'});f.session=f.assistant.create({projectId:f.project.id,chapterId:chapter.id}).session;
+  await send(f,{mode:'task',limits:{assistant:3,analysis:0,audio:100},stepLimit:40,workflowKinds:['dry'],completionTarget:'requested-actions'});await idle(f.assistant);
+  const limited=f.assistant.get(f.session.id).runs[0];assert.deepEqual(limited.budget.limits,{assistant:3,analysis:0,audio:100});assert.equal(limited.stepLimit,40);assert.deepEqual(limited.workflowKinds,['dry']);
 });
 
 test('unregistered model action repairs at most once, then executes nothing', async t => {
@@ -171,7 +180,7 @@ test('generation and master run through real worker receipts; waiting ticks spen
  const f=fixture(t,[],true),v=voice(f),ids=f.domain.list(f.chapter.id).map(s=>s.id);let audioCalls=0;
  t.mock.method(globalThis,'fetch',async()=>{audioCalls++;return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
  f.answers.push(proposal('operation.generateSelection',{ids,actionKind:'fillMissing'}),proposal('job.master',{}),{reply:'母版已准备好，等待人工试听。',complete:true});
- await send(f,{mode:'task',completionTarget:'chapter-master',materials:['text','reference'],allowedVoiceIds:[v.id],limits:{assistant:6,audio:ids.length,analysis:0}});await idle(f.assistant);const id=await approve(f);
+ await send(f,{mode:'task',completionTarget:'chapter-master',materials:['text','reference'],allowedVoiceIds:[v.id],limits:{assistant:6,audio:ids.length,analysis:0}});await idle(f.assistant);const id=f.assistant.get(f.session.id).runs[0].id;
  assert.equal(f.store.get('assistantRuns',id).state,'waitingJobs');await f.assistant.tick();assert.equal(f.requests.length,1);
  await f.worker.tick();await f.assistant.tick();await idle(f.assistant);assert.equal(f.requests.length,2);assert.equal(f.store.get('assistantRuns',id).state,'waitingJobs');
  await f.worker.tick();await f.assistant.tick();await idle(f.assistant);
@@ -228,7 +237,7 @@ test('central voice choices are scoped business operations and do not fake a lis
 test('creation from an empty session binds only actual created objects and continues the mandate',async t=>{
  const f=fixture(t,[]);f.session=f.assistant.create({}).session;
  f.answers.push(proposal('project.create',{name:'全新助手项目'}),proposal('chapter.create',{title:'新章',source:'原文。',segment:true}),{reply:'导入已保存。'});
- await send(f,{mode:'task',limits:{assistant:5,audio:0,analysis:0}});await idle(f.assistant);await approve(f);
+ await send(f,{mode:'task',limits:{assistant:5,audio:0,analysis:0}});await idle(f.assistant);
  const state=f.assistant.get(f.session.id),r=state.runs[0];assert.equal(r.state,'completed',r.error);assert.ok(r.binding.projectId);assert.ok(r.binding.chapterId);assert.equal(f.store.get('chapters',r.binding.chapterId).source,'原文。');assert.equal(state.session.chapterId,r.binding.chapterId);assert.equal(f.requests.length,3);
 });
 
@@ -276,7 +285,7 @@ test('malformed persisted assistant rows are isolated from listing, busy checks 
 test('an approved voice set permits automatic role selection with AI provenance and no further approval',async t=>{
  const f=fixture(t,[]),v={id:uid(),name:'批准声音',state:'active',path:'voice.wav',revision:1,duration:0.1};writeFileSync(join(f.directory,v.path),wav());f.store.put('voices',v);const roleId=f.domain.list(f.chapter.id)[0].roleId;
  f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('operation.useVoice',{roleId,voiceId:v.id,updateDefault:false}),{reply:'本章音色已安排'});
- await send(f,{mode:'task',voicePolicy:'chooseFromApprovedSet',allowedVoiceIds:[v.id],limits:{assistant:5,audio:0,analysis:0}});await idle(f.assistant);await approve(f);
+ await send(f,{mode:'task',voicePolicy:'chooseFromApprovedSet',allowedVoiceIds:[v.id],limits:{assistant:5,audio:0,analysis:0}});await idle(f.assistant);
  assert.equal(f.assistant.get(f.session.id).runs[0].state,'completed');assert.equal(f.requests.length,3);assert.ok(f.domain.list(f.chapter.id).every(s=>s.voiceId===v.id&&s.decisions.identity.source==='policy_ai'));
 });
 test('duplicate approval returns the same decision and applies a local proposal exactly once',async t=>{
@@ -290,9 +299,9 @@ test('one empty-session mandate imports exact text, selects approved voice and d
  const bound=()=>f.assistant.get(f.session.id).runs[0].binding;
  f.answers.push(proposal('project.create',{name:'空白到母版'}),proposal('chapter.create',{title:'完整流程',source:'保留这句原文。',segment:true}),()=>answer(proposal('operation.useVoice',{roleId:f.domain.list(bound().chapterId)[0].roleId,voiceId:v.id,updateDefault:false})),()=>answer(proposal('segment.confirm',{ids:f.domain.list(bound().chapterId).map(s=>s.id),roleOnly:true})),()=>answer(proposal('operation.generateSelection',{ids:f.domain.list(bound().chapterId).map(s=>s.id),actionKind:'fillMissing'})),proposal('job.master',{}),{reply:'试听母版已就绪，请检查。',complete:true});
  t.mock.method(globalThis,'fetch',async()=>new Response(wav(),{headers:{'Content-Type':'audio/wav'}}));
- await send(f,{mode:'task',completionTarget:'chapter-master',voicePolicy:'chooseFromApprovedSet',allowedVoiceIds:[v.id],materials:['text','reference'],limits:{assistant:8,audio:2,analysis:0}});await idle(f.assistant);await approve(f);
+ await send(f,{mode:'task',completionTarget:'chapter-master',voicePolicy:'chooseFromApprovedSet',allowedVoiceIds:[v.id],materials:['text','reference'],limits:{assistant:8,audio:2,analysis:0}});await idle(f.assistant);
  assert.equal(f.assistant.get(f.session.id).runs[0].state,'waitingJobs',f.assistant.get(f.session.id).runs[0].error);assert.equal(f.requests.length,5);await f.worker.tick();await f.assistant.tick();await idle(f.assistant);await f.worker.tick();await f.assistant.tick();await idle(f.assistant);
- const r=f.assistant.get(f.session.id).runs[0];assert.equal(r.state,'completed',r.error);assert.ok(r.delivery.masterId);assert.equal(f.store.get('chapters',r.binding.chapterId).source,'保留这句原文。');assert.equal(r.budget.used.audio,1);assert.equal(r.budget.used.assistant,7);assert.equal(f.store.all('assistantDecisions',r.id).length,1);assert.equal(f.domain.list(r.binding.chapterId)[0].decisions.identity.source,'policy_ai');
+ const r=f.assistant.get(f.session.id).runs[0];assert.equal(r.state,'completed',r.error);assert.ok(r.delivery.masterId);assert.equal(f.store.get('chapters',r.binding.chapterId).source,'保留这句原文。');assert.equal(r.budget.used.audio,1);assert.equal(r.budget.used.assistant,7);assert.equal(f.store.all('assistantDecisions',r.id).length,0);assert.equal(f.domain.list(r.binding.chapterId)[0].decisions.identity.source,'policy_ai');
 });
 test('approved deletion of the bound project leaves only a generic archived result, not private data',async t=>{
  const f=fixture(t,[]);f.answers.push(proposal('project.delete',{id:f.project.id}));await send(f,{text:'删除这个项目和里面的素材'});await idle(f.assistant);const id=await approve(f);
@@ -318,8 +327,8 @@ test('explicit workflow scope generates a group inside one mandate without repea
  const f=fixture(t,[],true),v=voice(f),ids=f.domain.list(f.chapter.id).map(s=>s.id);let audioCalls=0;
  t.mock.method(globalThis,'fetch',async()=>{audioCalls++;return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
  f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('operation.groupAndGenerate',{ids,guidance:'自然衔接'}),{reply:'一起演绎已生成。',complete:true});
- await send(f,{mode:'task',workflowKinds:['dry','group'],materials:['text','reference'],allowedVoiceIds:[v.id],limits:{assistant:5,audio:1,analysis:0}});await idle(f.assistant);const id=await approve(f);
- assert.equal(f.store.get('assistantRuns',id).state,'waitingJobs');assert.equal(f.store.all('assistantDecisions',id).length,1);
+ await send(f,{mode:'task',workflowKinds:['dry','group'],materials:['text','reference'],allowedVoiceIds:[v.id],limits:{assistant:5,audio:1,analysis:0}});await idle(f.assistant);const id=f.assistant.get(f.session.id).runs[0].id;
+ assert.equal(f.store.get('assistantRuns',id).state,'waitingJobs');assert.equal(f.store.all('assistantDecisions',id).length,0);
  await f.worker.tick();await f.assistant.tick();await idle(f.assistant);
  const state=f.assistant.get(f.session.id),group=f.store.all('units',f.chapter.id).find(u=>u.kind==='group');assert.equal(state.runs[0].state,'completed',state.runs[0].error);assert.equal(audioCalls,1);assert.equal(group.state,'active');assert.equal(group.creationSource.actorKind,'assistant_delegated');assert.equal(state.steps[1].approvedBy,undefined);
 });
@@ -330,7 +339,7 @@ test('authorized existing scene generates directly and preserves manual guidance
  const event=f.domain.mutate('event.create',{chapterId:f.chapter.id,revision:rev(),unitId:id,entityRevision:f.store.get('units',id).revision,kind:'effect',description:'一下清晰敲门声',memberId:id,position:'after',state:'adopted'}),before=f.store.get('events',event.id);
  let audioCalls=0;t.mock.method(globalThis,'fetch',async()=>{audioCalls++;return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
  f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('operation.sceneAndGenerate',{unitId:id,eventIds:[event.id]}),{reply:'指定场景已生成。',complete:true});
- await send(f,{mode:'task',workflowKinds:['dry','scene'],materials:['text','reference'],allowedVoiceIds:[v.id],limits:{assistant:5,audio:1,analysis:0}});await idle(f.assistant);const runId=await approve(f);
+ await send(f,{mode:'task',workflowKinds:['dry','scene'],materials:['text','reference'],allowedVoiceIds:[v.id],limits:{assistant:5,audio:1,analysis:0}});await idle(f.assistant);const runId=f.assistant.get(f.session.id).runs[0].id;
  assert.equal(f.store.get('assistantRuns',runId).state,'waitingJobs');await f.worker.tick();await f.assistant.tick();await idle(f.assistant);
  const state=f.assistant.get(f.session.id),unit=f.store.get('units',id),after=f.store.get('events',event.id);assert.equal(state.runs[0].state,'completed',state.runs[0].error);assert.equal(audioCalls,1);assert.equal(state.runs[0].budget.used.analysis,0);assert.equal(unit.mode,'scene');assert.equal(unit.variants.scene.guidance,'保持低沉语气');assert.equal(unit.variants.scene.guidanceSource.kind,'user');assert.equal(after.description,before.description);assert.deepEqual(after.source,before.source);assert.equal(state.steps[1].approvedBy,undefined);
  const originalAudioId=unit.variants.scene.current,extra=f.domain.mutate('event.create',{chapterId:f.chapter.id,revision:rev(),unitId:id,entityRevision:unit.revision,kind:'effect',description:'新手动加入的一下铃声',memberId:id,position:'before',state:'adopted'});
@@ -345,14 +354,14 @@ test('authorized existing scene generates directly and preserves manual guidance
 test('dry mandate asks once for a concrete group expansion and continues later group work automatically',async t=>{
  const f=fixture(t,[]),ids=f.domain.list(f.chapter.id).map(s=>s.id);voice(f);
  f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('unit.create',{ids,guidance:'自然'}),()=>{const group=f.store.all('units',f.chapter.id).find(u=>u.kind==='group');return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(proposal('unit.update',{id:group.id,mode:'dry',guidance:'轻声衔接'}))}}]}));},{reply:'设置已完成。',complete:true});
- await send(f,{mode:'task',limits:{assistant:5,audio:0,analysis:0}});await idle(f.assistant);const id=await approve(f);let state=f.assistant.get(f.session.id);
+ await send(f,{mode:'task',workflowKinds:['dry'],limits:{assistant:5,audio:0,analysis:0}});await idle(f.assistant);const id=f.assistant.get(f.session.id).runs[0].id;let state=f.assistant.get(f.session.id);
  assert.equal(state.runs[0].state,'awaitingApproval');assert.equal(f.store.all('units',f.chapter.id).filter(u=>u.kind==='group').length,0);assert.deepEqual(state.runs[0].workflowKinds,['dry']);await approve(f);
- state=f.assistant.get(f.session.id);assert.equal(state.runs[0].state,'completed',state.runs[0].error);assert.deepEqual(state.runs[0].workflowKinds,['dry','group']);assert.equal(state.steps[2].approvedBy,undefined);assert.equal(f.store.all('assistantDecisions',id).length,2);
+ state=f.assistant.get(f.session.id);assert.equal(state.runs[0].state,'completed',state.runs[0].error);assert.deepEqual(state.runs[0].workflowKinds,['dry','group']);assert.equal(state.steps[2].approvedBy,undefined);assert.equal(f.store.all('assistantDecisions',id).length,1);
 });
 
 test('same task step-limit expansion keeps usage and consumes the saved model reply without resending',async t=>{
  const f=fixture(t,[proposal('chapter.update',{gap:0.6}),proposal('chapter.update',{gap:0.8}),{reply:'已完成',complete:true}]);
- await send(f,{mode:'task',stepLimit:1,limits:{assistant:5,audio:0,analysis:0}});await idle(f.assistant);const id=await approve(f);let run=f.assistant.get(f.session.id).runs[0];
+ await send(f,{mode:'task',stepLimit:1,limits:{assistant:5,audio:0,analysis:0}});await idle(f.assistant);const id=f.assistant.get(f.session.id).runs[0].id;let run=f.assistant.get(f.session.id).runs[0];
  assert.equal(run.state,'awaitingUser');assert.match(run.error,/步骤上限/);assert.equal(f.requests.length,2);assert.equal(run.budget.used.assistant,2);
  await assert.rejects(f.assistant.control(id,{action:'amend',revision:run.revision,decisionId:uid(),stepLimit:201}),/上限/);
  await f.assistant.control(id,{action:'amend',revision:run.revision,decisionId:uid(),stepLimit:3});run=f.assistant.get(f.session.id).runs[0];assert.equal(run.budget.used.assistant,2);assert.equal(run.stepLimit,3);

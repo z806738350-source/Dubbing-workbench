@@ -32,7 +32,7 @@ export function CreateGroup({ chapter, ids, roles, enabled, state, refresh, clos
   chapter: ChapterDetail; ids: string[]; roles: Role[]; enabled: boolean; state?: State;
   refresh: () => Promise<void>; close: () => void; open: (id: string) => void; created: (unit: GenerationUnit, warning?: string) => void;
 }) {
-  const controller = useObjectDraft("unit", "new-" + chapter.id, { ids: chapter.segments.filter(segment => ids.includes(segment.id)).map(segment => segment.id), guidance: "", chapterRevision: chapter.revision }, 0, { scope: "chapter:" + chapter.id, dependencies: ["new-group:" + chapter.id] });
+  const controller = useObjectDraft("unit", "new-" + chapter.id, { ids: chapter.segments.filter(segment => ids.includes(segment.id)).map(segment => segment.id), guidance: "", chapterRevision: chapter.revision }, 0, { scope: "chapter:" + chapter.id, dependencies: ["new-group:" + chapter.id], deferUnmounted: true });
   const [preview, setPreview] = useState<{ conflicts: unknown[]; prompt?: string } | null>(null);
   const [error, setError] = useState(""), [pending, setPending] = useState(false), [grantId, setGrantId] = useState<string | null>(null), [resumeRoute,setResumeRoute]=useState(false);
   useEffect(()=>{setResumeRoute(false);},[state?.settings.routeBlocked,state?.settings.model]);

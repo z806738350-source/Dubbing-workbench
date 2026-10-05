@@ -81,9 +81,11 @@ test('HTTP uses independent settings, rejects unauthorised send, archives select
   assert.equal((await request(`/assistant/sessions/${s1.id}/messages`, { messageId: uid(), text: '已归档不再发送', approved: true })).status,409);
   assert.equal((await request(`/assistant/sessions/${s1.id}/content-delete`, {sessionId:s2.id,revision:archived.session.revision,confirmed:true})).status,403);
   const deleted=await request(`/assistant/sessions/${s1.id}/content-delete`, {sessionId:s1.id,revision:archived.session.revision,confirmed:true});
-  assert.equal(deleted.status,200,JSON.stringify(deleted.data));assert.equal(deleted.data.messages.length,0);assert.ok(deleted.data.session.contentDeletion);
+  assert.equal(deleted.status,200,JSON.stringify(deleted.data));assert.deepEqual(deleted.data,{sessionId:s1.id,deleted:true});
+  assert.equal((await request(`/assistant/sessions/${s1.id}`)).status,404);
+  assert.deepEqual(app.store.all('assistantMessages',s1.id),[]);
   assert.equal((await request(`/assistant/sessions/${s2.id}`)).data.session.state,'active');
-  assert.equal((await request('/assistant/sessions')).data.length, 2);
+  assert.deepEqual((await request('/assistant/sessions')).data.map(s=>s.id),[s2.id]);
 });
 
 test('在途截图阻止本项目删除和重命名，保存完成后可按新范围删除', async t => {

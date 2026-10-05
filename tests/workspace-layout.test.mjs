@@ -19,15 +19,15 @@ const text=node=>node==null||typeof node==='boolean'?'':typeof node!=='object'?S
 const button=(tree,label)=>nodes(tree).find(node=>node.type==='button'&&text(node)===label);
 
 function fixture(mode='dry'){
-  const calls={play:[],generate:[],members:[],open:[],voice:[]};
+  const calls={play:[],generate:[],members:[],open:[],voice:[],delete:[]};
   const segments=['one','two','three','outside'].map((id,order)=>({id,order,roleId:'role',voiceId:'voice',text:'自拟台词'+order,roleConfirmed:true,identityConfirmed:true,current:'single-'+id,validity:'matched',latest:'success'}));
   const group={id:'group',kind:'group',state:'active',members:['one','two','three'],mode,variants:{dry:{current:'group-dry',status:{basis:{version:'dry'}}},scene:{current:'group-scene',status:{basis:{version:'scene'}}}}};
   const env={React,visible:segments,segments,roles:[{id:'role',name:'角色'}],voices:[{id:'voice',name:'声音'}],chapter:{id:'chapter',units:[group]},
     configurationDecided:()=>true,effectiveStatus:()=>({validity:'matched',review:'passed'}),currentMembers:[],currentSegment:'',selected:'',checked:[],connectionReady:true,locked:false,busy:false,
     setCurrentMembers:value=>calls.members.push(value),setCurrentSegment(){},startPlay:(...args)=>calls.play.push(args),openUnit:(...args)=>calls.open.push(args),
     run:fn=>fn(),generate:async(...args)=>calls.generate.push(args),setChecked(){},setSelected(){},setPanelMode(){},setInspectorOpen(){},
-    openVoice:(...args)=>calls.voice.push(args),bookmarks:{current:{}},chapterId:'chapter',setOldPreview(){},mutate:async()=>{},basis:()=>({}),names:{passed:'已检查',matched:'声音已更新'},
-    Play:'Play',Users:'Users',RefreshCw:'RefreshCw',Check:'Check',SlidersHorizontal:'SlidersHorizontal',Status:'Status'};
+    openVoice:(...args)=>calls.voice.push(args),onDeleteSegments:(...args)=>calls.delete.push(args),bookmarks:{current:{}},chapterId:'chapter',setOldPreview(){},mutate:async()=>{},basis:()=>({}),names:{passed:'已检查',matched:'声音已更新'},
+    Play:'Play',Users:'Users',RefreshCw:'RefreshCw',Check:'Check',Trash2:'Trash2',SlidersHorizontal:'SlidersHorizontal',Status:'Status'};
   return {env,calls,group,render:()=>env.visible.map(project(rows,env))};
 }
 
@@ -39,13 +39,29 @@ for(const mode of ['dry','scene'])test(`筛选后的组头${mode}试听/重做�
   button(headers[0],'重做这 3 句').props.onClick();assert.deepEqual(f.calls.generate,[ [f.group.members,false,{regenerate:true}] ]);
   button(headers[0],'调整这段').props.onClick();assert.deepEqual(f.calls.open,[['group']]);
   for(const row of rendered.slice(0,2)){const labels=nodes(row).filter(node=>node.type==='button').map(node=>node.props['aria-label']||'');assert.ok(!labels.some(label=>/^(试听第|重新生成第|检查通过第)/.test(label)));assert.ok(labels.some(label=>/^为第 .*选声音/.test(label)));}
-  const outside=nodes(rendered[2]).filter(node=>node.type==='button').map(node=>node.props['aria-label']||'');assert.ok(outside.includes('试听第 4 条'));assert.ok(outside.includes('重新生成第 4 条'));
+  const outside=nodes(rendered[2]).filter(node=>node.type==='button').map(node=>node.props['aria-label']||'');assert.ok(outside.includes('试听第 4 条'));assert.ok(outside.includes('重新生成第 4 条'));assert.ok(outside.includes('删除第 4 条台词'));assert.ok(!outside.some(label=>/^检查通过第/.test(label)));
 });
 
 test('组头离线或忙碌时不提供误导的试听/重做可用状态',()=>{
   const f=fixture();f.env.connectionReady=false;f.env.locked=true;
   const header=f.render().flatMap(nodes).find(node=>node.props.className==='group-strip');
   assert.equal(button(header,'试听整段').props.disabled,true);assert.equal(button(header,'重做这 3 句').props.disabled,true);
+});
+
+test('每条删除入口绑定这一条，已排除台词也可删除；任务或离线时禁用',async()=>{
+  const f=fixture();f.env.segments[3].excluded=true;
+  const rendered=f.render();
+  for(let index=0;index<rendered.length;index++){
+    const remove=nodes(rendered[index]).find(node=>node.type==='button'&&node.props['aria-label']===`删除第 ${index+1} 条台词`);
+    assert.ok(remove);assert.equal(remove.props.disabled,false);assert.equal(nodes(remove).filter(node=>node.type==='Trash2').length,1);
+    assert.ok(!nodes(rendered[index]).some(node=>node.type==='button'&&/^检查通过第/.test(node.props['aria-label']||'')));
+    remove.props.onClick();
+  }
+  assert.deepEqual(f.calls.delete,[['one'],['two'],['three'],['outside']].map(ids=>[ids]));
+  for(const state of [{locked:true},{busy:true},{connectionReady:false}]){
+    Object.assign(f.env,{locked:false,busy:false,connectionReady:true},state);
+    assert.ok(f.render().every(row=>nodes(row).find(node=>node.type==='button'&&node.props.title==='删除台词').props.disabled));
+  }
 });
 
 test('任务定位两次读取期间关闭单元或切章，都不迟到重新打开记录',async()=>{

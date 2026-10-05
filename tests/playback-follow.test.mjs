@@ -34,12 +34,13 @@ function fixture(){
     const row={offsetTop,offsetHeight:80,parentElement:scriptList,scrollIntoView:options=>calls.otherScroll.push(['scrollIntoView',options])};
     row.getBoundingClientRect=()=>({top:100+row.offsetTop-scriptList.scrollTop});rows.set('segment-'+id,row);
   }
-  const chapter={id:'chapter',title:'隔离播放夹具',arrangement:1,playbackItems:[],units:[]};
+  const chapter={id:'chapter',title:'隔离播放夹具',revision:1,arrangement:1,playbackItems:[],units:[]};
+  const state={jobs:[],chapters:[{id:chapter.id,revision:chapter.revision,arrangement:chapter.arrangement}]};
   const env={React,Link2:'Link2',master,chapter,chapterId:chapter.id,chapterRef:{current:chapter.id},connectionReady:true,
     player:{kind:'masters',id:master.id,title:chapter.title,master,chapterId:chapter.id,arrangement:chapter.arrangement,playbackItems:chapter.playbackItems,intent:1},playerRef:{current:null},playIntent:{current:1},
     follow:true,playing:true,currentSegment:'',currentMembers:[],currentHidden:false,filter:'all',search:'',bookmarks:{current:{}},chapterPlaybackSnapshots:{current:{}},
     pendingPlay:{current:null},pendingPlaySnapshot:{current:null},playbackIdentity:items=>JSON.stringify(items),active:()=>false,refresh:async()=>{},
-    api:async path=>path==='/state'?{jobs:[]}:chapter,
+    stateRef:{current:state},api:async path=>path==='/state'?state:chapter,
     document:{getElementById:id=>rows.get(id),body:frame,documentElement:frame},window:{scrollTo:options=>calls.otherScroll.push(['window',options])},listRef:{current:scriptList},
     audio:{current:{currentTime:0,paused:true,load(){calls.loads++;},play(){calls.plays++;return Promise.resolve();},pause(){calls.pauses++;}}},
     setPlayer:value=>{calls.players.push(value);env.player=value;env.playerRef.current=value;},

@@ -178,3 +178,35 @@ test('真实未挂载判断保留同对象在途保存、未确认创建回执�
     storageFailure=false;assert.equal(defer(),true);current.current.targetId='created-background';assert.equal(defer(),false);
   }finally{release();for(const [key,descriptor]of descriptors)if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}
 });
+
+test('真实新建对戏准备关闭后保留草稿而不阻塞全章，重开或未知创建回执仍受保护',async()=>{
+  const unitSource=readFileSync(new URL('../src/UnitPanel.tsx',import.meta.url),'utf8'),unitFile=ts.createSourceFile('UnitPanel.tsx',unitSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let group,call;function unitNode(node){if(ts.isFunctionDeclaration(node)&&node.name?.text==='CreateGroup')group=node;else ts.forEachChild(node,unitNode);}unitNode(unitFile);
+  function groupNode(node){if(ts.isCallExpression(node)&&node.expression.getText(unitFile)==='useObjectDraft')call=node;else ts.forEachChild(node,groupNode);}assert.ok(group);groupNode(group);assert.ok(call);
+  const expression=node=>ts.transpileModule('const result=('+node.getText(unitFile)+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText+'\nreturn result;';
+  const chapter={id:'one',revision:13},options=new Function('chapter',expression(call.arguments[4]))(chapter),key='unit-v1/'+new Function('chapter',expression(call.arguments[1]))(chapter);
+  const objectSource=readFileSync(new URL('../src/ObjectDraft.tsx',import.meta.url),'utf8'),objectFile=ts.createSourceFile('ObjectDraft.tsx',objectSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let deferred,flushNode;function objectNode(node){if(ts.isPropertyAssignment(node)&&node.name.getText(objectFile)==='deferUnmounted')deferred=node.initializer;else if(ts.isVariableDeclaration(node)&&node.name.getText(objectFile)==='flush')flushNode=node.initializer;else ts.forEachChild(node,objectNode);}objectNode(objectFile);assert.ok(deferred);assert.ok(flushNode);
+  const callback=node=>ts.transpileModule('const callback=('+node.getText(objectFile)+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText+'\nreturn callback;';
+  const {registerDraftSave,withSavedDrafts,hasLiveDraft,draftSaveStatus,activeDraftSave,pendingSaveOperation,saveOperationId,forgetSaveOperation,flushRegisteredDraft}=await fresh();
+  const descriptors=['localStorage','sessionStorage','navigator'].map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)]),storage=new Map();
+  Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{getItem:name=>storage.get(name)??null,setItem:(name,value)=>storage.set(name,value),removeItem:name=>storage.delete(name)}});
+  Object.defineProperty(globalThis,'sessionStorage',{configurable:true,value:{getItem:()=>null}});
+  Object.defineProperty(globalThis,'navigator',{configurable:true,value:{locks:{}}});
+  const current={current:{options,targetId:undefined,draft:{ids:['first','second'],guidance:'保留未发送的对戏准备'},base:0,dirty:true,chapterRevision:13}},pending={current:null};let sent=0,unmount;
+  try{
+    const drafts=await import('data:text/javascript;base64,'+Buffer.from(compile('../src/drafts.ts')+'\n// '+crypto.randomUUID()).toString('base64'));
+    drafts.writeDraft(key,{type:'unit',version:1,value:current.current.draft},0);const kept=drafts.readDraft(key);
+    const defer=new Function('current','pending','key','activeDraftSave','pendingSaveOperation','workspaceIdentity',callback(deferred))(current,pending,key,activeDraftSave,pendingSaveOperation,'');
+    const flush=new Function('current','pending','hasTransferredDraft','flushRegisteredDraft','save',callback(flushNode))(current,pending,()=>false,flushRegisteredDraft,()=>assert.fail('尚未发送的对戏准备不能自行创建'));
+    const register=()=>registerDraftSave(key,{scope:options.scope,dependencies:options.dependencies,dirty:()=>current.current.dirty,state:()=> 'local',freeze:()=>{},deferUnmounted:defer,flush});
+    unmount=register();await assert.rejects(withSavedDrafts(options.scope,undefined,async()=>sent++),/这份编辑尚未接入自动保存/);
+    unmount();await withSavedDrafts(options.scope,undefined,async()=>sent++);
+    assert.equal(sent,1);assert.equal(hasLiveDraft(key),true);assert.equal(draftSaveStatus(options.scope),'saved');assert.deepEqual(drafts.readDraft(key),kept);
+    unmount=register();assert.deepEqual(drafts.readDraft(key),kept,'重新打开仍能读到同一份本机准备');
+    await assert.rejects(withSavedDrafts(options.scope,undefined,async()=>sent++),/这份编辑尚未接入自动保存/);assert.equal(sent,1);unmount();
+    const operationId=saveOperationId(key,{value:current.current.draft,revision:0,chapterRevision:13});assert.equal(defer(),false);
+    await assert.rejects(withSavedDrafts(options.scope,undefined,async()=>sent++),/这份编辑尚未接入自动保存/);assert.equal(sent,1);assert.equal(hasLiveDraft(key),true);assert.deepEqual(drafts.readDraft(key),kept);
+    forgetSaveOperation(key,operationId);await withSavedDrafts(options.scope,undefined,async()=>sent++);assert.equal(sent,2);assert.deepEqual(drafts.readDraft(key),kept);
+  }finally{current.current.dirty=false;unmount?.();for(const [name,descriptor]of descriptors)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else delete globalThis[name];}
+});

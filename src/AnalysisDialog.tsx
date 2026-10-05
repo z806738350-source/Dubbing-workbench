@@ -453,6 +453,7 @@ export default function AnalysisDialog({
                     确认替换当前剧本
                     {draft.replacementSource !== undefined ? "及原文" : ""}
                     ；旧片段和音频保留
+                    {!!chapter.deletedSegments?.length && "；从原文重新提取会重置已删除台词的选择"}
                   </label>
                   <label className="check-label">
                     <input

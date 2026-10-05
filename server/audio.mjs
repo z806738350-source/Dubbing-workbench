@@ -68,29 +68,34 @@ export async function inspect(file) {
     format: meta.format.format_name,
   };
 }
-// Cache decoding only while the local file metadata is unchanged. No content hash,
-// and no full decode on every chapter poll; restored files are inspected again.
+// Keep successful and failed checks across restarts while file metadata matches.
+// Changed or restored files are decoded again; no content hash or full reread.
 const audioChecks = new WeakMap();
 function fileVersion(file) {
-  try { const s = statSync(file); return s.isFile() ? [s.size, s.mtimeMs, s.ctimeMs, s.ino].join(":") : null; }
+  try { const s = statSync(file); return s.isFile() ? [s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs].join(":") : null; }
   catch { return null; }
 }
 export function storedAudioUnavailable(store, a) {
   const file = join(store.directory, a.path), version = fileVersion(file);
   const check = audioChecks.get(store)?.get(a.id);
-  return !version || !!a.invalid || !!(check && (check.version !== version || check.pending || !check.valid));
+  return !version || !!a.invalid || !!(check && (check.path !== a.path || check.version !== version || check.pending || !check.valid));
 }
 export async function validateStoredAudio(store, a) {
   let checks = audioChecks.get(store);
   if (!checks) { checks = new Map(); audioChecks.set(store, checks); }
   const file = join(store.directory, a.path), version = fileVersion(file);
   const previous = checks.get(a.id);
-  if (previous?.version === version) return previous.promise;
-  const check = {version, pending:true, valid:false};
+  if (previous?.path === a.path && previous.version === version) return previous.promise;
+  const retained = store.maybe('audios', a.id), cacheId = 'audio-file-check:' + a.id;
+  const cached = retained?.path === a.path ? store.maybe('settings', cacheId) : null;
+  const check = {path:a.path, version, pending:true, valid:false};
   checks.set(a.id, check);
   check.promise = (async () => {
     let valid = false;
-    try { if (version) { await inspect(file); valid = true; } }
+    try {
+      if (cached?.path === a.path && cached.version === version && typeof cached.valid === 'boolean' && cached.valid === !retained.invalid) valid = cached.valid;
+      else if (version) { await inspect(file); valid = true; }
+    }
     catch (e) {
       // A missing decoder is a setup failure, not evidence that the file is bad.
       if (['ENOENT','EACCES'].includes(e.code) && [ffmpeg,ffprobe].includes(e.path)) {
@@ -100,9 +105,14 @@ export async function validateStoredAudio(store, a) {
     if (fileVersion(file) !== version) return false;
     check.pending = false; check.valid = valid;
     const current = store.maybe('audios', a.id);
-    if (current?.path === a.path && !!current.invalid !== !valid) {
-      if (valid) delete current.invalid; else current.invalid = true;
-      store.put('audios', current, current.chapterId || store.db.prepare('SELECT parent FROM audios WHERE id=?').get(a.id).parent);
+    if (current?.path === a.path) {
+      const parent = current.chapterId || store.db.prepare('SELECT parent FROM audios WHERE id=?').get(a.id).parent;
+      if (!!current.invalid !== !valid) {
+        if (valid) delete current.invalid; else current.invalid = true;
+        store.put('audios', current, parent);
+      }
+      if (cached?.path !== a.path || cached.version !== version || cached.valid !== valid)
+        store.put('settings', {id:cacheId, audioId:a.id, chapterId:parent, path:a.path, version, valid}, parent);
     }
     return valid;
   })();

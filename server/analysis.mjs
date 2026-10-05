@@ -864,7 +864,7 @@ export function createAnalysis(store, domain, config) {
           p.selected.includes(i.id),
         )) {
           const s = store.get("segments", item.segmentId);
-          if (s.retired) fail("片段已改变", 409);
+          if (s.retired || s.deletion) fail("片段已改变或已删除", 409);
           if (item.splitParts?.length > 1) { splits.push(splitItem(c,draft,item,p,childContext)); continue; }
           if (draft.splitOnly) fail('AI本次没有可应用的语义拆分建议，原文保持完整');
           const previous = actor ? structuredClone(s) : null;

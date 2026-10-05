@@ -32,7 +32,7 @@ function fixture({tracked=true}={}){
   const env={useCallback:callback=>callback,refreshPending:{current:null},chapter:initial,
     chapterRef:{current:initial.id},projectRef:{current:initial.projectId},playerRef:{current:null},
     chapterPlaybackSnapshots:{current:tracked?{chapter:copy(initial)}:{}},bookmarks:{current:{chapter:'three'}},
-    pendingPlay:{current:null},pendingPlaySnapshot:{current:null},playIntent:{current:1},generationIntent:{current:0},
+    pendingPlay:{current:null},pendingPlaySnapshot:{current:null},playIntent:{current:1},generationIntent:{current:0},segmentDeletionIntent:{current:0},
     draftWorkspace:()=>workspace,bindDraftWorkspace:identity=>{workspace=identity;},document:{visibilityState:'visible'},
     active:status=>['queued','running','stopping'].includes(status),playbackIdentity:items=>JSON.stringify(items),connectionMessage:'连接失败',
     api:async path=>path==='/state'?{settings:{workspaceDirectory:workspace},projects:[{id:'project'}],chapters:[{id:'chapter',projectId:'project'}],jobs}:copy(fresh),
@@ -40,7 +40,7 @@ function fixture({tracked=true}={}){
     setPlayer:value=>{calls.players.push(value);env.player=value;env.playerRef.current=value;},
     setNotice:value=>calls.notices.push(value),setError:value=>{if(typeof value!=='function')calls.errors.push(value);},
   };
-  for(const name of ['State','Chapter','ProjectId','ChapterId','Selected','Loading','ConnectionReady','CurrentSegment','CurrentMembers','Playing','Position','Duration','Transitioning','Follow','GenerationPlan','GrantId','DeleteTarget','UnitPanelId','VoiceTarget','OldPreview','Modal','DraftSignal'])env['set'+name]=value=>{if(typeof value!=='function')env[name[0].toLowerCase()+name.slice(1)]=value;};
+  for(const name of ['State','Chapter','ProjectId','ChapterId','Selected','Loading','ConnectionReady','CurrentSegment','CurrentMembers','Playing','Position','Duration','Transitioning','Follow','GenerationPlan','GrantId','DeleteTarget','RenameTarget','SegmentDeletion','UnitPanelId','VoiceTarget','OldPreview','Modal','DraftSignal'])env['set'+name]=value=>{if(typeof value!=='function')env[name[0].toLowerCase()+name.slice(1)]=value;};
   return {env,calls,get fresh(){return fresh;},set fresh(value){fresh=value;},set jobs(value){jobs=value;},refresh:()=>project(declaration('refresh'),env)(),mount:()=>project(mediaEffect,env)()};
 }
 

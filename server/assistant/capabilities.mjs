@@ -3,6 +3,7 @@ import { createActionExecutor } from '../actions.mjs';
 import { saveCandidateVoice } from '../audio.mjs';
 import { revealExport } from '../workspace.mjs';
 import { getHelp, pick, scopedChapter, pageRecords } from './context.mjs';
+import { assistantMutation } from '../experience.mjs';
 
 const string = (maxLength = 100) => ({ type: 'string', minLength: 1, maxLength });
 const text = (maxLength) => ({ type: 'string', maxLength });
@@ -44,18 +45,20 @@ const groupFields = { ids, guidance: text(2000) };
 const generationFields = { ids, unitId: id, mode, actionKind: values('fillMissing', 'updateSelected', 'redoRejected', 'forceRegenerate') };
 const analysisFields = { analysisKind: values('extract', 'director', 'scene'), ids, unitId: id, splitOnly: bool, autoApply: bool, source: text(1000000) };
 action('project.create', '新建项目及旁白角色', { name: string(100) }, ['name'], { chapter: false, help: 'projects' });
-action('project.rename', '重命名当前项目及其文件夹', { id, name: string(100) }, ['id', 'name'], { chapter: false, delegation:'explicit-proposal', help: 'projects' });
+action('project.rename', '重命名当前项目及其文件夹', { id, name: string(100) }, ['id', 'name'], { chapter: false, help: 'projects' });
 action('project.delete', '删除已单独确认范围的项目', { id }, ['id'], { chapter: false, access: 'destructive', delegation: 'explicit-proposal', help: 'delete' });
 action('chapter.create', '从授权文字新建章节', { title: string(150), source: text(1000000), segment: bool }, ['title', 'source'], { chapter: false, help: 'import' });
 action('chapter.update', '修改章节标题或片段间隔', { title: string(150), gap: number(0, 10) }, [], { help: 'export' });
 action('chapter.move', '将当前章向前或向后移动一章', { direction: values(-1, 1) }, ['direction'], { help: 'projects' });
-action('chapter.repair-structural-decisions', '修复已预览的可证明结构决定', { ids }, ['ids'], { delegation: 'explicit-proposal', help: 'structure' });
+action('chapter.repair-structural-decisions', '修复已预览的可证明结构决定', { ids }, ['ids'], { help: 'structure' });
 action('role.create', '添加本项目角色', { name: string(100) }, ['name'], { help: 'roles' });
 action('role.update', '编辑角色名称、本章备注、别名或归档状态', { id, name: string(100), archived: bool, note: text(3000), quote: text(3000), gender: values('未知', '女', '男', '其他'), aliasSources: array(object({ name: string(100), chapterId: id, kind: values('原文明示', '上下文推断', '用户补充'), sourceQuote: text(3000), reason: text(3000), sourceVersion: number(1, Number.MAX_SAFE_INTEGER, true), needsReview: bool }, ['name', 'chapterId', 'kind', 'sourceVersion'])) }, ['id'], { help: 'roles' });
 action('segment.create', '添加用户明确要求的新台词', { text: string(10000) }, ['text'], { help: 'editing' });
 action('segment.update', '修改指定台词的表演、参数或明确授权正文', { id, text: text(10000), type: values('narration', 'dialogue', 'thought'), roleId: id, voiceId: id, resetVoice: bool, performance: text(2000), excluded: bool, config: configSchema }, ['id'], { help: 'editing' });
 action('segment.rebind', '为所选台词指定本项目角色', { ids, roleId: id }, ['ids', 'roleId'], { help: 'roles' });
 action('segment.confirm', '记录已确定的说话人与声音配置', { ids, roleOnly: bool }, ['ids'], { help: 'roles' });
+action('segment.delete', '删除已明确选择的台词，保留原文与历史声音', { ids }, ['ids'], { delegation: 'explicit-proposal', help: 'structure' });
+action('segment.restore-deleted', '恢复已删除台词及其原先不朗读设置', { ids }, ['ids'], { delegation: 'explicit-proposal', help: 'structure' });
 action('segment.split', '按已预览的逐字边界拆分台词', { id, offset: number(1, 10000, true), parts: array(string(10000), 2), performance: array(text(2000), 2) }, ['id'], { help: 'structure' });
 action('segment.merge', '合并相邻同角色台词', { id, choice: values('first', 'second'), performance: text(2000) }, ['id'], { help: 'structure' });
 action('segment.template', '按差异预览切换单句模板', { id, template: id }, ['id', 'template'], { help: 'templates' });
@@ -65,7 +68,7 @@ action('voice.update', '修改共享参考声音名称、状态或观察', { id,
 action('voice.delete', '删除单独确认的参考素材', { id }, ['id'], { chapter: false, access: 'destructive', delegation: 'explicit-proposal', help: 'voices' });
 action('voice-session.create', '保存一份声音创建描述', { description: string(2000) }, ['description'], { chapter: false, help: 'voice-create' });
 action('voice-session.update', '修改声音创建描述', { id, description: string(2000) }, ['id', 'description'], { chapter: false, help: 'voice-create' });
-action('voice-session.abandon', '放弃描述并停止本会话后续请求', { id }, ['id'], { chapter: false, delegation: 'explicit-proposal', help: 'voice-create' });
+action('voice-session.abandon', '放弃描述并停止本会话后续请求', { id }, ['id'], { chapter: false, help: 'voice-create' });
 action('voice-candidate.discard', '放弃已指定的声音候选', { id, sessionId: id }, ['id', 'sessionId'], { chapter: false, help: 'voice-create' });
 action('unit.create', '将连续台词建立为共同演绎组', groupFields, ['ids'], {help: 'group' });
 action('unit.update', '保存共同演绎或场景设置', { id, mode, guidance: text(2000), backgroundPresence: values('clear', 'natural', 'subtle', 'unspecified') }, ['id', 'mode'], { help: 'scene' });
@@ -75,7 +78,7 @@ action('unit.template', '按差异预览切换组或场景模板', { id, mode, t
 action('unit.select-result', '采用设置匹配的历史声音', { id, mode, audioId: id }, ['id', 'mode', 'audioId'], { help: 'history' });
 action('unit.restore', '恢复历史声音和对应设置', { id, mode, audioId: id, restoreSettings: bool }, ['id', 'mode', 'audioId'], { help: 'history' });
 for (const name of ['create', 'update', 'remove', 'reconfirm']) action('event.' + name, { create: '添加场景声音事件', update: '编辑或采用声音事件', remove: '移除声音事件', reconfirm: '重新核对声音事件位置' }[name], { unitId: id, ...(name === 'create' ? {} : { id }), ...(['create', 'update'].includes(name) ? eventFields : {}) }, ['unitId', ...(name === 'create' ? ['kind', 'description'] : ['id'])], { help: 'scene' });
-action('job.stop', '只停止指定任务的后续请求', { id }, ['id'], { chapter: false,delegation:'explicit-proposal', help: 'tasks' });
+action('job.stop', '只停止指定任务的后续请求', { id }, ['id'], { chapter: false, help: 'tasks' });
 for (const [name, description, fields, required, options] of [
   ['prepareChapter', '让AI准备当前章或所选台词', analysisFields, [], { cost: 'analysis-plan.textRequests', help: 'analysis' }],
   ['useVoice', '把声音应用到本章角色或单句，或保存候选到库', { scope: values('library'), voiceId: id, audioId: id, name: string(100), roleId: id, segmentId: id, apply: bool, updateDefault: bool }, [], { cost: 'local-only', help: 'voices' }],
@@ -88,7 +91,7 @@ for (const [name, description, fields, required, options] of [
 define('generation.plan', '免费核对所选生成范围及请求数', generationFields, ['ids'], { access: 'read', handler: 'experience.plan', help: 'generation' });
 define('analysis.plan', '免费核对分析范围及文本请求数', analysisFields, [], { access: 'read', handler: 'analysis.plan', help: 'analysis' });
 define('analysis.resume', '继续明确未完成的分析批次', { id, batchIds: ids, replace: bool }, ['id'], { target: 'suggestions', handler: 'analysis.resume', access: 'paid', cost: 'selected-analysis-batches', help: 'tasks' });
-define('analysis.edit', '校对已有分析中的一条标注', { id, batchId: id, itemId: id, remove: bool, item: object({ from: number(0, 1000000, true), to: number(0, 1000000, true), segmentId: id, roleId: id, newRoleKey: id, newRole: string(100), type: values('narration', 'dialogue', 'thought'), performance: text(2000), evidence: values('原文明示', '上下文推断', '创作建议', '用户补充'), evidenceRefs: array(number(0, 1000000, true)), reason: text(3000), uncertain: bool, unitId: id, ...Object.fromEntries(Object.entries(eventFields).filter(([key]) => !['evidence', 'state', 'transition'].includes(key))) }) }, ['id', 'batchId'], { target: 'suggestions', handler: 'analysis.edit', delegation: 'explicit-proposal', help: 'analysis' });
+define('analysis.edit', '校对已有分析中的一条标注', { id, batchId: id, itemId: id, remove: bool, item: object({ from: number(0, 1000000, true), to: number(0, 1000000, true), segmentId: id, roleId: id, newRoleKey: id, newRole: string(100), type: values('narration', 'dialogue', 'thought'), performance: text(2000), evidence: values('原文明示', '上下文推断', '创作建议', '用户补充'), evidenceRefs: array(number(0, 1000000, true)), reason: text(3000), uncertain: bool, unitId: id, ...Object.fromEntries(Object.entries(eventFields).filter(([key]) => !['evidence', 'state', 'transition'].includes(key))) }) }, ['id', 'batchId'], { target: 'suggestions', handler: 'analysis.edit', help: 'analysis' });
 define('analysis.apply', '采用当前有效建议或AI语义拆分', { id, selected: ids, replaceConfirmed: bool, inheritPerformanceConfirmed: bool }, ['id'], { target: 'suggestions', handler: 'analysis.apply', help: 'analysis' });
 for (const name of ['previewReuse', 'reuse']) define('analysis.' + name, name === 'reuse' ? '把历史场景建议加入当前场景' : '免费预检历史场景建议', { id, unitId: id, ...(name === 'reuse' ? { selected: ids } : {}) }, ['id', 'unitId', ...(name === 'reuse' ? ['selected'] : [])], { target: 'suggestions', handler: 'analysis.' + name, access: name === 'reuse' ? 'local-write' : 'read', help: 'suggestions' });
 define('experience.undo', '撤销尚未被后续修改的AI安排', { changeId: id }, ['changeId'], { handler: 'experience.undo', help: 'drafts' });
@@ -98,11 +101,11 @@ define('job.master', '免费准备整章试听母版', {}, [], { handler: 'worke
 define('job.voice-test', '用已有参考朗读指定测试文字', { voiceId: id, text: string(300) }, ['voiceId', 'text'], { handler: 'worker.submit', chapter: false, access: 'paid', cost: 'one-audio-request', help: 'voices' });
 define('voice.save-candidate', '免费把合格候选保存到音色库', { audioId: id, name: string(100) }, ['audioId', 'name'], { chapter: false, handler: 'saveCandidateVoice', help: 'voice-create' });
 define('export.reveal', '在本机访达中定位已保存成品', { id }, ['id'], { target: 'exports', handler: 'revealExport', access: 'ui-only', help: 'export' });
-define('audio.tail.repair','免费预览并清理所选纯人声的尾部异常，保留原件',{unitIds:ids},['unitIds'],{handler:'repairAudio',delegation:'explicit-proposal',help:'original-audio'});
+define('audio.tail.repair','免费预览并清理所选纯人声的尾部异常，保留原件',{unitIds:ids},['unitIds'],{handler:'repairAudio',help:'original-audio'});
 define('audio.original.restore', '免费恢复所选处理版对应的真实供应商原件', { id, mode, audioId: id, restoreSettings: bool }, ['id', 'mode', 'audioId'], { target: 'units', handler: 'unit.select-result / unit.restore', help: 'original-audio' });
 define('ui.navigate', '提供已注册功能入口的定位按钮', { target: values('voices','tasks','export','history','scene','assistant-settings','project-overview','segment'), segmentId: id, unitId: id }, ['target'], { chapter: false, access: 'ui-only', handler: 'UI action requiring user click', help: 'workflow' });
 define('ui.play', '提供当前任务授权音频的试听按钮', { kind: values('voices','audios','masters','exports'), id }, ['kind','id'], { chapter: false, access: 'ui-only', handler: 'playIntent via UI action requiring user click', help: 'playback' });
-for (const [name, target, description] of [['chapter', null, '分页读取当前任务章节的台词与声音单元；full仅指声明字段，事件与历史另读'], ['segment', 'segments', '读取一条完整台词与表演'], ['voice', 'voices', '读取一个参考声音'], ['audio', 'audios', '读取一个音频的来源与听评'], ['attempts', 'jobs', '读取指定任务的请求记录'], ['operation', null, '读取原持久操作回执'], ['project-deletion-plan', 'projects', '预览指定项目删除范围']]) define('read.' + name, description, target || name === 'operation' ? { id } : name === 'chapter' ? pageFields : {}, target || name === 'operation' ? ['id'] : [], { target, handler: 'bounded projection', access: 'read', chapter: name === 'chapter' || name === 'segment', help: name === 'attempts' || name === 'operation' ? 'tasks' : 'workflow' });
+for (const [name, target, description] of [['chapter', null, '分页读取当前任务章节的台词与声音单元；deleted=true发现已删除台词及原先不朗读设置；full仅指声明字段，事件与历史另读'], ['segment', 'segments', '读取一条完整台词与表演'], ['voice', 'voices', '读取一个参考声音'], ['audio', 'audios', '读取一个音频的来源与听评'], ['attempts', 'jobs', '读取指定任务的请求记录'], ['operation', null, '读取原持久操作回执'], ['project-deletion-plan', 'projects', '预览指定项目删除范围']]) define('read.' + name, description, target || name === 'operation' ? { id } : name === 'chapter' ? { ...pageFields, deleted: bool } : {}, target || name === 'operation' ? ['id'] : [], { target, handler: 'bounded projection', access: 'read', chapter: name === 'chapter' || name === 'segment', help: name === 'attempts' || name === 'operation' ? 'tasks' : 'workflow' });
 for (const [name, target, description, fields, required, help] of [
   ['unit', 'units', '发现当前章声音单元，按ID精读两种设置和事件数量；事件、历史另读', { id, ...pageFields }, [], 'scene'],
   ['events', 'events', '分页精读指定单元的全部状态事件、版本、来源引文及当前有效性', { unitId: id, id, ...pageFields }, ['unitId'], 'scene'],
@@ -149,6 +152,11 @@ export function validateCapabilityInput(schema, value, path = '参数') {
 export function createCapabilities({ store, domain, worker, analysis, experience, config = {}, executeAction,repairAudio }) {
   const act = executeAction || createActionExecutor({ store, domain, experience });
   const definition = id => { const found = definitions.find(item => item.id === id); if (!found) fail('未注册的助手能力', 400); return found; };
+  function usesCurrentVoice(input,bound) {
+    if(!bound.chapter || !input.voiceId || input.updateDefault || input.scope==='library' || input.apply===false)return false;
+    const voice=store.maybe('voices',input.voiceId),rows=domain.list(bound.chapter.id).filter(s=>!s.excluded && (input.segmentId?s.id===input.segmentId:s.roleId===input.roleId));
+    return voice?.state==='active' && !voice.deletePending && rows.length>0 && rows.every(s=>s.voiceId===input.voiceId);
+  }
   function prepare(id, input, scope) {
     const def = definition(id);
     validateCapabilityInput(def.inputSchema, input);
@@ -175,7 +183,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
       // actual objects read by this step; execution still uses fresh revisions.
       const fields = table === 'chapters' ? (id === 'chapter.update' ? Object.keys(input) : ['sourceVersion']) :
         table === 'projects' ? (id.startsWith('project.') ? ['name','revision'] : []) :
-        table === 'segments' ? ['text','type','roleId','voiceId','voiceSource','performance','config','template','excluded','protectedFields','roleConfirmed','identityConfirmed',...(/review|restore|select-result|job.master|operation.export/.test(id)?['current','review']:[])] :
+        table === 'segments' ? ['text','type','roleId','voiceId','voiceSource','performance','config','template','excluded','deletion','protectedFields','roleConfirmed','identityConfirmed',...(/review|restore|select-result|job.master|operation.export/.test(id)?['current','review']:[])] :
         table === 'units' ? ['members','kind','mode','state','variants'] :
         ['revision','contextRevision','draftVersion','sourceVersion','state','status','current','mode','stop'];
       dependencies[table + '/' + row.id] = pick(row, fields);
@@ -233,7 +241,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
       if (projectId !== scope.projectId || scope.chapterId && (request.chapterId || request.data?.chapterId) !== scope.chapterId) fail('操作不属于本次任务范围', 403);
       return pick(operation, ['operationId', 'kind', 'outcome', 'jobIds', 'createdObjectIds', 'errorStatus']);
     }
-    if (id === 'read.segment') return pick(target, ['id', 'chapterId', 'order', 'text', 'type', 'roleId', 'voiceId', 'performance', 'config', 'template', 'excluded', 'protectedFields', 'decisions', 'current', 'review']);
+    if (id === 'read.segment') return pick(target, ['id', 'chapterId', 'order', 'text', 'type', 'roleId', 'voiceId', 'performance', 'config', 'template', 'excluded', 'deletion', 'protectedFields', 'decisions', 'current', 'review']);
     if (id === 'read.voice') return pick(target, ['id', 'name', 'state', 'duration', 'revision', 'observations', 'inspection', 'sampleAudioId', 'sourceAudioId']);
     if (id === 'read.audio') return pick(target, ['id', 'chapterId', 'targetKind', 'targetId', 'duration', 'createdAt', 'review', 'processingVersion', 'sourceAudioId']);
     if (id === 'read.attempts') return store.all('attempts', target.id).map(a => pick(a, ['id', 'jobId', 'status', 'targetKind', 'targetId', 'unitId', 'mode', 'adopted', 'phase', 'createdAt']));
@@ -284,11 +292,12 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     }
     if (id === 'read.chapter') {
       const c = domain.chapter(bound.chapter.id);
-      const segmentFields = ['id', 'order', 'text', 'type', 'roleId', 'voiceId', 'performance', 'excluded', 'configurationDecided', 'protectedFields'];
+      const segmentFields = ['id', 'order', 'text', 'type', 'roleId', 'voiceId', 'performance', 'excluded', 'deletion', 'configurationDecided', 'protectedFields'];
       const unitFields = ['id', 'members', 'kind', 'mode', 'state', 'revision', 'readiness', 'variants'];
-      const segments = pageRecords(c.segments.map(s => pick(s, segmentFields)), input, segmentFields, 24000);
-      const units = pageRecords(c.units.map(u => ({ ...pick(u, unitFields), variants: Object.fromEntries(Object.entries(u.variants).map(([mode, variant]) => [mode, pick(variant, ['current', 'previous', 'approved', 'review', 'guidance', 'template', 'backgroundPresence'])])) })), input, unitFields, 24000);
-      return { ...pick(c, ['id', 'title', 'revision', 'arrangement', 'gap', 'coverage', 'arrangementIssues']), segments: segments.items, units: units.items, pages: { segments: pick(segments, ['total', 'offset', 'returned', 'nextOffset', 'omittedBefore', 'omittedAfter']), units: pick(units, ['total', 'offset', 'returned', 'nextOffset', 'omittedBefore', 'omittedAfter']) }, projectionFields: { segments: segmentFields, units: unitFields },
+      const rows = input.deleted ? c.deletedSegments : c.segments, memberIds = new Set(rows.map(s => s.id));
+      const segments = pageRecords(rows.map(s => pick(s, segmentFields)), input, segmentFields, 24000);
+      const units = pageRecords(c.units.filter(u => u.members.some(id => memberIds.has(id))).map(u => ({ ...pick(u, unitFields), variants: Object.fromEntries(Object.entries(u.variants).map(([mode, variant]) => [mode, pick(variant, ['current', 'previous', 'approved', 'review', 'guidance', 'template', 'backgroundPresence'])])) })), input, unitFields, 24000);
+      return { ...pick(c, ['id', 'title', 'revision', 'arrangement', 'gap', 'coverage', 'arrangementIssues']), deleted: input.deleted === true, segments: segments.items, units: units.items, pages: { segments: pick(segments, ['total', 'offset', 'returned', 'nextOffset', 'omittedBefore', 'omittedAfter']), units: pick(units, ['total', 'offset', 'returned', 'nextOffset', 'omittedBefore', 'omittedAfter']) }, projectionFields: { segments: segmentFields, units: unitFields },
         visibility: segments.visibility === 'full' && units.visibility === 'full' ? 'full' : 'partial', observedAt: segments.observedAt, omittedSections: ['events', 'suggestionItems', 'voiceCandidates', 'audioHistory', 'chapterSource'] };
     }
     if (id === 'read.state') return { projects: store.all('projects').filter(row => !scope.projectId || row.id === scope.projectId).map(row => pick(row, ['id', 'name', 'revision'])), chapters: bound.project ? store.all('chapters', bound.project.id).map(row => pick(row, ['id', 'title', 'order', 'revision', 'arrangement'])) : [], roles: bound.project ? store.all('roles', bound.project.id).map(row => pick(row, ['id', 'name', 'voiceId', 'narrator'])) : [], voices: store.all('voices').map(row => pick(row, ['id', 'name', 'state', 'duration', 'revision'])), features: domain.enhancement.features() };
@@ -300,6 +309,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     if (def.delegation === 'human-only') return { capabilityId: id, delegation: def.delegation, description: def.description, helpRefs: def.helpRefs };
     let detail;
     if(id==='segment.update'||id==='role.update'||id==='chapter.update'){const before=target||bound.chapter;detail={id:before.id,changes:Object.entries(input).filter(([key])=>key!=='id').map(([field,after])=>({field,before:before[field]??null,after}))};}
+    else if (['segment.delete', 'segment.restore-deleted'].includes(id)) detail = { segments: input.ids.map(segmentId => pick(store.get('segments', segmentId), ['id', 'text', 'excluded', 'deletion'])) };
     else if (id==='audio.tail.repair') {if(!repairAudio)fail('尾部维护接口尚未就绪');detail=await repairAudio({phase:'preview',projectId:scope.projectId,chapterId:scope.chapterId,unitIds:input.unitIds});}
     else if (id === 'operation.generateSelection') detail = experience.plan({ ...p, kind: 'generateSelection' });
     else if (id === 'operation.prepareChapter') detail = analysis.plan({ ...p, kind: p.analysisKind });
@@ -314,6 +324,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     else if(id==='operation.sceneAndGenerate')detail={unitId:unit.id,members:unit.members,guidance:unit.variants.scene.guidance,backgroundPresence:unit.variants.scene.backgroundPresence,events:store.all('events',unit.id).filter(e=>e.state==='adopted'||input.eventIds.includes(e.id)).map(e=>pick(e,['id','kind','description','state','memberId','position','startMemberId','endMemberId','source']))};
     else if (id === 'voice.delete') detail = domain.voiceUsage(input.id);
     else if (id === 'audio.original.restore') detail = domain.enhancement.preview({...p,kind:'restore'});
+    if(id==='operation.useVoice' && usesCurrentVoice(input,bound))detail={...detail,unchanged:true};
     return { capabilityId: id, input, baseRevisions: versions, dependencies, requiredWorkflows, cost: def.cost, delegation: id==='operation.useVoice'&&input.updateDefault===true || id.startsWith('voice-session.')&&target&&!target.projectId ? 'explicit-proposal' : def.delegation, preview: detail || null, ...(unit ? { unitId: unit.id } : {}) };
   }
 
@@ -329,6 +340,11 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     }
     if (id!=='audio.tail.repair' && !same(executionContext.baseRevisions, versions)) fail('目标在计划后已变化，请重读并重新核对', 409);
     if ((def.delegation === 'explicit-proposal' || id==='operation.useVoice'&&input.updateDefault===true || id.startsWith('voice-session.')&&target&&!target.projectId) && executionContext.actorKind !== 'human_approved_proposal') fail('此项需要对具体范围作出明确决定', 403);
+    if(executionContext.actorKind==='assistant_delegated' && ['audio.tail.repair','job.stop'].includes(id)) {
+      const run=executionContext.runId && store.maybe('assistantRuns',executionContext.runId);
+      if(!run?.mandate || run.mandate.id!==executionContext.mandateId)fail('此项需要有效任务委托或明确决定',403);
+      if(id==='job.stop' && !store.all('assistantSteps',run.id).some(step=>step.operationId===target.commandId || step.resultRefs?.jobIds?.includes(target.id)))fail('停止其他任务需要对具体范围作出明确决定',403);
+    }
     const payload = { ...p, operationId: executionContext.operationId, commandId: executionContext.operationId };
     for (const field of ['grantId', 'retryUnknown', 'acknowledgedAttemptIds', 'resumeRoute']) if (executionContext[field] !== undefined) payload[field] = executionContext[field];
     if(executionContext.actorKind==='assistant_delegated' && requiredWorkflows.some(kind=>!executionContext.workflowKinds?.includes(kind)))fail('这项对戏或场景操作超出已批准的制作范围',403);
@@ -350,6 +366,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     if (id === 'unit.restore') payload.baseRevisions = executionContext.preview?.baseRevisions;
     if (id === 'unit.dissolve') payload.arrangement = bound.chapter.arrangement;
     executionContext = {...executionContext,capabilityId:id,capabilityInput:input};
+    if(id==='operation.useVoice' && usesCurrentVoice(input,bound))return assistantMutation(store,id,payload,executionContext,()=>({id:input.voiceId,state:'completed',outcome:'completed',chapterId:bound.chapter.id,unchanged:true}));
     if(id==='audio.tail.repair'){if(!repairAudio)fail('尾部维护接口尚未就绪');return repairAudio({phase:'apply',projectId:scope.projectId,chapterId:scope.chapterId,scope:executionContext.maintenanceScope||executionContext.preview?.scope});}
     if (id === 'ui.navigate') return {uiAction:{type:'navigate',...input,...(scope.chapterId ? {chapterId:scope.chapterId} : {}),requiresUserClick:true}};
     if (id === 'ui.play') return {uiAction:{type:'play',kind:input.kind,id:input.id,requiresUserClick:true}};

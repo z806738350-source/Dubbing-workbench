@@ -52,6 +52,61 @@ test('cross-project and cross-chapter object IDs cannot write or read another ta
   assert.equal(store.get('segments', otherSegment.id).performance, '');
 });
 
+test('chapter reads discover deleted lines separately with the existing pages and budget', async t => {
+  const f=fixture(t),[first,second]=f.domain.list(f.chapter.id),revision=()=>f.store.get('chapters',f.chapter.id).revision;
+  const third=f.domain.mutate('segment.create',{chapterId:f.chapter.id,revision:revision(),text:'仍在正文的台词。'});
+  f.domain.mutate('segment.update',{chapterId:f.chapter.id,revision:revision(),id:first.id,excluded:true});
+  f.domain.mutate('segment.delete',{chapterId:f.chapter.id,revision:revision(),ids:[first.id,second.id]});
+  const before=f.store.all('segments',f.chapter.id),normal=await f.capabilities.read('read.chapter',{},f.scope);
+  assert.deepEqual(normal.segments.map(s=>s.id),[third.id]);assert.equal(normal.deleted,false);
+  const page=await f.capabilities.read('read.chapter',{deleted:true,limit:1},f.scope);
+  assert.equal(page.deleted,true);assert.deepEqual(page.segments.map(s=>s.id),[first.id]);
+  assert.deepEqual(page.segments[0].deletion,f.store.get('segments',first.id).deletion);
+  assert.equal(page.segments[0].deletion.excluded,true);assert.ok(page.projectionFields.segments.includes('deletion'));
+  assert.equal(page.pages.segments.total,2);assert.equal(page.pages.segments.nextOffset,1);assert.equal(page.visibility,'partial');
+  const next=await f.capabilities.read('read.chapter',{deleted:true,offset:page.pages.segments.nextOffset,limit:1},f.scope);
+  assert.deepEqual(next.segments.map(s=>s.id),[second.id]);assert.equal(next.segments[0].deletion.excluded,false);
+  assert.equal(next.pages.segments.omittedBefore,1);assert.equal(next.pages.segments.nextOffset,null);
+  assert.deepEqual((await f.capabilities.read('read.chapter',{deleted:false},f.scope)).segments,normal.segments);
+  await assert.rejects(f.capabilities.read('read.chapter',{deleted:'true'},f.scope),/明确开关/);
+  await assert.rejects(f.capabilities.read('read.chapter',{deleted:true},{projectId:f.project.id,chapterId:f.otherChapter.id}),/不属于/);
+  assert.deepEqual(f.store.all('segments',f.chapter.id),before,'读取不恢复或改写删除状态');
+  for(const s of before.filter(s=>s.deletion))f.store.put('segments',{...s,text:'原'.repeat(10000),performance:'轻'.repeat(2000),privatePath:'不能进入助手'},f.chapter.id);
+  const bounded=await f.capabilities.read('read.chapter',{deleted:true,limit:40},f.scope);
+  assert.equal(bounded.segments.length,1);assert.equal(bounded.pages.segments.nextOffset,1);assert.equal(bounded.visibility,'partial');
+  assert.equal(bounded.segments[0].text.length,10000);assert.equal(bounded.segments[0].privatePath,undefined);
+});
+
+for(const action of ['segment.delete','segment.restore-deleted'])test(`${action} requires its exact approval and keeps shared reading-range protection`,async t=>{
+  const f=fixture(t),[first,second]=f.domain.list(f.chapter.id),revision=()=>f.store.get('chapters',f.chapter.id).revision;
+  const next=f.domain.mutate('chapter.create',{projectId:f.project.id,title:'其他章',source:'其他章原文。',segment:true});
+  if(action==='segment.restore-deleted')f.domain.mutate('segment.delete',{chapterId:f.chapter.id,revision:revision(),ids:[first.id,second.id]});
+  const input={ids:[first.id]},plan=await f.capabilities.preview(action,input,f.scope),before=f.store.all('segments',f.chapter.id);
+  assert.equal(plan.delegation,'explicit-proposal');
+  assert.deepEqual(plan.preview.segments.map(s=>s.id),[first.id]);assert.equal(plan.preview.segments[0].text,first.text);
+  for(const chapter of [next,f.otherChapter]){
+    const foreign={ids:[f.domain.list(chapter.id)[0].id]};
+    await assert.rejects(f.capabilities.preview(action,foreign,f.scope),/超出/);
+    await assert.rejects(f.capabilities.execute(action,foreign,f.scope,{actorKind:'human_approved_proposal',operationId:uid(),baseRevisions:plan.baseRevisions}),/超出/);
+  }
+  await assert.rejects(f.capabilities.execute(action,input,f.scope,await approved(f.capabilities,action,input,f.scope,{actorKind:'assistant_delegated'})),/明确决定/);
+  const missing=await approved(f.capabilities,action,input,f.scope,{namedOverrides:[first.id+'.excluded']});
+  await assert.rejects(f.capabilities.execute(action,input,f.scope,missing),/保留原文和朗读范围/);
+  assert.deepEqual(f.store.all('segments',f.chapter.id),before);assert.equal(f.store.maybe('settings','assistant-operation:'+missing.operationId),null);
+  const effects=f.domain.previewAssistantEffects(action,{...input,chapterId:f.chapter.id,revision:revision()});
+  assert.ok(effects.readingRange);assert.deepEqual(effects.voiceAssignments,[]);
+  const context=await approved(f.capabilities,action,input,f.scope,{approvedEffects:effects,namedOverrides:[first.id+'.excluded']});
+  const result=await f.capabilities.execute(action,input,f.scope,context),savedRevision=revision();
+  assert.equal(!!f.store.get('segments',first.id).deletion,action==='segment.delete');
+  assert.equal(f.store.get('segments',first.id).excluded,action==='segment.delete');
+  assert.equal(f.store.get('segments',first.id).text,first.text);assert.deepEqual(f.store.get('segments',first.id).source,first.source);
+  assert.deepEqual(f.store.get('segments',second.id),before.find(s=>s.id===second.id));assert.equal(f.domain.chapter(f.chapter.id).coverage.valid,true);
+  assert.deepEqual(await f.capabilities.execute(action,input,f.scope,context),result);assert.equal(revision(),savedRevision);
+  const sibling={ids:[second.id]};
+  await assert.rejects(f.capabilities.execute(action,sibling,f.scope,await approved(f.capabilities,action,sibling,f.scope,{approvedEffects:effects,namedOverrides:[second.id+'.excluded']})),/保留原文和朗读范围/);
+  assert.deepEqual(f.store.get('segments',second.id),before.find(s=>s.id===second.id));assert.equal(f.calls.length,0);
+});
+
 test('writes require trusted execution context and unchanged plain revision dependencies', async t => {
   const { capabilities, scope, domain, chapter, store } = fixture(t);
   const segment = domain.list(chapter.id)[0], input = { id: segment.id, performance: '轻声' };

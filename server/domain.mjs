@@ -248,7 +248,7 @@ export function createDomain(store) {
         assistantSessions, assistantRuns, assistantMessages:assistantSessions.flatMap(s=>store.all('assistantMessages',s.id)), assistantAttachments:assistantSessions.flatMap(s=>store.all('assistantAttachments',s.id)), assistantSteps:assistantRuns.flatMap(r=>store.all('assistantSteps',r.id)), assistantDecisions:assistantRuns.flatMap(r=>store.all('assistantDecisions',r.id)),
         projects:[project],chapters,roles,segments:related('segments'),units,events,suggestions,jobs,attempts,
         audios:related('audios'),masters:related('masters'),exports:related('exports'),
-        settings:store.all('settings').filter(s => (s.id.startsWith('ux-') || s.id.startsWith('assistant-operation:') || s.id.startsWith('assistant-call:') || s.id.startsWith('tail-maintenance:')) && (owns(s) || owns(s.request) || owns(s.request?.data) || chapterIds.has(s.dependencies?.chapterId) ||
+        settings:store.all('settings').filter(s => (s.id.startsWith('ux-') || s.id.startsWith('assistant-operation:') || s.id.startsWith('assistant-call:') || s.id.startsWith('tail-maintenance:') || s.id.startsWith('audio-file-check:')) && (owns(s) || owns(s.request) || owns(s.request?.data) || chapterIds.has(s.dependencies?.chapterId) ||
           s.dependencies?.roleIds?.some(id => roleIds.has(id)) || typeof s.request?.action === 'string' && (s.request.action.startsWith('role.') && roleIds.has(s.request.data?.id) ||
           s.request.action.startsWith('project.') && s.request.data?.id === project.id))),
       };
@@ -468,6 +468,7 @@ export function createDomain(store) {
     mutate(action, p) {
       let undoFolder;
       try { return store.transaction(() => {
+        if (['segment.delete','segment.restore-deleted'].includes(action) && (!Array.isArray(p.ids) || !p.ids.length || p.ids.some(id=>typeof id!=='string' || !id) || new Set(p.ids).size!==p.ids.length)) fail('请选择有效的台词');
         if (action !== "segment.update") enhancement.assertStructural(action, p);
         const apply = () => {
         if (action === "settings.update") {
@@ -848,6 +849,18 @@ export function createDomain(store) {
           touch(c);
           return s;
         }
+        if (action === 'segment.delete' || action === 'segment.restore-deleted') {
+          const rows=p.ids.map(id=>store.get('segments',id)), restoring=action==='segment.restore-deleted';
+          if(rows.some(s=>s.chapterId!==c.id || s.retired || (restoring ? !s.deletion || typeof s.deletion.excluded!=='boolean' : !!s.deletion))) fail('所选台词或删除状态已改变，请刷新后核对',409);
+          const at=new Date().toISOString();
+          for(const s of rows){
+            if(restoring){s.excluded=s.deletion.excluded;delete s.deletion;}
+            else{s.deletion={at,excluded:s.excluded};s.excluded=true;}
+            store.put('segments',s,c.id);
+          }
+          touch(c);
+          return {...c,ids:p.ids};
+        }
         if (action === "segment.rebind") {
           if (
             !Array.isArray(p.ids) ||
@@ -856,7 +869,7 @@ export function createDomain(store) {
           )
             fail("请选择待改绑片段");
           const rows = p.ids.map((id) => store.get("segments", id));
-          if (rows.some((s) => s.chapterId !== c.id || s.retired))
+          if (rows.some((s) => s.chapterId !== c.id || s.retired || s.deletion))
             fail("所选片段已经变化", 409);
           for (const s of rows) {
             rebind(s, p.roleId);
@@ -874,7 +887,7 @@ export function createDomain(store) {
           )
             fail("请选择待确认片段");
           const rows = p.ids.map((id) => store.get("segments", id));
-          if (rows.some((s) => s.chapterId !== c.id || s.retired))
+          if (rows.some((s) => s.chapterId !== c.id || s.retired || s.deletion))
             fail("所选片段已经变化", 409);
           for (const s of rows) {
             s.roleConfirmed = true;
@@ -885,7 +898,7 @@ export function createDomain(store) {
           return c;
         }
         const s = store.get("segments", p.id);
-        if (s.chapterId !== c.id || s.retired) fail("片段已改变", 409);
+        if (s.chapterId !== c.id || s.retired || s.deletion) fail("片段已改变或已删除", 409);
         if (action === "segment.template") {
           if (p.confirm !== true) fail("请先核对提示词差异并明确应用模板");
           templateOf(p.template);
@@ -1239,7 +1252,8 @@ export function createDomain(store) {
       return {...v,outstandingAttemptIds:readiness.outstandingAttemptIds,readiness,variants:Object.fromEntries(Object.entries(v.variants).map(([mode,variant])=>[mode,{...variant,outstandingAttemptIds:outstandingAttempts(store,[{targetKind:'unit',targetId:u.id,mode}],history).map(a=>a.id)}]))};
     });
     const playbackItems=rows.map(r=>{const u=units.find(u=>u.id===r.s.id);return {id:r.s.id,unitId:r.s.id,members:r.s.members,mode:r.s.mode,audioId:r.a?.id || null,basis:r.basis,validity:r.validity,review:r.review,latest:u?.outstandingAttemptIds.length?'unknown':u?.variants[r.s.mode].latest,outstandingAttemptIds:u?.outstandingAttemptIds || [],readiness:u?.readiness};});
-    return { ...result, arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems, segments: result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, configurationDecided:configurationDecided(s), ...(group ? {groupId:group.id} : {}) }; }), exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && same(e.confirmation?.reviewItems, reviewItems) })) };
+    const segments=result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, configurationDecided:configurationDecided(s), ...(group ? {groupId:group.id} : {}) }; });
+    return { ...result, arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems, segments:segments.filter(s=>!s.deletion), deletedSegments:segments.filter(s=>s.deletion), exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && same(e.confirmation?.reviewItems, reviewItems) })) };
   };
   return api;
 }

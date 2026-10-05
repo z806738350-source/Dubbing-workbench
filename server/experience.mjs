@@ -220,7 +220,7 @@ export function createExperience(store, domain, worker, analysis, config) {
   function unprotect(p) {
     return store.transaction(() => {
       const c = domain.editable(p.chapterId,p.revision), s = store.get('segments',p.segmentId);
-      if (s.chapterId !== c.id || s.retired || p.field !== 'performance') fail('请选择当前台词的表演项重新安排');
+      if (s.chapterId !== c.id || s.retired || s.deletion || p.field !== 'performance') fail('请选择当前台词的表演项重新安排');
       s.protectedFields = (s.protectedFields || []).filter(field => field !== p.field);
       s.aiAllowedFields = [...new Set([...(s.aiAllowedFields || []),p.field])];
       store.put('segments',s,c.id); domain.touch(c,true,false); return {...s,chapterRevision:c.revision};
@@ -362,7 +362,7 @@ export function createExperience(store, domain, worker, analysis, config) {
       if (change.undoneAt) return change;
       for (const item of change.items) {
         const s = store.get('segments',item.id);
-        if (s.retired || Object.keys(item.after).some(field => !same(s[field],item.after[field]))) fail('AI安排后这部分已被修改，请比较差异后决定',409);
+        if (s.retired || s.deletion || Object.keys(item.after).some(field => !same(s[field],item.after[field]))) fail('AI安排后这部分已被修改或删除，请比较差异后决定',409);
       }
       const splits = change.splits || [], childIds = splits.flatMap(split => split.children.map(s => s.id));
       if (childIds.length) {
