@@ -116,7 +116,6 @@ type Modal =
   | "recovery"
   | "help"
   | "project"
-  | "project-rename"
   | "chapter"
   | "manual"
   | "voices"
@@ -130,6 +129,7 @@ type Modal =
 
 export default function App() {
   const [deleteTarget,setDeleteTarget]=useState<Project|null>(null);
+  const [renameTarget,setRenameTarget]=useState<Project|null>(null);
   const [rebindOpen, setRebindOpen] = useState(false);
   const [assistantOpen,setAssistantOpen]=useState(false),[assistantNarrow,setAssistantNarrow]=useState(window.innerWidth<1216),[assistantPrompt,setAssistantPrompt]=useState<{id:string;text:string}>();
   const assistantButton=useRef<HTMLButtonElement>(null),assistantWasOpen=useRef(false);
@@ -244,7 +244,7 @@ export default function App() {
     const s = await api<State>("/state");
     const identity=s.settings.workspaceIdentity||s.settings.workspaceDirectory,changedWorkspace=!!draftWorkspace()&&draftWorkspace()!==identity;
     bindDraftWorkspace(identity);
-    if(changedWorkspace){playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;generationIntent.current++;setGenerationPlan(null);setGrantId(null);setDeleteTarget(null);setUnitPanelId(null);setVoiceTarget(null);setOldPreview(null);setModal(null);setChapter(null);setDraftSignal(value=>value+1);bookmarks.current={};chapterPlaybackSnapshots.current={};audio.current?.pause();setPlayer(null);}
+    if(changedWorkspace){playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;generationIntent.current++;setGenerationPlan(null);setGrantId(null);setDeleteTarget(null);setRenameTarget(null);setUnitPanelId(null);setVoiceTarget(null);setOldPreview(null);setModal(null);setChapter(null);setDraftSignal(value=>value+1);bookmarks.current={};chapterPlaybackSnapshots.current={};audio.current?.pause();setPlayer(null);}
     setState(s);
     let id = chapterRef.current;
     if (!s.chapters.some((c) => c.id === id))
@@ -429,6 +429,7 @@ export default function App() {
     ).length;
   const pickChapter = (id: string) => {
     setDeleteTarget(null);
+    setRenameTarget(null);
     playIntent.current++;
     chapterRef.current=id;
     pendingPlay.current=null;pendingPlaySnapshot.current=null;
@@ -667,6 +668,7 @@ export default function App() {
             state?.projects.map((p) => ({ value: p.id, label: p.name })) || []
           }
           onChange={pickProject}
+          onRename={id => {const target=state?.projects.find(project=>project.id===id);if(target)setRenameTarget(target);}}
           onDelete={id => {const target=state?.projects.find(project=>project.id===id);if(target)setDeleteTarget(target);}}
           disabled={busy || !connectionReady}
         />
@@ -678,7 +680,6 @@ export default function App() {
           <Plus size={16} />
         </button>
       </div>
-      {project && <button className="text-button project-rename" onClick={() => setModal("project-rename")}>重命名项目</button>}
       <button className="nav-item" onClick={() => {setNavOpen(false);setModal("overview");}}><FolderOpen size={17}/>项目总览</button>
       <button className="nav-item current" onClick={() => setNavOpen(false)}>
         <BookOpen size={17} />
@@ -1488,8 +1489,8 @@ export default function App() {
           </Form>
         </Dialog>
       )}
-      {modal === "project-rename" && project && (
-        <RenameProject project={project} save={mutate} onClose={() => setModal(null)} />
+      {renameTarget && (
+        <RenameProject key={(state?.settings.workspaceIdentity||state?.settings.workspaceDirectory)+"/"+renameTarget.id} project={state?.projects.find(p=>p.id===renameTarget.id)||renameTarget} save={mutate} onClose={() => setRenameTarget(null)} />
       )}
       {modal === "chapter" && (
         <ImportChapter
@@ -1942,12 +1943,14 @@ function WorkspaceLocation({ directory, projectCount, projectName, projectFolder
 
 function RenameProject({ project, save, onClose }: { project: Project; save: (a: string, p: Record<string, unknown>) => Promise<unknown>; onClose: () => void }) {
   const [base] = useState(project);
+  const live = useRef(true);
+  useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   return <Dialog title="重命名项目" onClose={onClose}>
     <Form label="保存项目名称" onSubmit={async f => {
       await save("project.rename", { id: base.id, name: f.get("name"), entityRevision: base.revision ?? 1 });
-      onClose();
+      if (live.current) onClose();
     }}>
-      <Field label="项目名称"><input name="name" defaultValue={base.name} maxLength={100}/></Field>
+      <Field label="项目名称"><input name="name" autoFocus defaultValue={base.name} maxLength={100}/></Field>
       {(project.revision ?? 1) !== (base.revision ?? 1) && <p className="warning">项目名称已在其他页面修改。当前输入保留，请复制需要保留的文字后关闭并重新打开。</p>}
     </Form>
   </Dialog>;

@@ -10,22 +10,22 @@ const text=node=>node==null||typeof node==='boolean'?'':typeof node!=='object'?S
 const find=(tree,label)=>nodes(tree).find(n=>n.props?.['aria-label']===label||n.type==='Select'&&n.props.label===label||n.type==='button'&&text(n)===label);
 const tick=()=>new Promise(done=>setImmediate(done));
 const config={revision:1,enabled:true,configured:true,hasKey:true,baseUrl:'https://example.invalid/v1',model:'test',credentialSource:'audio',vision:true};
-const session=id=>({id,projectId:'p',chapterId:'c'+id,title:id,state:'active'});
+const session=id=>({id,projectId:'p',chapterId:'c'+id,title:id,state:'active',revision:1});
 const detail=id=>({session:session(id),messages:[],runs:[],steps:[],attachments:[],capabilities:[]});
 let sequence=0;
 async function setup({request,initial,records=new Map(),component="default",sessionRows=[session('A'),session('B')],savedConfig=config}={}){
-  let index=0,queued=[],rendered;const values=[],effects=[],calls=[],saved=[],unmounts=[];
+  let index=0,queued=[],rendered;const values=[],effects=[],calls=[],saved=[],unmounts=[],timers=[];
   const api=async(path,body,method)=>{calls.push([path,body,method]);if(path==='/assistant/config'&&!body)return savedConfig;if(path==='/assistant/sessions'&&!body)return sessionRows;if(request){const value=await request(path,body,method);if(value!==undefined)return value;}return detail(path.endsWith('/B')?'B':'A');};
   const state={settings:{workspaceIdentity:'w'},projects:[{id:'p',name:'测试'}],chapters:[{id:'cA',projectId:'p',title:'甲章'},{id:'cB',projectId:'p',title:'乙章'}],voices:[],roles:[]};
   const props={state,config,connected:true,onSaved:()=>{},projectId:'p',chapterId:'cA',selectedSegmentIds:['segment'],connected:true,pane:'settings',onClose:()=>{},onManual:()=>{},onNavigate:()=>{},onUIAction:async()=>{},withSavedScope:async(binding,work)=>{saved.push(binding);await work();},refresh:async()=>{},...initial};
-  globalThis.window={setInterval:()=>1,clearInterval:()=>{}};
+  globalThis.window={setInterval:fn=>(timers.push(fn),timers.length),clearInterval:()=>{}};
   globalThis.createImageBitmap=async()=>({width:2,height:2,close(){}});
   globalThis.FileReader=class {readAsDataURL(){this.result='data:image/png;base64,YWJj';this.onload();}};
-  globalThis.assistantClientTest={...client,React:{createElement:(type,props,...children)=>({type,props:{...props,children}})},useRef:value=>{const i=index++;return values[i]||=( {current:value});},useState:value=>{const i=index++;if(!(i in values))values[i]=typeof value==='function'?value():value;return[values[i],v=>{values[i]=typeof v==='function'?v(values[i]):v;}];},useEffect:(fn,deps)=>{const i=index++;if(!effects[i]||deps.some((v,n)=>v!==effects[i].deps[n]))queued.push(()=>{effects[i]?.cleanup?.();effects[i]={deps,cleanup:fn()};});},api,readDraft:key=>records.has(key)?{draft:records.get(key),revision:1}:null,writeDraft:(key,value)=>records.set(key,structuredClone(value)),draftWorkspace:()=> 'w',Dialog:'Dialog',Field:'Field',Select:'Select',ArrowDown:'Icon',ArrowUp:'Icon',ImagePlus:'Icon',MessageSquare:'Icon',Plus:'Icon',Settings2:'Icon',X:'Icon'};
+  globalThis.assistantClientTest={...client,React:{createElement:(type,props,...children)=>({type,props:{...props,children}})},useRef:value=>{const i=index++;return values[i]||=( {current:value});},useState:value=>{const i=index++;if(!(i in values))values[i]=typeof value==='function'?value():value;return[values[i],v=>{values[i]=typeof v==='function'?v(values[i]):v;}];},useEffect:(fn,deps)=>{const i=index++;if(!effects[i]||deps.some((v,n)=>v!==effects[i].deps[n]))queued.push(()=>{effects[i]?.cleanup?.();effects[i]={deps,cleanup:fn()};});},api,readDraft:key=>records.has(key)?{draft:records.get(key),revision:1}:null,writeDraft:(key,value)=>records.set(key,structuredClone(value)),clearDraft:key=>records.delete(key),draftWorkspace:()=> 'w',Dialog:'Dialog',Field:'Field',Select:'Select',ArrowDown:'Icon',ArrowUp:'Icon',ImagePlus:'Icon',MessageSquare:'Icon',Plus:'Icon',Settings2:'Icon',X:'Icon'};
   const module=await import('data:text/javascript;base64,'+Buffer.from('const {'+Object.keys(globalThis.assistantClientTest).join(',')+'}=globalThis.assistantClientTest;\n'+compiled+'\n//'+sequence++).toString('base64'));
   const render=()=>{index=0;rendered=module[component](props);const work=queued;queued=[];work.forEach(fn=>fn());return rendered;};
   render();await tick();render();await tick();render();
-  return {render,props,calls,records,saved,unmount:()=>effects.forEach(e=>e?.cleanup?.()),change:value=>{find(render(),'给助手的消息').props.onChange({target:{value}});},find:label=>find(render(),label)};
+  return {render,props,calls,records,saved,poll:()=>timers.at(-1)?.(),unmount:()=>effects.forEach(e=>e?.cleanup?.()),change:value=>{find(render(),'给助手的消息').props.onChange({target:{value}});},find:label=>find(render(),label)};
 }
 
 test('截图输入边界与提案展示覆盖实际内容，包括未知字段和嵌套修改',()=>{
@@ -108,6 +108,42 @@ test('归档非当前会话不切换当前、清草稿或串入另一会话附�
   f.find('归档会话 B').props.onClick();await tick();
   assert.equal(f.find('助手会话').props.value,'A');assert.equal(f.find('给助手的消息').props.value,'甲未发送');assert.deepEqual([...records],before);
   assert.equal(f.calls.filter(([path,,method])=>path==='/assistant/sessions/B'&&method==='DELETE').length,1);assert.equal(f.calls.filter(([path,,method])=>path==='/assistant/sessions/B'&&method!=='DELETE').length,0);f.unmount();
+});
+
+test('删除对话先呈现具体会话范围与永久后果，确认仅清所选会话草稿和图片',async()=>{
+  const records=new Map([['assistant:A',{...client.newAssistantDraft(),text:'甲草稿',attachments:[{id:'pic-A',sessionId:'A'}]}],['assistant:B',{...client.newAssistantDraft(),text:'乙草稿',attachments:[{id:'pic-B',sessionId:'B'}]}]]),a=structuredClone(records.get('assistant:A'));
+  const f=await setup({records,request:async(path,body)=>path.endsWith('/content-delete')?{...detail(body.sessionId),session:{...session(body.sessionId),state:'archived',revision:3,contentDeletion:{revision:body.revision,at:'now'}}}:undefined});
+  f.find('删除对话内容 B').props.onClick();await tick();
+  assert.match(text(f.render()),/删除“B”的对话内容/);assert.match(text(f.render()),/乙章，仅此会话/);assert.match(text(f.render()),/无法恢复/);assert.match(text(f.render()),/费用不会撤销/);assert.equal(f.calls.some(([path])=>path.endsWith('/content-delete')),false);
+  f.find('永久删除此会话内容').props.onClick();await tick();
+  const submitted=f.calls.find(([path])=>path.endsWith('/content-delete'));assert.deepEqual(submitted[1],{sessionId:'B',revision:1,confirmed:true});
+  assert.equal(records.has('assistant:B'),false);assert.deepEqual(records.get('assistant:A'),a);assert.equal(f.find('助手会话').props.value,'A');assert.equal(f.find('给助手的消息').props.value,'甲草稿');f.unmount();
+});
+
+test('取消删除不清任何材料，归档会话没有编辑或续跑入口',async()=>{
+  const f=await setup();f.change('保留这段草稿');f.find('删除对话内容 B').props.onClick();await tick();f.find('保留对话').props.onClick();assert.equal(f.calls.some(([path])=>path.endsWith('/content-delete')),false);assert.equal(f.find('给助手的消息').props.value,'保留这段草稿');f.unmount();
+  const archived=await setup({request:async path=>path==='/assistant/sessions/A'?{...detail('A'),session:{...session('A'),state:'archived',revision:2},messages:[{id:'old',role:'user',content:'归档全文',attachmentIds:[]}]}:undefined});
+  assert.match(text(archived.render()),/归档全文/);assert.match(text(archived.render()),/可只读查看/);assert.equal(archived.find('给助手的消息'),undefined);archived.unmount();
+});
+
+test('删除后的迟到读取不能复活聊天、待发送草稿或截图',async()=>{
+  let delay=false,resolveLate,removed=false;
+  const kept=new Map([['assistant:A',{...client.newAssistantDraft(),text:'将清除草稿',attachments:[{id:'private-image',sessionId:'A'}]}]]);
+  const modern=()=>({...detail('A'),session:{...session('A'),state:'archived',revision:3,contentDeletion:{revision:1,at:'now'}}});
+  const f=await setup({records:kept,request:async(path)=>{
+    if(path.endsWith('/content-delete')){removed=true;return modern();}
+    if(path==='/assistant/sessions/A'){if(delay){delay=false;return new Promise(done=>{resolveLate=done;});}return removed?modern():detail('A');}
+  }});
+  delay=true;f.poll();await tick();f.find('删除对话内容 A').props.onClick();await tick();f.find('永久删除此会话内容').props.onClick();await tick();
+  resolveLate({...detail('A'),messages:[{id:'stale',role:'user',content:'不应复活的私有聊天',attachmentIds:['private-image']}],attachments:[{id:'private-image',sessionId:'A'}]});await tick();
+  assert.equal(kept.has('assistant:A'),false);assert.equal(f.find('给助手的消息'),undefined);assert.equal(text(f.render()).includes('不应复活的私有聊天'),false);assert.match(text(f.render()),/对话内容已永久删除/);f.unmount();
+});
+
+test('具体批准显示既有及新建台词与旧新音色，并显式呈现朗读范围变化',async()=>{
+  const run={id:'r',state:'awaitingApproval',revision:1,mode:'task',textMutationPolicy:'preserveExact',binding:{projectId:'p',chapterId:'cA'},budget:{limits:{assistant:2,analysis:0,audio:0},used:{assistant:1,analysis:0,audio:0}}};
+  const f=await setup({request:async path=>path==='/assistant/sessions/A'?{...detail('A'),runs:[run],steps:[{id:'s',runId:'r',ordinal:0,state:'proposed',description:'改变配音设置',input:{excluded:true},preview:{effects:{voiceAssignments:[{roleId:'role',segmentId:'segment',segmentText:'第二句完整正文',before:'voice-old',after:'voice-new'},{roleId:'role',segmentText:'新建台词完整正文',before:null,after:'voice-new',source:'new-segment'},{roleId:'role',before:null,after:'voice-new',source:'role-default'}],readingRange:{before:{text:'第一句。第二句。',spans:[]},after:{text:'第一句。',spans:[]}}}}}]}:undefined});
+  f.props.state.roles=[{id:'role',name:'旁白'}];f.props.state.voices=[{id:'voice-old',name:'原音色'},{id:'voice-new',name:'新音色'}];
+  const rendered=text(f.render());assert.match(rendered,/旁白 · 台词 第二句完整正文/);assert.match(rendered,/原音色 → 新音色/);assert.match(rendered,/旁白 · 台词 新建台词完整正文/);assert.match(rendered,/旁白 · 角色默认音色/);assert.match(rendered,/下面提案将改变朗读范围，仅批准才实施/);assert.match(rendered,/原朗读文字第一句。第二句。/);assert.match(rendered,/拟朗读文字第一句。/);assert.equal(rendered.includes('保留原文。'),false);f.unmount();
 });
 
 test('需要补充或已暂停时，实际未确认步骤仍显示逐项核对入口',async()=>{

@@ -164,7 +164,7 @@ test('assistant mutations record AI provenance, protect human fields and preserv
   current = store.get('segments',segment.id); assert.equal(current.performance,'大声'); assert.ok(current.protectedFields.includes('performance')); assert.equal(current.decisions.performance.source,'policy_ai');
   const rewrite={id:segment.id,text:'改写正文。'};
   await assert.rejects(capabilities.execute('segment.update',rewrite,scope,await approved(capabilities,'segment.update',rewrite,scope)),/保留原文/);
-  await capabilities.execute('segment.update',rewrite,scope,await approved(capabilities,'segment.update',rewrite,scope,{textMutationPolicy:'explicitSpecifiedEdit'}));
+  await capabilities.execute('segment.update',rewrite,scope,await approved(capabilities,'segment.update',rewrite,scope,{textMutationPolicy:'explicitSpecifiedEdit',approvedEffects:domain.previewAssistantEffects('segment.update',{...rewrite,chapterId:chapter.id,revision:store.get('chapters',chapter.id).revision})}));
   assert.equal(store.get('segments',segment.id).text,'改写正文。');
 });
 
@@ -192,7 +192,7 @@ test('composite useVoice propagates trusted actor without marking inherited choi
   f.store.put('voices',{id:voiceId,name:'批准的声音',state:'active',revision:1});
   const role=f.store.all('roles',f.project.id)[0];
   const e=createExperience(f.store,f.domain,f.worker,f.analysis,{});
-  const result=await e.run({kind:'useVoice',operationId:uid(),chapterId:f.chapter.id,revision:f.chapter.revision,roleId:role.id,entityRevision:1,voiceId,apply:true},{actorKind:'assistant_delegated',runId:'run',stepId:'voice-step',operationId:'voice-step'});
+  const result=await e.run({kind:'useVoice',operationId:uid(),chapterId:f.chapter.id,revision:f.chapter.revision,roleId:role.id,entityRevision:1,voiceId,apply:true},{actorKind:'assistant_delegated',runId:'run',stepId:'voice-step',operationId:'voice-step',voicePolicy:'chooseFromApprovedSet',allowedVoiceIds:[voiceId]});
   assert.equal(result.outcome,'completed');
   for(const s of f.domain.list(f.chapter.id)){assert.equal(s.voiceId,voiceId);assert.equal(s.decisions.identity.source,'policy_ai');assert.equal(s.decisions.identity.stepId,'voice-step');assert.ok(!s.protectedFields.includes('voiceId'));}
 });
@@ -215,6 +215,81 @@ test('analysis application respects human protection and records an atomic AI re
   assert.equal(f.store.get('segments',segment.id).decisions.performance.source,'policy_ai');
   assert.deepEqual(analysis.apply(payload,false,ctx),applied);
   assert.equal(f.store.get('settings','assistant-operation:'+ctx.operationId).action,'analysis.apply');
+});
+
+for (const policy of ['chooseFromApprovedSet', 'askMissing']) test(`new chapter extraction respects ${policy} for existing role default voices`, async t => {
+  const f = fixture(t), voiceA = { id: uid(), name: '批准A', state: 'active' }, voiceB = { id: uid(), name: '已有角色B声音', state: 'active' };
+  f.store.put('voices', voiceA); f.store.put('voices', voiceB);
+  const role = f.domain.mutate('role.create', { projectId: f.project.id, name: '已有角色B' });
+  f.store.put('roles', { ...role, voiceId: voiceB.id }, f.project.id);
+  const chapter = f.domain.mutate('chapter.create', { projectId: f.project.id, title: '尚未提取的新章', source: '第一段完整原文。\n第二段完整原文。', segment: false });
+  const analysis = createAnalysis(f.store, f.domain, { key: 'fixture', baseUrl: 'https://example.invalid/v1' });
+  t.after(() => analysis.close());
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    const input = JSON.parse(JSON.parse(init.body).messages[1].content);
+    const items = input.blocks.map(block => ({ from: block.id, to: block.id, roleId: role.id, type: 'dialogue', performance: '', evidence: '原文明示', evidenceRefs: [block.id], reason: '原文已指定角色', uncertain: false }));
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ items }) } }] });
+  });
+  const pending = await analysis.start({ chapterId: chapter.id, revision: chapter.revision, kind: 'extract', autoApply: false });
+  await analysis.close();
+  const ready = f.store.get('suggestions', pending.id); assert.equal(ready.status, 'ready');
+  const payload = { id: ready.id, chapterId: chapter.id, revision: chapter.revision, draftVersion: ready.draftVersion, replaceConfirmed: true };
+  const effects = f.domain.previewAssistantEffects('analysis.apply', payload, undefined, () => analysis.apply(payload, false));
+  assert.ok(effects.voiceAssignments.every(assignment => assignment.after === voiceB.id));
+  assert.equal(effects.voiceAssignments.length, ready.items.length);
+  assert.equal(f.domain.list(chapter.id).length, 0);
+  const ctx = { actorKind: 'assistant_delegated', operationId: uid(), runId: uid(), stepId: uid(), textMutationPolicy: 'preserveExact', voicePolicy: policy, allowedVoiceIds: [policy === 'askMissing' ? voiceB.id : voiceA.id] };
+  if (policy === 'chooseFromApprovedSet') {
+    assert.throws(() => analysis.apply(payload, false, ctx), /指定音色集合/);
+    assert.equal(f.domain.list(chapter.id).length, 0);
+    assert.equal(f.store.get('suggestions', ready.id).status, 'ready');
+    assert.equal(f.store.maybe('settings', 'assistant-operation:' + ctx.operationId), null);
+  } else {
+    assert.equal(analysis.apply(payload, false, ctx).status, 'applied');
+    assert.ok(f.domain.list(chapter.id).every(segment => segment.voiceId === voiceB.id));
+    assert.equal(f.domain.list(chapter.id).map(segment => segment.text).join(''), chapter.source);
+  }
+});
+
+for (const policy of ['chooseFromApprovedSet', 'askMissing']) test(`chapter creation respects ${policy} for an existing narrator default voice`, async t => {
+  const f = fixture(t), voiceA = { id: uid(), name: '批准A', state: 'active' }, voiceB = { id: uid(), name: '已有旁白声音B', state: 'active' };
+  f.store.put('voices', voiceA); f.store.put('voices', voiceB);
+  const narrator = f.store.all('roles', f.project.id).find(role => role.narrator);
+  f.store.put('roles', { ...narrator, voiceId: voiceB.id }, f.project.id);
+  const scope = { projectId: f.project.id, chapterId: null }, input = { title: '托管导入的新章', source: '导入原文。\n第二句话。', segment: true };
+  const preview = await f.capabilities.preview('chapter.create', input, scope), before = f.store.all('chapters', f.project.id);
+  const context = { actorKind: 'assistant_delegated', operationId: uid(), baseRevisions: preview.baseRevisions, textMutationPolicy: 'preserveExact', voicePolicy: policy, allowedVoiceIds: [policy === 'askMissing' ? voiceB.id : voiceA.id] };
+  if (policy === 'chooseFromApprovedSet') {
+    await assert.rejects(f.capabilities.execute('chapter.create', input, scope, context), /指定音色集合/);
+    assert.deepEqual(f.store.all('chapters', f.project.id), before);
+    assert.equal(f.store.maybe('settings', 'assistant-operation:' + context.operationId), null);
+  } else {
+    const created = await f.capabilities.execute('chapter.create', input, scope, context);
+    assert.equal(f.domain.list(created.id).map(segment => segment.text).join(''), input.source);
+    assert.ok(f.domain.list(created.id).every(segment => segment.voiceId === voiceB.id));
+  }
+});
+
+test('an existing fully excluded reading range stays protected; exact approval reopens only its named sentence', async t => {
+  const f = fixture(t), [first, second] = f.domain.list(f.chapter.id);
+  for (const segment of [first, second]) f.domain.mutate('segment.update', { chapterId: f.chapter.id, revision: f.store.get('chapters', f.chapter.id).revision, id: segment.id, excluded: true });
+  const unchanged = { id: first.id, excluded: true }, unchangedPreview = await f.capabilities.preview('segment.update', unchanged, f.scope);
+  await f.capabilities.execute('segment.update', unchanged, f.scope, { actorKind: 'assistant_delegated', operationId: uid(), baseRevisions: unchangedPreview.baseRevisions, textMutationPolicy: 'preserveExact' });
+  assert.ok(f.domain.list(f.chapter.id).every(segment => segment.excluded));
+  const input = { id: first.id, excluded: false }, preview = await f.capabilities.preview('segment.update', input, f.scope);
+  const effects = f.domain.previewAssistantEffects('segment.update', { ...input, chapterId: f.chapter.id, revision: f.store.get('chapters', f.chapter.id).revision });
+  assert.equal(effects.readingRange.initialSetup, false);
+  assert.equal(effects.readingRange.before.text, '');
+  const before = f.store.all('segments', f.chapter.id), operationId = uid();
+  await assert.rejects(f.capabilities.execute('segment.update', input, f.scope, { actorKind: 'assistant_delegated', operationId, baseRevisions: preview.baseRevisions, textMutationPolicy: 'preserveExact' }), /保留原文和朗读范围/);
+  assert.deepEqual(f.store.all('segments', f.chapter.id), before);
+  assert.equal(f.store.maybe('settings', 'assistant-operation:' + operationId), null);
+  await f.capabilities.execute('segment.update', input, f.scope, { actorKind: 'human_approved_proposal', operationId: uid(), baseRevisions: preview.baseRevisions, textMutationPolicy: 'preserveExact', approvedEffects: effects, namedOverrides: [first.id + '.excluded'] });
+  assert.equal(f.store.get('segments', first.id).excluded, false);
+  assert.equal(f.store.get('segments', second.id).excluded, true);
+  const nextInput = { id: second.id, excluded: false }, nextPreview = await f.capabilities.preview('segment.update', nextInput, f.scope);
+  await assert.rejects(f.capabilities.execute('segment.update', nextInput, f.scope, { actorKind: 'human_approved_proposal', operationId: uid(), baseRevisions: nextPreview.baseRevisions, textMutationPolicy: 'preserveExact', approvedEffects: effects, namedOverrides: [second.id + '.excluded'] }), /保留原文和朗读范围/);
+  assert.equal(f.store.get('segments', second.id).excluded, true);
 });
 
 test('registered UI actions require a click, do not autoplay, and reject arbitrary URLs or targets', async t => {

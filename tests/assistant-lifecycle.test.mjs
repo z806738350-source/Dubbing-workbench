@@ -54,7 +54,7 @@ test('project deletion includes assistant reference scope; late upload invalidat
   assert.ok(f.store.get('settings', 'assistant-call:shared'));
 });
 
-test('HTTP uses independent settings, rejects unauthorised send, archives only selected session and removes its images', async t => {
+test('HTTP uses independent settings, rejects unauthorised send, archives selected chat read-only and explicitly deletes only confirmed content', async t => {
   const root = mkdtempSync(join(tmpdir(), 'assistant-http-')), app = await startServer({ port: 0, directory: join(root, 'data'), config: { key: '', baseUrl: 'https://test.example/v1', model: 'seed-audio-1.0' }, assistantFetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"reply":"当前还没有音频，请先准备章节。","questions":["接下来要准备哪章？"]}' } }] })) });
   t.after(async () => { await app.close(); rmSync(root, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${app.server.address().port}/api`;
@@ -76,7 +76,13 @@ test('HTTP uses independent settings, rejects unauthorised send, archives only s
   assert.equal(stale.status, 409, '异步拒绝仍按HTTP冲突返回');
   assert.equal((await request(`/assistant/sessions/${s1.id}`, null, 'DELETE')).status, 200);
   assert.equal((await request(`/assistant/sessions/${s2.id}`)).data.session.state, 'active');
-  assert.equal((await request(`/assistant/sessions/${s1.id}`)).data.messages.length, 0);
+  const archived=(await request(`/assistant/sessions/${s1.id}`)).data;
+  assert.equal(archived.messages.length, 2);
+  assert.equal((await request(`/assistant/sessions/${s1.id}/messages`, { messageId: uid(), text: '已归档不再发送', approved: true })).status,409);
+  assert.equal((await request(`/assistant/sessions/${s1.id}/content-delete`, {sessionId:s2.id,revision:archived.session.revision,confirmed:true})).status,403);
+  const deleted=await request(`/assistant/sessions/${s1.id}/content-delete`, {sessionId:s1.id,revision:archived.session.revision,confirmed:true});
+  assert.equal(deleted.status,200,JSON.stringify(deleted.data));assert.equal(deleted.data.messages.length,0);assert.ok(deleted.data.session.contentDeletion);
+  assert.equal((await request(`/assistant/sessions/${s2.id}`)).data.session.state,'active');
   assert.equal((await request('/assistant/sessions')).data.length, 2);
 });
 

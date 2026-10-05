@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AlertCircle, Check, ChevronDown, Trash2, X } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Pencil, Trash2, X } from "lucide-react";
 
 export const ErrorContext = createContext({ message: "", dismiss: () => {} });
 const DialogDepth = createContext(0);
@@ -49,7 +49,7 @@ export function Dialog({
     const origin=document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const entry={dialog:el,depth};dialogStack.push(entry);
     activateDialog();
-    if(el.open)(el.querySelector<HTMLElement>("[autofocus], input:not([type=hidden]), textarea, [role=combobox], button") || el).focus({preventScroll:true});
+    if(el.open)(el.querySelector<HTMLElement>("[autofocus], input:not([type=hidden]), textarea, [role=combobox]") || el.querySelector<HTMLElement>("button") || el).focus({preventScroll:true});
     return () => {
       const index=dialogStack.indexOf(entry);if(index >= 0)dialogStack.splice(index,1);
       if(el.open)el.close();
@@ -93,6 +93,7 @@ export function Select({
   label,
   onOpen,
   onDelete,
+  onRename,
 }: {
   value: string;
   options: { value: string; label: string }[];
@@ -101,7 +102,9 @@ export function Select({
   label: string;
   onOpen?: () => void;
   onDelete?: (value: string) => void;
+  onRename?: (value: string) => void;
 }) {
+  const hasActions = !!(onDelete || onRename);
   const [open, setOpen] = useState(false),
     [cursor, setCursor] = useState(0);
   const [placement, setPlacement] = useState({
@@ -124,7 +127,7 @@ export function Select({
       const spaceAbove = Math.max(0, rect.top - 12);
       const above = spaceBelow < height && spaceAbove > spaceBelow;
       const maxHeight = Math.min(height, above ? spaceAbove : spaceBelow);
-      const width = Math.min(rect.width, window.innerWidth - 16);
+      const width = Math.min(hasActions ? Math.max(rect.width, 280) : rect.width, window.innerWidth - 16);
       setPlacement({
         top: above ? rect.top - maxHeight - 4 : rect.bottom + 4,
         left: Math.max(
@@ -147,13 +150,13 @@ export function Select({
       window.removeEventListener("resize", place);
       document.removeEventListener("scroll", place, true);
     };
-  }, [open, options.length, disabled]);
+  }, [open, options.length, disabled, hasActions]);
   useEffect(() => {
-    if (open && !onDelete) root.current?.querySelector<HTMLElement>(`[id="${listId.current}-${activeIndex}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [open, activeIndex, onDelete]);
+    if (open && !hasActions) root.current?.querySelector<HTMLElement>(`[id="${listId.current}-${activeIndex}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [open, activeIndex, hasActions]);
   const focusOption = (index: number) => root.current?.querySelector<HTMLButtonElement>(`[data-choice-index="${index}"]`)?.focus();
   useEffect(() => {
-    if (open && onDelete) focusOption(cursor);
+    if (open && hasActions) focusOption(cursor);
   }, [open]);
   const choose = (v: string) => {
     if (disabled || !options.some(option => option.value === v)) return;
@@ -169,12 +172,12 @@ export function Select({
         ref={trigger}
         className="select-trigger"
         type="button"
-        role={onDelete ? undefined : "combobox"}
-        aria-haspopup={onDelete ? "dialog" : "listbox"}
+        role={hasActions ? undefined : "combobox"}
+        aria-haspopup={hasActions ? "dialog" : "listbox"}
         aria-label={label}
         aria-expanded={open}
         aria-controls={listId.current}
-        aria-activedescendant={open && !onDelete ? `${listId.current}-${activeIndex}` : undefined}
+        aria-activedescendant={open && !hasActions ? `${listId.current}-${activeIndex}` : undefined}
         disabled={disabled || !options.length}
         onClick={() => {
           if (!open) onOpen?.();
@@ -197,7 +200,7 @@ export function Select({
             return;
           }
           if (e.key === "Tab") {
-            if (!onDelete) setOpen(false);
+            if (!hasActions) setOpen(false);
             return;
           }
           if (!["ArrowDown", "ArrowUp", "Enter", "Home", "End"].includes(e.key))
@@ -236,10 +239,10 @@ export function Select({
             bottom: "auto",
             right: "auto",
           }}
-          role={onDelete ? "dialog" : "listbox"}
+          role={hasActions ? "dialog" : "listbox"}
           id={listId.current}
           aria-label={label}
-          onKeyDown={onDelete ? e => {
+          onKeyDown={hasActions ? e => {
             if (e.key === "Escape") {
               e.preventDefault(); e.stopPropagation(); setOpen(false); trigger.current?.focus();
             } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
@@ -249,16 +252,21 @@ export function Select({
             }
           } : undefined}
         >
-          {options.map((o, i) => onDelete ? <div className="select-option-row" key={o.value}>
+          {options.map((o, i) => hasActions ? <div className="select-option-row" key={o.value}>
             <button type="button" data-choice-index={i} aria-pressed={o.value === value}
               className={"select-option" + (i === cursor ? " cursor" : "")} disabled={disabled}
               onFocus={() => setCursor(i)} onClick={() => choose(o.value)}>
               <span>{o.label}</span>{o.value === value && <Check size={14} />}
             </button>
-            <button type="button" className="select-delete" aria-label={"删除" + o.label} disabled={disabled}
+            {onRename && <button type="button" className="select-rename" aria-label={"重命名" + o.label} title="重命名项目" disabled={disabled}
+              onFocus={() => setCursor(i)} onClick={e => {
+                if (disabled) return;
+                e.stopPropagation(); setOpen(false); trigger.current?.focus(); onRename(o.value);
+              }}><Pencil size={16} aria-hidden="true" /></button>}
+            {onDelete && <button type="button" className="select-delete" aria-label={"删除" + o.label} disabled={disabled}
               onFocus={() => setCursor(i)} onClick={e => {
                 e.stopPropagation(); setOpen(false); trigger.current?.focus(); onDelete(o.value);
-              }}><Trash2 size={16} aria-hidden="true" /></button>
+              }}><Trash2 size={16} aria-hidden="true" /></button>}
           </div> : (
             <button
               type="button"

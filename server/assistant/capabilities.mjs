@@ -2,7 +2,7 @@ import { fail, same } from '../store.mjs';
 import { createActionExecutor } from '../actions.mjs';
 import { saveCandidateVoice } from '../audio.mjs';
 import { revealExport } from '../workspace.mjs';
-import { getHelp, pick, scopedChapter } from './context.mjs';
+import { getHelp, pick, scopedChapter, pageRecords } from './context.mjs';
 
 const string = (maxLength = 100) => ({ type: 'string', minLength: 1, maxLength });
 const text = (maxLength) => ({ type: 'string', maxLength });
@@ -11,10 +11,27 @@ const values = (...items) => ({ enum: items });
 const object = (properties = {}, required = []) => ({ type: 'object', additionalProperties: false, properties, required });
 const array = (items, minItems = 0) => ({ type: 'array', items, minItems });
 const number = (minimum, maximum, integer = false) => ({ type: integer ? 'integer' : 'number', minimum, maximum });
+const pageFields = { offset: number(0, 1000000, true), limit: number(1, 40, true) };
 const mode = values('dry', 'scene'), position = values('before', 'during', 'after');
 const configSchema = object({ speech_rate: number(-50, 100, true), loudness_rate: number(-50, 100, true), pitch_rate: number(-12, 12, true) }, ['speech_rate', 'loudness_rate', 'pitch_rate']);
 const evidence = object({ kind: values('原文明示', '上下文推断', '创作建议', '用户创作选择'), quote: text(3000), quotes: array(string(3000), 1), reason: text(3000) }, ['kind']);
 const eventFields = { kind: values('environment', 'effect', 'music'), description: string(1500), memberId: id, position, startMemberId: id, startPosition: position, endMemberId: id, endPosition: position, state: values('draft', 'adopted', 'removed'), evidence, transition: object({ memberId: id, quote: string(3000), occurrence: number(1, 10000, true), development: string(500), volumeChange: text(200) }, ['memberId', 'quote', 'occurrence', 'development']) };
+const sourceFields = ['kind', 'suggestionId', 'itemId', 'runId', 'stepId', 'operationId', 'actorKind', 'at'];
+const eventReadFields = ['id', 'unitId', 'kind', 'description', 'state', 'revision', 'memberId', 'position', 'startMemberId', 'startPosition', 'endMemberId', 'endPosition', 'needsReview', 'validity', 'diagnostics', 'evidence', 'transition', 'source', 'adoptionSource', 'basis'];
+const unitReadFields = ['id', 'chapterId', 'members', 'kind', 'mode', 'state', 'revision', 'membershipRevision', 'createdAt', 'variants', 'diagnostics', 'eventCounts'];
+const suggestionReadFields = ['id', 'chapterId', 'kind', 'status', 'unitId', 'revision', 'unitRevision', 'contextRevision', 'sourceVersion', 'draftVersion', 'createdAt', 'doneChunks', 'totalChunks', 'appliedItemIds'];
+const suggestionItemFields = ['id', 'from', 'to', 'span', 'text', 'segmentId', 'roleId', 'newRoleKey', 'newRole', 'type', 'performance', 'evidence', 'evidenceRefs', 'reason', 'uncertain', 'unitId', 'kind', 'description', 'memberId', 'position', 'startMemberId', 'startPosition', 'endMemberId', 'endPosition', 'sourceQuote', 'sourceQuotes', 'issues', 'splitParts', 'splitIssue'];
+const sessionReadFields = ['id', 'projectId', 'state', 'description', 'text', 'template', 'model', 'config', 'revision', 'contentRevision', 'createdAt'];
+const candidateReadFields = ['id', 'jobId', 'status', 'phase', 'error', 'createdAt', 'discarded', 'adopted', 'late', 'referenceEligible', 'audioId', 'savedVoiceId', 'input'];
+const audioReadFields = ['id', 'chapterId', 'targetKind', 'targetId', 'unitId', 'mode', 'duration', 'format', 'createdAt', 'review', 'available', 'matched', 'selected', 'processingVersion', 'originalAudioId', 'originalAvailability', 'sourceAudioId', 'provenance', 'processing', 'tailRepair', 'input'];
+const inputReadFields = ['targetKind', 'unitId', 'mode', 'description', 'text', 'template', 'model', 'voiceId', 'referenceVoiceIds', 'guidance', 'backgroundPresence', 'compilerId'];
+const safeInput = input => ({ ...pick(input, inputReadFields), config: pick(input?.config, ['speech_rate', 'loudness_rate', 'pitch_rate']),
+  ...(input?.members ? { members: input.members.map(row => pick(row, ['id', 'roleId', 'type', 'text', 'voiceId', 'performance'])) } : {}),
+  ...(input?.events ? { events: input.events.map(row => ({ ...pick(row, ['id', 'kind', 'description', 'memberId', 'position', 'startMemberId', 'startPosition', 'endMemberId', 'endPosition']), ...(row.transition ? { transition: pick(row.transition, ['memberId', 'quote', 'occurrence', 'development', 'volumeChange']) } : {}) })) } : {}) });
+const eventRecord = event => ({ ...pick(event, eventReadFields), evidence: pick(event.evidence, ['kind', 'quote', 'quotes', 'reason', 'suggestionId', 'itemId']),
+  ...(event.transition ? { transition: pick(event.transition, ['memberId', 'quote', 'occurrence', 'development', 'volumeChange']) } : {}),
+  source: pick(event.source, sourceFields), ...(event.adoptionSource ? { adoptionSource: pick(event.adoptionSource, sourceFields) } : {}),
+  basis: { ...pick(event.basis, ['membershipRevision', 'members']), evidenceSource: pick(event.basis?.evidenceSource, ['version']) } });
 const definitions = [];
 function define(id, description, properties, required, options = {}) {
   definitions.push({ id, version: 1, description, inputSchema: object(properties, required), access: 'local-write', delegation: 'allowed-in-mandate', cost: 'local-only', helpRefs: [options.help || 'workflow'], ...options });
@@ -85,7 +102,14 @@ define('audio.tail.repair','免费预览并清理所选纯人声的尾部异常�
 define('audio.original.restore', '免费恢复所选处理版对应的真实供应商原件', { id, mode, audioId: id, restoreSettings: bool }, ['id', 'mode', 'audioId'], { target: 'units', handler: 'unit.select-result / unit.restore', help: 'original-audio' });
 define('ui.navigate', '提供已注册功能入口的定位按钮', { target: values('voices','tasks','export','history','scene','assistant-settings','project-overview','segment'), segmentId: id, unitId: id }, ['target'], { chapter: false, access: 'ui-only', handler: 'UI action requiring user click', help: 'workflow' });
 define('ui.play', '提供当前任务授权音频的试听按钮', { kind: values('voices','audios','masters','exports'), id }, ['kind','id'], { chapter: false, access: 'ui-only', handler: 'playIntent via UI action requiring user click', help: 'playback' });
-for (const [name, target, description] of [['chapter', null, '读取当前任务章节和实际声音状态'], ['segment', 'segments', '读取一条完整台词与表演'], ['voice', 'voices', '读取一个参考声音'], ['audio', 'audios', '读取一个音频的来源与听评'], ['attempts', 'jobs', '读取指定任务的请求记录'], ['operation', null, '读取原持久操作回执'], ['project-deletion-plan', 'projects', '预览指定项目删除范围']]) define('read.' + name, description, target || name === 'operation' ? { id } : {}, target || name === 'operation' ? ['id'] : [], { target, handler: 'bounded projection', access: 'read', chapter: name === 'chapter' || name === 'segment', help: name === 'attempts' || name === 'operation' ? 'tasks' : 'workflow' });
+for (const [name, target, description] of [['chapter', null, '分页读取当前任务章节的台词与声音单元；full仅指声明字段，事件与历史另读'], ['segment', 'segments', '读取一条完整台词与表演'], ['voice', 'voices', '读取一个参考声音'], ['audio', 'audios', '读取一个音频的来源与听评'], ['attempts', 'jobs', '读取指定任务的请求记录'], ['operation', null, '读取原持久操作回执'], ['project-deletion-plan', 'projects', '预览指定项目删除范围']]) define('read.' + name, description, target || name === 'operation' ? { id } : name === 'chapter' ? pageFields : {}, target || name === 'operation' ? ['id'] : [], { target, handler: 'bounded projection', access: 'read', chapter: name === 'chapter' || name === 'segment', help: name === 'attempts' || name === 'operation' ? 'tasks' : 'workflow' });
+for (const [name, target, description, fields, required, help] of [
+  ['unit', 'units', '发现当前章声音单元，按ID精读两种设置和事件数量；事件、历史另读', { id, ...pageFields }, [], 'scene'],
+  ['events', 'events', '分页精读指定单元的全部状态事件、版本、来源引文及当前有效性', { unitId: id, id, ...pageFields }, ['unitId'], 'scene'],
+  ['suggestions', 'suggestions', '发现当前章已有分析；按ID分页精读建议项，历史复用须另作当前免费预检', { id, unitId: id, ...pageFields }, [], 'suggestions'],
+  ['voiceSession', 'voiceSessions', '发现本项目与共享音色会话；按ID分页读取候选及待决定状态', { id, ...pageFields }, [], 'voice-create'],
+  ['audioHistory', null, '分页读取指定声音单元已有声音与原件、当前匹配状态及保存设置', { unitId: id, mode, audioId: id, ...pageFields }, ['unitId'], 'history'],
+]) define('read.' + name, description, fields, required, { target, handler: 'bounded projection', access: 'read', chapter: name !== 'voiceSession', help });
 define('read.state', '读取绑定项目的章节、角色、声音和任务摘要', {}, [], { chapter: false, access: 'read', handler: 'bounded snapshot', help: 'workflow' });
 define('help.search', '查询当前工具用法与准确入口', { capabilityId: id, pageId: id, errorCode: id, query: text(1000) }, [], { chapter: false, access: 'read', handler: 'getHelp', help: 'workflow' });
 for (const [name, description, help] of [
@@ -176,7 +200,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     const p = { ...input, ...(bound.project ? { projectId: bound.project.id } : {}), ...(bound.chapter ? { chapterId: bound.chapter.id, revision: bound.chapter.revision } : {}) };
     if (target && ['projects', 'roles', 'voices', 'voiceSessions', 'units'].includes(def.target)) p.entityRevision = target.revision ?? 1;
     if (unit) { p.entityRevision = unit.revision; p.unitRevision = unit.revision; }
-    if (def.target === 'events') p.eventRevision = target.revision;
+    if (target && def.target === 'events') p.eventRevision = target.revision;
     if (target && def.target === 'suggestions') { p.draftVersion = target.draftVersion; p.contextRevision = bound.project.contextRevision; }
     if (input.sessionId) p.entityRevision = store.get('voiceSessions', input.sessionId).revision;
     if (id === 'audio.original.restore') {
@@ -213,9 +237,59 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     if (id === 'read.voice') return pick(target, ['id', 'name', 'state', 'duration', 'revision', 'observations', 'inspection', 'sampleAudioId', 'sourceAudioId']);
     if (id === 'read.audio') return pick(target, ['id', 'chapterId', 'targetKind', 'targetId', 'duration', 'createdAt', 'review', 'processingVersion', 'sourceAudioId']);
     if (id === 'read.attempts') return store.all('attempts', target.id).map(a => pick(a, ['id', 'jobId', 'status', 'targetKind', 'targetId', 'unitId', 'mode', 'adopted', 'phase', 'createdAt']));
+    if (id === 'read.unit') {
+      const rows = target ? [target] : store.all('units', bound.chapter.id);
+      const projected = rows.map(u => ({ ...pick(u, unitReadFields), variants: Object.fromEntries(Object.entries(u.variants).map(([mode, variant]) => [mode, {
+        ...pick(variant, ['current', 'previous', 'approved', 'review', 'revision', 'guidance', 'template', 'backgroundPresence', 'resolvedCompilerId']),
+        status: pick(domain.enhancement.status(u, mode, bound.chapter), ['validity', 'review', 'promptIssues']),
+        guidanceSource: pick(variant.guidanceSource, sourceFields), backgroundPresenceSource: pick(variant.backgroundPresenceSource, sourceFields),
+      }])), eventCounts: Object.fromEntries(['draft', 'adopted', 'removed'].map(state => [state, store.all('events', u.id).filter(e => e.state === state).length])) }));
+      return { ...pageRecords(projected, input, unitReadFields), chapterRevision: bound.chapter.revision, omittedSections: ['events', 'audioHistory', 'rawPrompts'],
+        projectionDetails: { variants: { fields: ['current', 'previous', 'approved', 'review', 'revision', 'guidance', 'template', 'backgroundPresence', 'resolvedCompilerId', 'status', 'guidanceSource', 'backgroundPresenceSource'], status: ['validity', 'review', 'promptIssues'], sources: sourceFields } } };
+    }
+    if (id === 'read.events') {
+      const unit = store.get('units', input.unitId);
+      if (target && target.unitId !== unit.id) fail('事件不属于指定声音单元', 403);
+      const rows = domain.enhancement.events(unit).filter(e => !target || e.id === target.id).map(eventRecord);
+      return { ...pageRecords(rows, input, eventReadFields), chapterRevision: bound.chapter.revision, unitId: unit.id, unitRevision: unit.revision, membershipRevision: unit.membershipRevision, sourceVersion: bound.chapter.sourceVersion || 1,
+        projectionDetails: { evidence: ['kind', 'quote', 'quotes', 'reason', 'suggestionId', 'itemId'], transition: ['memberId', 'quote', 'occurrence', 'development', 'volumeChange'], source: sourceFields, adoptionSource: sourceFields, basis: ['membershipRevision', 'members', 'evidenceSource.version'] }, omittedSections: ['historicalAnchorText'] };
+    }
+    if (id === 'read.suggestions') {
+      if (target && input.unitId && target.unitId !== input.unitId) fail('建议不属于指定声音单元', 403);
+      const summary = row => ({ ...pick(row, suggestionReadFields), itemCount: row.items?.length || 0, batchCount: row.batches?.length || 0,
+        currentValidity: row.revision === bound.chapter.revision && row.contextRevision === bound.project.contextRevision && (!row.unitId || row.unitRevision === store.get('units', row.unitId).revision) ? 'current' : 'stale' });
+      if (!target) return { ...pageRecords(store.all('suggestions', bound.chapter.id).filter(row => !input.unitId || row.unitId === input.unitId).map(summary), input, [...suggestionReadFields, 'itemCount', 'batchCount', 'currentValidity']), chapterRevision: bound.chapter.revision, omittedSections: ['suggestionItems', 'source', 'rawResponses'] };
+      const batchFields = ['id', 'status', 'blockIds', 'segmentIds', 'error'];
+      return { ...pageRecords((target.items || []).map(row => pick(row, suggestionItemFields)), input, suggestionItemFields), suggestion: summary(target),
+        batches: pageRecords((target.batches || []).map(row => pick(row, batchFields)), input, batchFields, 12000), chapterRevision: bound.chapter.revision,
+        omittedSections: ['source', 'rawResponses', 'historicalMemberSnapshots'], currentReuseCheck: target.kind === 'scene' ? { capabilityId: 'analysis.previewReuse', input: { id: target.id, unitId: target.unitId } } : null };
+    }
+    if (id === 'read.voiceSession') {
+      const sessionScope = row => ({ ...pick(row, sessionReadFields), scope: row.projectId ? 'project' : 'shared' });
+      if (!target) return { ...pageRecords(store.all('voiceSessions').filter(row => !row.projectId || row.projectId === scope.projectId).map(sessionScope), input, [...sessionReadFields, 'scope']), omittedSections: ['voiceCandidates', 'rawPrompts'] };
+      // ponytail: eligibility reuses the existing snapshot's shared rules; if the
+      // library grows large, expose its per-session projection instead of scanning all sessions.
+      const candidates = domain.enhancement.snapshot().voiceSessions.find(row => row.id === target.id).candidates.map(row => ({ ...pick(row, candidateReadFields), input: safeInput(row.input) }));
+      return { ...pageRecords(candidates, input, candidateReadFields), session: sessionScope(target), sessionProjectionFields: [...sessionReadFields, 'scope'],
+        projectionDetails: { input: inputReadFields, config: ['speech_rate', 'loudness_rate', 'pitch_rate'] }, omittedSections: ['rawPrompts', 'localPaths'] };
+    }
+    if (id === 'read.audioHistory') {
+      const unit = store.get('units', input.unitId), mode = input.mode || unit.mode;
+      const history = domain.enhancement.history(unit, mode, bound.chapter);
+      if (input.audioId && !history.some(row => row.id === input.audioId)) fail('声音不属于指定单元及类型', 403);
+      const processingFields = ['version', 'profile', 'sourceAudioId', 'frameCount', 'cutFrame', 'removedFrames', 'sampleRate', 'reason', 'completedAt'];
+      const tailFields = ['sourceAudioId', 'reason', 'cutSeconds', 'removedSeconds', 'at'];
+      return { ...pageRecords(history.filter(row => !input.audioId || row.id === input.audioId).map(row => ({ ...pick(row, audioReadFields), input: safeInput(row.input), processing: pick(row.processing, processingFields), tailRepair: pick(row.tailRepair, tailFields) })), input, audioReadFields),
+        chapterRevision: bound.chapter.revision, unitId: unit.id, unitRevision: unit.revision, mode, projectionDetails: { input: [...inputReadFields, 'config', 'members', 'events'], processing: processingFields, tailRepair: tailFields, config: ['speech_rate', 'loudness_rate', 'pitch_rate'], members: ['id', 'roleId', 'type', 'text', 'voiceId', 'performance'], events: ['id', 'kind', 'description', 'memberId', 'position', 'startMemberId', 'startPosition', 'endMemberId', 'endPosition', 'transition'] }, omittedSections: ['rawPrompts', 'localPaths', 'deliveryReceipts'] };
+    }
     if (id === 'read.chapter') {
       const c = domain.chapter(bound.chapter.id);
-      return { ...pick(c, ['id', 'title', 'revision', 'arrangement', 'gap', 'coverage', 'arrangementIssues']), segments: c.segments.map(s => pick(s, ['id', 'order', 'text', 'type', 'roleId', 'voiceId', 'performance', 'excluded', 'configurationDecided', 'protectedFields'])), units: c.units.map(u => ({ ...pick(u, ['id', 'members', 'kind', 'mode', 'state', 'revision', 'readiness']), variants: Object.fromEntries(Object.entries(u.variants).map(([mode, variant]) => [mode, pick(variant, ['current', 'previous', 'approved', 'review', 'guidance', 'template', 'backgroundPresence'])])) })), visibility: 'full' };
+      const segmentFields = ['id', 'order', 'text', 'type', 'roleId', 'voiceId', 'performance', 'excluded', 'configurationDecided', 'protectedFields'];
+      const unitFields = ['id', 'members', 'kind', 'mode', 'state', 'revision', 'readiness', 'variants'];
+      const segments = pageRecords(c.segments.map(s => pick(s, segmentFields)), input, segmentFields, 24000);
+      const units = pageRecords(c.units.map(u => ({ ...pick(u, unitFields), variants: Object.fromEntries(Object.entries(u.variants).map(([mode, variant]) => [mode, pick(variant, ['current', 'previous', 'approved', 'review', 'guidance', 'template', 'backgroundPresence'])])) })), input, unitFields, 24000);
+      return { ...pick(c, ['id', 'title', 'revision', 'arrangement', 'gap', 'coverage', 'arrangementIssues']), segments: segments.items, units: units.items, pages: { segments: pick(segments, ['total', 'offset', 'returned', 'nextOffset', 'omittedBefore', 'omittedAfter']), units: pick(units, ['total', 'offset', 'returned', 'nextOffset', 'omittedBefore', 'omittedAfter']) }, projectionFields: { segments: segmentFields, units: unitFields },
+        visibility: segments.visibility === 'full' && units.visibility === 'full' ? 'full' : 'partial', observedAt: segments.observedAt, omittedSections: ['events', 'suggestionItems', 'voiceCandidates', 'audioHistory', 'chapterSource'] };
     }
     if (id === 'read.state') return { projects: store.all('projects').filter(row => !scope.projectId || row.id === scope.projectId).map(row => pick(row, ['id', 'name', 'revision'])), chapters: bound.project ? store.all('chapters', bound.project.id).map(row => pick(row, ['id', 'title', 'order', 'revision', 'arrangement'])) : [], roles: bound.project ? store.all('roles', bound.project.id).map(row => pick(row, ['id', 'name', 'voiceId', 'narrator'])) : [], voices: store.all('voices').map(row => pick(row, ['id', 'name', 'state', 'duration', 'revision'])), features: domain.enhancement.features() };
     fail('尚未实现此读取适配');
@@ -295,7 +369,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     if (id === 'analysis.edit') return analysis.edit(payload, executionContext);
     if (id === 'analysis.apply') return analysis.apply(payload, executionContext.actorKind === 'assistant_delegated', executionContext);
     if (id === 'analysis.reuse') return analysis.reuse(payload, executionContext);
-    if (id === 'experience.undo') return experience.undo(payload);
+    if (id === 'experience.undo') return experience.undo(payload, executionContext);
     if (id === 'experience.unprotect') return experience.unprotect({ ...payload, field: 'performance' });
     if (id === 'experience.revoke') return experience.revoke(payload);
     if (id === 'job.master') return worker.submit({ ...payload, kind: 'master' });

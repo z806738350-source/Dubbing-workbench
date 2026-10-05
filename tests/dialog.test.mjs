@@ -45,3 +45,13 @@ test('标题动作插槽可缺省，提供说明入口时保留标题、正文�
     assert.equal(all.filter(node => node.type === 'button' && node.props['aria-label'] === '关闭').length, 1);
   }
 });
+
+test('弹窗优先聚焦名称输入框，不被前面的关闭按钮覆盖',()=>{
+  const refs=[],effects=[],focused=[];
+  const input={focus:()=>focused.push('input')},close={focus:()=>focused.push('close')};
+  const dialog={open:false,showModal(){this.open=true;},close(){this.open=false;},querySelector:selector=>selector.includes('button')?close:input};
+  const runtime={...env,useRef:value=>{const ref={current:value};refs.push(ref);return ref;},useEffect:callback=>effects.push(callback),HTMLElement:class {},dialogStack:[],activateDialog:()=>{dialog.showModal();},document:{body:{},activeElement:null}};
+  const Component=new Function(...Object.keys(runtime),code+'\nreturn Dialog;')(...Object.values(runtime));
+  Component({title:'重命名项目',children:'名称输入框',onClose(){}});refs[0].current=dialog;
+  const cleanup=effects[0]();assert.deepEqual(focused,['input']);cleanup();
+});

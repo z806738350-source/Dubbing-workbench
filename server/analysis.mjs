@@ -1,7 +1,7 @@
 import { templateCatalog, templateOf, sceneContract, validEventDescription, scenePresenceConflicts, inspectScenePresence } from "./templates.mjs";
 import { textModel, knownRoles } from "./domain.mjs";
 import { fail, uid, same } from "./store.mjs";
-import { policyOf, decide, reserveGrant, settleGrant, assistantActor, assistantChanges, assistantMutation } from './experience.mjs';
+import { policyOf, decide, reserveGrant, settleGrant, assistantActor, assistantChanges, assistantMutation,assistantEffectState,assistantEffects,assertAssistantEffects } from './experience.mjs';
 import { longSegment, segmentLimit, semanticBlocks, shortRanges, partsAfter } from './semantic.mjs';
 import { storedAudioUnavailable } from './audio.mjs';
 
@@ -466,7 +466,7 @@ export function createAnalysis(store, domain, config) {
     const chunks = chunksOf(rows,kind);
     const r = {
       id: uid(),
-      ...(actor ? {executionContext:{...actor,textMutationPolicy:executionContext.textMutationPolicy || 'preserveExact',namedOverrides:[...(executionContext.namedOverrides || [])]}} : {}),
+      ...(actor ? {executionContext:{...actor,textMutationPolicy:executionContext.textMutationPolicy || 'preserveExact',namedOverrides:[...(executionContext.namedOverrides || [])],voicePolicy:executionContext.voicePolicy,allowedVoiceIds:executionContext.allowedVoiceIds,approvedEffects:executionContext.approvedEffects}} : {}),
       ...(p.operationId ? {operationId:p.operationId,operationRequest:JSON.parse(JSON.stringify(p))} : {}),
       grantId:p.grantId,requireGrant:p.requireGrant,autoApply:p.splitOnly !== true && p.autoApply === true,
       policyRef:policyOf(store,c.projectId).revision,
@@ -550,7 +550,7 @@ export function createAnalysis(store, domain, config) {
     const first = Math.min(...targets.map((b) => r.batches.indexOf(b)));
     for (const b of r.batches.slice(first + 1))
       if (!targets.includes(b) && b.status !== "unknown") b.status = "stale";
-    if(actor && p.operationId) {r.assistantResumes=[...(r.assistantResumes||[]),{operationId:p.operationId,request:JSON.parse(JSON.stringify(p)),executionSource:actor}];r.executionContext={...actor,textMutationPolicy:executionContext.textMutationPolicy,namedOverrides:executionContext.namedOverrides||[]};save(r);}
+    if(actor && p.operationId) {r.assistantResumes=[...(r.assistantResumes||[]),{operationId:p.operationId,request:JSON.parse(JSON.stringify(p)),executionSource:actor}];r.executionContext={...actor,textMutationPolicy:executionContext.textMutationPolicy,namedOverrides:executionContext.namedOverrides||[],voicePolicy:executionContext.voicePolicy,allowedVoiceIds:executionContext.allowedVoiceIds,approvedEffects:executionContext.approvedEffects};save(r);}
     return launch(r,targets.map((b) => b.id));
   }
   function edit(p, executionContext) {
@@ -735,6 +735,7 @@ export function createAnalysis(store, domain, config) {
       const draft = store.get("suggestions", p.id),
         c = domain.editable(draft.chapterId, p.revision),
         project = store.get("projects", c.projectId);
+      const effectsBefore=actor && assistantEffectState(store,domain,c.id);
       if (draft.batches) {
         if (p.draftVersion !== draft.draftVersion) fail("草稿已改变，请刷新后核对再应用", 409);
         inspectDraft(draft);
@@ -882,6 +883,7 @@ export function createAnalysis(store, domain, config) {
         }
         draft.appliedItemIds = draft.items.filter((i) => p.selected.includes(i.id)).map((i) => i.id);
       }
+      if(effectsBefore)assertAssistantEffects(assistantEffects(effectsBefore,assistantEffectState(store,domain,c.id)),executionContext);
       if (draft.kind !== "scene") domain.touch(c, true, draft.kind === "extract");
       if (draft.kind !== "scene") domain.enhancement.syncLegacy();
       draft.status = "applied";

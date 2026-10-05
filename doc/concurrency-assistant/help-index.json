@@ -30,7 +30,7 @@
     {
       "id": "projects",
       "title": "项目和章节管理",
-      "text": "项目位于工作区的独立命名文件夹；新建项目同时建立旁白角色。重命名会移动自己的目录。调整章节顺序影响各章可知的角色资料，不重新生成已有音频。",
+      "text": "项目位于工作区的独立命名文件夹；新建项目同时建立旁白角色。在项目下拉列表点击目标项目右侧的铅笔按钮，修改名称后点击保存项目名称；窄屏先打开目录。重命名会移动自己的目录，改名其他项目不会切换当前章节。调整章节顺序影响各章可知的角色资料，不重新生成已有音频。",
       "pageIds": [
         "project-overview"
       ],
@@ -140,7 +140,8 @@
         "voice-session.abandon",
         "voice-candidate.discard",
         "operation.voiceCandidate",
-        "voice.save-candidate"
+        "voice.save-candidate",
+        "read.voiceSession"
       ],
       "errorCodes": [],
       "keywords": [
@@ -258,7 +259,9 @@
         "event.update",
         "event.remove",
         "event.reconfirm",
-        "operation.sceneAndGenerate"
+        "operation.sceneAndGenerate",
+        "read.unit",
+        "read.events"
       ],
       "errorCodes": [],
       "keywords": [
@@ -280,7 +283,8 @@
       ],
       "capabilityIds": [
         "analysis.previewReuse",
-        "analysis.reuse"
+        "analysis.reuse",
+        "read.suggestions"
       ],
       "errorCodes": [],
       "keywords": [
@@ -326,7 +330,8 @@
         "segment.restore",
         "unit.select-result",
         "unit.restore",
-        "unit.switch"
+        "unit.switch",
+        "read.audioHistory"
       ],
       "errorCodes": [],
       "keywords": [

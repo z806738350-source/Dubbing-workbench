@@ -1917,7 +1917,6 @@ input[type="range"]::-moz-range-thumb {
 @media (max-width:414px) {.merge-comparison {grid-template-columns:1fr;}}
 
 /* Conformance fixes retain the studied Ardot tokens and compact hierarchy. */
-.project-rename { margin: 0 var(--space-md) var(--space-sm); color: var(--color-muted); }
 
 /* Hallmark · pre-emit critique: P4 H4 E3 S4 R4 V3
  * component: analysis work panel · modern-minimal · studied Ardot tokens.
@@ -1985,10 +1984,10 @@ input[type="range"]::-moz-range-thumb {
 }
 .select-option-row { display: flex; align-items: stretch; gap: 4px; min-width: 0; }
 .select-menu .select-option { flex: 1; min-width: 0; }
-.select-menu .select-option > span { min-width: 0; }
-.select-menu .select-delete { flex: 0 0 36px; width: 36px; min-height: 36px; justify-content: center; padding: 8px; }
+.select-menu .select-option > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-menu .select-rename, .select-menu .select-delete { flex: 0 0 36px; width: 36px; min-height: 36px; justify-content: center; padding: 8px; }
 .select-menu .select-delete:hover:not(:disabled) { background: var(--color-error-bg); color: var(--color-error); }
-@media (pointer: coarse) { .select-menu .select-delete { flex-basis: 44px; width: 44px; min-height: 44px; } }
+@media (pointer: coarse) { .select-menu .select-rename, .select-menu .select-delete { flex-basis: 44px; width: 44px; min-height: 44px; } }
 .loading-layout { padding: 0; gap: 0; flex: 1; min-height: 0; overflow: hidden; }
 .loading-heading { padding: var(--space-xl); border-bottom: 1px solid var(--color-rule); }
 .loading-heading .skeleton { height: 24px; width: 35%; margin-bottom: var(--space-md); }

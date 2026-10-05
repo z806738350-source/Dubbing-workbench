@@ -17,9 +17,9 @@ const select=find(node=>ts.isJsxSelfClosingElement(node)&&node.tagName.getText(f
 
 function selectFixture(onDelete){
   const hooks=[],effects=[];let index=0,effectIndex=0,pendingEffects=[],tree;
-  const calls={chosen:[],deleted:[],focus:[],scrolled:[]};
+  const calls={chosen:[],deleted:[],renamed:[],focus:[],scrolled:[]};
   const rect={top:50,bottom:86,left:8,width:200};
-  const env={React,Check:'Check',ChevronDown:'ChevronDown',Trash2:'Trash2',crypto,
+  const env={React,Check:'Check',ChevronDown:'ChevronDown',Pencil:'Pencil',Trash2:'Trash2',crypto,
     useState:initial=>{const key=index++;if(!(key in hooks))hooks[key]=typeof initial==='function'?initial():initial;return [hooks[key],value=>{hooks[key]=typeof value==='function'?value(hooks[key]):value;}];},
     useRef:initial=>hooks[index++]||=( {current:initial} ),
     useEffect:(callback,deps)=>{const key=effectIndex++;if(!effects[key]||deps.some((value,i)=>value!==effects[key].deps[i]))pendingEffects.push(()=>{effects[key]?.cleanup?.();effects[key]={deps,cleanup:callback()};});},
@@ -42,7 +42,8 @@ function selectFixture(onDelete){
   const menu=()=>nodes(tree).find(node=>node.props.className==='select-menu');
   const choose=i=>nodes(tree).filter(node=>node.props.className?.includes('select-option')&&node.type==='button')[i];
   const remove=i=>nodes(tree).filter(node=>node.props.className==='select-delete')[i];
-  render();return {props,calls,render,open,trigger,menu,choose,remove,rect,viewport:env.window};
+  const rename=i=>nodes(tree).filter(node=>node.props.className==='select-rename')[i];
+  render();return {props,calls,render,open,trigger,menu,choose,remove,rename,rect,viewport:env.window};
 }
 
 test('长下拉键盘定位保持可见；选项异步收缩、禁用和移出焦点都不误选',()=>{
@@ -86,6 +87,25 @@ test('项目列表方向键定位选择按钮，Tab可到删除，Escape返回�
   f.open();f.render().props.onBlur({currentTarget:{contains:target=>target==='inside'},relatedTarget:'outside'});assert.equal(f.render().props.children[1],false);
 });
 
+test('项目重命名按钮只打开目标编辑，不选择或删除；禁用后的旧按钮不执行',()=>{
+  const f=selectFixture(true);f.props.onRename=value=>f.calls.renamed.push(value);f.render();f.open();
+  f.render();assert.equal(f.menu().props.style.width,280);assert.equal(f.menu().props.style.left,8);
+  const rename=f.rename(1),click=event();assert.equal(rename.props['aria-label'],'重命名'+f.props.options[1].label);
+  assert.ok(nodes(rename).some(node=>node.type==='Pencil'&&node.props['aria-hidden']==='true'));
+  rename.props.onClick(click);assert.equal(click.stopped,true);assert.deepEqual(f.calls.renamed,['two']);
+  assert.deepEqual(f.calls.chosen,[]);assert.deepEqual(f.calls.deleted,[]);assert.equal(f.calls.focus.at(-1),'trigger');
+  f.render();assert.equal(f.menu(),undefined);f.open();f.props.disabled=true;f.render();
+  assert.equal(f.rename(0).props.disabled,true);f.rename(0).props.onClick(event());assert.deepEqual(f.calls.renamed,['two']);
+});
+
+test('仅提供重命名的下拉仍可用键盘定位与关闭',()=>{
+  const f=selectFixture(false);f.props.onRename=value=>f.calls.renamed.push(value);f.render();f.open();
+  assert.equal(f.trigger().props['aria-haspopup'],'dialog');assert.equal(f.menu().props.role,'dialog');assert.equal(f.calls.focus.at(-1),0);
+  f.menu().props.onKeyDown(event('End'));f.render();assert.equal(f.calls.focus.at(-1),1);f.rename(1).props.onFocus();
+  const escape=event('Escape');f.menu().props.onKeyDown(escape);f.render();assert.equal(f.menu(),undefined);assert.equal(escape.stopped,true);
+  assert.deepEqual(f.calls.renamed,[]);
+});
+
 test('普通Select继续使用combobox/listbox与原Enter选择；项目忙碌时行按钮不可用',()=>{
   const normal=selectFixture(false);normal.open();assert.equal(normal.trigger().props.role,'combobox');assert.equal(normal.menu().props.role,'listbox');
   assert.ok(nodes(normal.menu()).filter(node=>node.type==='button').every(node=>node.props.role==='option'));
@@ -102,7 +122,7 @@ function appFixture(){
     bindDraftWorkspace(){},draftWorkspace:()=>'',playbackIdentity:items=>JSON.stringify(items),generationIntent:{current:0},generationPlan:{id:'old-plan'},audio:{current:{pause(){calls.paused++;}}},
     action:async(name,payload)=>calls.actions.push({name,payload}),refresh:async()=>{calls.refresh++;},
   };
-  for(const name of ['ProjectId','ChapterId','Chapter','Selected','Checked','Filter','Search','OldPreview','CurrentMembers','CurrentSegment','Modal','TaskRecord','UnitInitialEvent','DraftIds','GrantId','VoiceTarget','UnitPanelId','UnitInitialMode','Player','NavOpen','InspectorOpen','Busy','DeleteTarget'])env['set'+name]=value=>{calls.updates.push({name,value});env[name[0].toLowerCase()+name.slice(1)]=value;};
+  for(const name of ['ProjectId','ChapterId','Chapter','Selected','Checked','Filter','Search','OldPreview','CurrentMembers','CurrentSegment','Modal','TaskRecord','UnitInitialEvent','DraftIds','GrantId','VoiceTarget','UnitPanelId','UnitInitialMode','Player','NavOpen','InspectorOpen','Busy','DeleteTarget','RenameTarget'])env['set'+name]=value=>{calls.updates.push({name,value});env[name[0].toLowerCase()+name.slice(1)]=value;};
   env.setGenerationPlan=value=>{env.generationPlan=value;calls.updates.push({name:'GenerationPlan',value});};
   env.setState=value=>{env.state=typeof value==='function'?value(env.state):value;calls.updates.push({name:'State',value:env.state});};
   env.setError=value=>calls.errors.push(value);
@@ -115,6 +135,39 @@ function appFixture(){
 }
 
 test('下拉删除入口打开一份具体范围预览，不先发送删除',()=>{const f=appFixture();f.view().props.onDelete('two');assert.equal(f.env.deleteTarget.id,'two');assert.deepEqual(f.calls.actions,[]);assert.equal(f.env.projectRef.current,'one');});
+
+test('重命名非当前项目只绑定目标，保留当前章节、编辑与播放',()=>{
+  const f=appFixture();f.view().props.onRename('two');assert.equal(f.env.renameTarget.id,'two');
+  assert.deepEqual(f.calls.updates.map(update=>update.name),['RenameTarget']);assert.deepEqual(f.calls.actions,[]);
+  assert.equal(f.env.projectRef.current,'one');assert.equal(f.env.chapterRef.current,'old');assert.equal(f.calls.paused,0);
+  f.env.pickProject('two');assert.equal(f.env.renameTarget,null);
+});
+
+function renameFixture(){
+  let index=0,closed=0,cleanup;const hooks=[],sent=[];
+  const env={React,Dialog:'Dialog',Form:'Form',Field:'Field',useState:initial=>{const key=index++;if(!(key in hooks))hooks[key]=initial;return [hooks[key],value=>hooks[key]=value];},useRef:initial=>hooks[index++]||={current:initial},useEffect:callback=>{cleanup=callback();}};
+  const RenameProject=project(find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='RenameProject'),env);
+  const props={project:{id:'two',name:'第二项目',revision:2},save:async(name,payload)=>sent.push({name,payload}),onClose:()=>closed++};
+  const render=()=>{index=0;return RenameProject(props);};
+  const form=()=>nodes(render()).find(node=>node.type==='Form');
+  return {props,render,form,sent,close:()=>closed,cleanup:()=>cleanup()};
+}
+
+test('项目改名保存冻结的目标与版本；取消不写入，拒绝后可保留编辑',async()=>{
+  const f=renameFixture();f.render().props.onClose();assert.deepEqual(f.sent,[]);
+  const next=renameFixture();next.render();next.props.project={id:'two',name:'另一页面的新名称',revision:3};
+  assert.match(text(next.render()),/项目名称已在其他页面修改/);
+  await next.form().props.onSubmit(new Map([['name','用户输入的新名称']]));
+  assert.deepEqual(next.sent,[{name:'project.rename',payload:{id:'two',name:'用户输入的新名称',entityRevision:2}}]);assert.equal(next.close(),1);
+  const rejected=renameFixture();rejected.props.save=async()=>{throw Object.assign(new Error('项目已更新，请重开'),{status:409});};
+  await assert.rejects(rejected.form().props.onSubmit(new Map([['name','保留输入']])),{status:409});
+  assert.equal(rejected.close(),0);assert.equal(nodes(rejected.render()).find(node=>node.type==='input').props.defaultValue,'第二项目');
+});
+
+test('关闭改名窗口后迟到的保存回执不会关闭后来窗口',async()=>{
+  const f=renameFixture();let release;f.props.save=()=>new Promise(resolve=>release=resolve);
+  const pending=f.form().props.onSubmit(new Map([['name','新名称']]));f.cleanup();release();await pending;assert.equal(f.close(),0);
+});
 
 test('删除当前项目直接发action，切剩余项目并清旧章、播放和面板，不清其他项目断点',async()=>{
   const f=appFixture();await f.env.deleteProject('one',{project:1});

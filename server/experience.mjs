@@ -67,6 +67,46 @@ export function assistantActor(context) {
 export function assistantOverride(context, targetId, field) {
   return Array.isArray(context?.namedOverrides) && (context.namedOverrides.includes(field) || context.namedOverrides.includes(`${targetId}.${field}`));
 }
+export function readingRange(rows) {
+  const included = rows.filter(s => !s.retired && !s.excluded && s.text.trim());
+  const spans = included.flatMap(s => (s.source?.spans || []).map(span => ({start:span.start,end:span.end,version:s.source.version || 1})));
+  const ranges=[];
+  for(const span of spans.sort((a,b)=>a.version-b.version || a.start-b.start || a.end-b.end)){
+    const previous=ranges.at(-1);
+    if(previous?.version===span.version && span.start<=previous.end)previous.end=Math.max(previous.end,span.end);
+    else ranges.push({...span});
+  }
+  return {text:included.map(s=>s.text).join(''),spans:ranges};
+}
+export function assistantEffectState(store, domain, chapterId, roleId) {
+  const chapter = chapterId && store.get('chapters',chapterId);
+  return {segments:chapter ? domain.list(chapterId) : [], roles:(chapter ? store.all('roles',chapter.projectId) : roleId ? [store.get('roles',roleId)] : []).map(r=>({id:r.id,voiceId:r.voiceId || null,chapterVoiceId:chapter?.roleVoices?.[r.id]}))};
+}
+export function assistantEffects(before, after) {
+  const voiceAssignments = [];
+  const previousSegments=new Map(before.segments.map(s=>[s.id,s]));
+  for (const s of after.segments) {
+    let parents = [previousSegments.get(s.id),...(s.source?.parentIds || []).map(id=>previousSegments.get(id))].filter(Boolean);
+    // ponytail: source-based replacement scans one chapter (O(n²)); use an interval index if chapter sizes make this measurable.
+    if(!parents.length) parents=before.segments.filter(old=>s.source?.spans?.some(span=>old.source?.spans?.some(other=>span.start<other.end && other.start<span.end)));
+    if(!parents.length && s.voiceId)voiceAssignments.push({roleId:s.roleId,segmentText:s.text,before:null,after:s.voiceId,source:'new-segment',sourceSpans:(s.source?.spans || []).map(span=>({start:span.start,end:span.end,version:s.source.version || 1}))});
+    for (const old of parents) if (old.voiceId !== s.voiceId) voiceAssignments.push({segmentId:old.id,segmentText:old.text,roleId:previousSegments.has(s.id)?s.roleId:old.roleId,before:old.voiceId || null,after:s.voiceId || null,source:s.voiceSource});
+  }
+  for (const r of after.roles) {
+    const old = before.roles.find(row=>row.id===r.id);
+    if (old) for (const field of ['voiceId','chapterVoiceId']) if (!same(old[field],r[field])) voiceAssignments.push({roleId:r.id,before:old[field] || null,after:r[field] || null,source:field==='voiceId'?'role-default':'chapter-default'});
+  }
+  const previous = readingRange(before.segments), current = readingRange(after.segments);
+  return {voiceAssignments,...(!same(previous,current) ? {readingRange:{before:previous,after:current,initialSetup:before.segments.length===0}} : {})};
+}
+export function assertAssistantEffects(effects={voiceAssignments:[]}, context) {
+  if (!assistantActor(context)) return;
+  const specificallyApproved = context.actorKind==='human_approved_proposal';
+  if (effects.voiceAssignments.length && !(specificallyApproved && same(context.approvedEffects?.voiceAssignments,effects.voiceAssignments)) && effects.voiceAssignments.some(a=>!(context.voicePolicy==='chooseFromApprovedSet' || context.voicePolicy==='askMissing' && a.source==='new-segment') || !a.after || !context.allowedVoiceIds?.includes(a.after)))
+    fail('请先按角色选择声音，或批准从指定音色集合中自动选择',403,{effectKind:'voice',voiceAssignments:effects.voiceAssignments});
+  if (effects.readingRange && !effects.readingRange.initialSetup && !(specificallyApproved && same(context.approvedEffects?.readingRange,effects.readingRange)))
+    fail('本次任务要求保留原文和朗读范围，不能未经具体决定省略、退役或替换正文',403,{effectKind:'reading-range'});
+}
 export function assistantMutation(store, action, payload, context, apply) {
   const actor = assistantActor(context);
   if (!actor || !context.operationId || context.receiptOwner) return apply();
@@ -315,9 +355,10 @@ export function createExperience(store, domain, worker, analysis, config) {
     }
     save(op); return view(op);
   }
-  function undo(p) {
-    return store.transaction(() => {
+  function undo(p,executionContext) {
+    return assistantMutation(store,'experience.undo',p,executionContext,()=>store.transaction(() => {
       const change = store.get('settings',recordId('change',p.changeId)), c = domain.editable(change.chapterId,p.revision);
+      const before=assistantActor(executionContext) && assistantEffectState(store,domain,c.id);
       if (change.undoneAt) return change;
       for (const item of change.items) {
         const s = store.get('segments',item.id);
@@ -341,8 +382,9 @@ export function createExperience(store, domain, worker, analysis, config) {
         store.put('segments',{...split.parent,retired:false},c.id);
       }
       if (splits.length) domain.list(c.id).forEach((s,order) => store.put('segments',{...s,order},c.id));
+      if(before)assertAssistantEffects(assistantEffects(before,assistantEffectState(store,domain,c.id)),executionContext);
       domain.touch(c,true,!!splits.length); domain.enhancement.syncLegacy(); change.undoneAt = now(); return store.put('settings',change);
-    });
+    }));
   }
   return {policy,grant,revoke,project,plan,run,get,undo,unprotect,projectBusy};
 }

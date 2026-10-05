@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ImagePlus, MessageSquare, Plus, Settings2, X } from 'lucide-react';
 import { api } from './api';
-import { readDraft, writeDraft, draftWorkspace } from './drafts';
+import { readDraft, writeDraft, clearDraft, draftWorkspace } from './drafts';
 import { Dialog, Field, Select } from './components';
 import type { State } from './types';
 import { attachmentURL, assistantLabel, assistantPreviewRows, assistantState, assistantTerminal, checkAssistantFiles, newAssistantDraft } from './assistantClient';
@@ -17,17 +17,22 @@ export default function AssistantPanel(props:Props) {
   const workspace = state.settings.workspaceIdentity || draftWorkspace();
   const [detail,setDetail]=useState<AssistantDetail|null>(null), [sessions,setSessions]=useState<Session[]>([]), [config,setConfig]=useState<AssistantConfig|null>(null);
   const [draft,setDraft]=useState<AssistantDraft>(newAssistantDraft), [settings,setSettings]=useState(false), [busy,setBusy]=useState(false), [uploading,setUploading]=useState(false), [error,setError]=useState(''), [loading,setLoading]=useState(true), [zoom,setZoom]=useState<Attachment|null>(null), [newMessages,setNewMessages]=useState(false), [stopAudio,setStopAudio]=useState(false);
+  const [deleting,setDeleting]=useState<AssistantDetail|null>(null);
   const current=useRef<string|null>(null), mounted=useRef(true), switching=useRef(0), sending=useRef(false), uploadingRef=useRef(false), draftRef=useRef(draft), scroll=useRef<HTMLDivElement>(null), follow=useRef(true), input=useRef<HTMLTextAreaElement>(null), files=useRef<HTMLInputElement>(null), handledPrompt=useRef('');
+  const revisions=useRef(new Map<string,number>()),deleted=useRef(new Set<string>());
   draftRef.current=draft;
   const resolve=(value:string)=>state.projects.find(p=>p.id===value)?.name || state.chapters.find(c=>c.id===value)?.title || state.voices.find(v=>v.id===value)?.name || state.roles.find(r=>r.id===value)?.name || assistantLabel(value);
   const updateDraft=(next:AssistantDraft,id=current.current)=>{
-    if(!id)return;
+    if(!id||deleted.current.has(id))return;
     writeDraft(draftKey(id),next,1,workspace);
     if(mounted.current&&current.current===id){draftRef.current=next;setDraft(next);}
   };
   const apply=(next:AssistantDetail)=>{
     if(!mounted.current||current.current!==next.session.id)return;
+    if(next.session.revision<(revisions.current.get(next.session.id)||0))return;
+    revisions.current.set(next.session.id,next.session.revision);
     setDetail(next);
+    if(next.session.contentDeletion){deleted.current.add(next.session.id);clearDraft(draftKey(next.session.id),undefined,false,workspace);draftRef.current=newAssistantDraft();setDraft(draftRef.current);return;}
     const held=storedDraft(next.session.id,workspace);
     if(held.pending && next.messages.some(m=>m.id===held.pending?.messageId)) updateDraft({...held,text:'',attachments:[],pending:undefined},next.session.id);
   };
@@ -48,6 +53,7 @@ export default function AssistantPanel(props:Props) {
   };
   useEffect(()=>{
     mounted.current=true;
+    revisions.current.clear();deleted.current.clear();
     void Promise.all([api<AssistantConfig>('/assistant/config'),api<Session[]>('/assistant/sessions')]).then(async([settings,rows])=>{
       if(!mounted.current)return;setConfig(settings);setSessions(rows);
       const remembered=readDraft<{id:string}>('assistant-current',workspace)?.draft.id;
@@ -74,8 +80,18 @@ export default function AssistantPanel(props:Props) {
   const runnable=!run||run.state==='awaitingUser';
   const writable=detail?.session.state==='active';
   const needsListening=(id:string)=>!!detail?.steps.some(s=>s.runId===id&&s.state==='proposed'&&['segment.review','unit.review'].includes(s.capabilityId)&&s.input?.state==='passed');
+  const changesReading=(id:string)=>!!detail?.steps.some(s=>s.runId===id&&s.state==='proposed'&&s.preview?.effects?.readingRange);
   const sameChapter=detail?.session.chapterId=== (chapterId||null) && detail?.session.projectId===(projectId||null);
   const perform=async(work:()=>Promise<void>)=>{if(sending.current||!connected)return;sending.current=true;setBusy(true);setError('');try{await work();}catch(e){if(mounted.current)setError(messageError(e));}finally{sending.current=false;if(mounted.current)setBusy(false);}};
+  const confirmDelete=(id:string)=>void perform(async()=>{const selected=await api<AssistantDetail>('/assistant/sessions/'+encodeURIComponent(id));if(mounted.current)setDeleting(selected);});
+  const removeContent=()=>void perform(async()=>{
+    const selected=deleting?.session;if(!selected)return;
+    const next=await api<AssistantDetail>('/assistant/sessions/'+encodeURIComponent(selected.id)+'/content-delete',{sessionId:selected.id,revision:selected.revision,confirmed:true});
+    deleted.current.add(selected.id);revisions.current.set(selected.id,next.session.revision);
+    clearDraft(draftKey(selected.id),undefined,false,workspace);
+    if(mounted.current){setDeleting(null);setZoom(held=>held?.sessionId===selected.id?null:held);if(current.current===selected.id){setDraft(newAssistantDraft());draftRef.current=newAssistantDraft();apply(next);}}
+    await list();
+  });
   const send=()=>void perform(async()=>{
     const bound=detail?.session;if(!bound||!writable||!runnable||uploadingRef.current)return;
     let submitted=draftRef.current.pending;
@@ -120,25 +136,28 @@ export default function AssistantPanel(props:Props) {
     {!connected&&<p className="warning" role="status">工作区连接中断，输入已保留。</p>}
     <div className="assistant-conversation" ref={scroll} onScroll={()=>{const el=scroll.current;if(el)follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<70;}} aria-busy={loading}>
       {loading?<p role="status">正在读取对话…</p>:!detail?<div className="assistant-empty"><MessageSquare size={28}/><h3>想先做什么？</h3><p>问操作、看截图，或把一章交给助手安排。制作前会先给你任务卡。</p><button className="button primary" disabled={!connected||busy} onClick={()=>void create()}>在当前章节开始</button></div>:<>
-        {!detail.messages.length&&<div className="assistant-empty"><h3>从一句话开始</h3><p>例如：“这个页面怎么用？”或“帮我准备这一章，缺少音色时问我”。也可粘贴或拖入截图。</p></div>}
+        {detail.session.state!=='active'&&<p className="hint" role="status">{detail.session.contentDeletion?'对话内容已永久删除，保留执行账本。':'此会话已归档，聊天、截图和执行记录可只读查看。'}{detail.runs.some(r=>r.reconciliation?.assistantRequest||r.reconciliation?.steps.length)?'仍有结果未确认的请求；归档或删除没有撤销已提交的生成和费用。':''}</p>}
+        {!detail.messages.length&&writable&&<div className="assistant-empty"><h3>从一句话开始</h3><p>例如：“这个页面怎么用？”或“帮我准备这一章，缺少音色时问我”。也可粘贴或拖入截图。</p></div>}
         {detail.messages.map(m=><article key={m.id} className={'assistant-message '+(m.role==='user'?'from-user':'from-assistant')}><strong>{m.role==='user'?'你':'助手'}</strong><p>{m.content}</p><div className="assistant-images">{m.attachmentIds.map(id=>detail.attachments.find(a=>a.id===id)).filter((a):a is Attachment=>!!a).map(a=><button key={a.id} aria-label="放大消息截图" onClick={()=>setZoom(a)}><img src={attachmentURL(a)} alt="本条消息发送的截图"/></button>)}</div></article>)}
         {detail.runs.map(r=><section key={r.id} className="assistant-task-card" aria-label="助手任务卡"><div className="assistant-card-head"><strong>{r.mode==='task'?'委托任务':'本次问答'}</strong><span role="status" data-state={r.state}>{assistantState[r.state]||r.state}</span></div><p>{r.objective}</p><p className="hint">范围：{r.binding.projectId?resolve(r.binding.projectId):'工作区'}{r.binding.chapterId?' / '+resolve(r.binding.chapterId):''}</p>
           <div className="assistant-budget">{(['assistant','analysis','audio'] as const).map(key=><span key={key}>{({assistant:'助手',analysis:'整理',audio:'声音'})[key]} {r.budget.used[key]} / {r.budget.limits[key]} 次</span>)}</div>
-          {r.state==='awaitingApproval'&&<p className="hint">{r.mode==='task'?'批准后，助手会在本任务范围和次数上限内继续常规步骤。':'只执行下面待确认步骤。'}{r.textMutationPolicy==='preserveExact'?'保留原文。':'允许本次明确指定的正文修改。'}试听检查仍由你完成。</p>}
+          {r.state==='awaitingApproval'&&<p className="hint">{r.mode==='task'?'批准后，助手会在本任务范围和次数上限内继续常规步骤。':'只执行下面待确认步骤。'}{changesReading(r.id)?'下面提案将改变朗读范围，仅批准才实施。':r.textMutationPolicy==='preserveExact'?'保留原文。':'允许本次明确指定的正文修改。'}试听检查仍由你完成。</p>}
           {detail.steps.filter(s=>s.runId===r.id).map((s,stepIndex)=><details key={s.id} className="assistant-step" open={s.state==='proposed'?true:undefined}><summary>{stepIndex+1}. {s.description} <span>{assistantState[s.state]||s.state}</span></summary>
             <dl className="assistant-change-list">{assistantPreviewRows(s.input,resolve).map((row,i)=><div key={i}><dt>{row.label}</dt><dd>{row.value}</dd></div>)}</dl>
             {!!s.preview?.preview&&<details><summary>影响与处理范围</summary><dl className="assistant-change-list">{assistantPreviewRows(s.preview.preview,resolve).map((row,i)=><div key={i}><dt>{row.label}</dt><dd>{row.value}</dd></div>)}</dl></details>}
+            {!!s.preview?.effects?.voiceAssignments.length&&<div className="assistant-actual-effects"><strong>实际音色变更</strong><dl className="assistant-change-list">{s.preview.effects.voiceAssignments.map((effect,i)=><div key={i}><dt>{resolve(effect.roleId)}{effect.segmentId||effect.segmentText?' · 台词 '+(effect.segmentText||resolve(effect.segmentId||'')):effect.source==='role-default'?' · 角色默认音色':' · 本章角色音色'}</dt><dd>{effect.before?resolve(effect.before):'未指定'} → {effect.after?resolve(effect.after):'未指定'}</dd></div>)}</dl></div>}
+            {s.preview?.effects?.readingRange&&<details className="assistant-reading-change"><summary className="warning">朗读范围将改变，请核对原文与拟朗读内容</summary><dl className="assistant-change-list"><div><dt>原朗读文字</dt><dd>{s.preview.effects.readingRange.before.text||'（空）'}</dd></div><div><dt>拟朗读文字</dt><dd>{s.preview.effects.readingRange.after.text||'（空）'}</dd></div></dl></details>}
             {s.error&&<p className="warning">{s.error}</p>}{s.resultRefs?.uiAction&&<button className="button small" disabled={!connected} onClick={()=>{if(s.resultRefs!.uiAction!.type==='navigate'&&s.resultRefs!.uiAction!.target==='assistant-settings')setSettings(true);else void perform(()=>props.onUIAction(s.resultRefs!.uiAction!));}}>{s.resultRefs.uiAction.type==='play'?'试听结果':'打开操作位置'}</button>}{s.resultRefs?.jobIds?.length?<p className="hint">已提交 {s.resultRefs.jobIds.length} 个制作任务，可在顶部“任务”查看。</p>:null}
           </details>)}
           {r.questions?.length?<ul>{r.questions.map((q,i)=><li key={i}>{q}</li>)}</ul>:null}{r.error&&<p className="warning">{r.error}</p>}
           {r.delivery&&<div className="assistant-delivery"><strong>整章试听已就绪 · 待检查</strong><button className="button small" disabled={!connected||busy} onClick={()=>void perform(()=>props.onUIAction({type:'play',kind:'masters',id:r.delivery!.masterId,chapterId:r.delivery!.chapterId}))}>试听整章</button></div>}
           {needsListening(r.id)&&<p className="warning">试听检查须由你在原试听界面完成。请先不执行这张提案，再打开对应声音检查。</p>}
-          {r.state==='awaitingApproval'&&<div className="button-row"><button className="button primary" disabled={busy||!connected||needsListening(r.id)} onClick={()=>decide(r,true)}>批准并开始</button><button className="button" disabled={busy||!connected} onClick={()=>decide(r,false)}>不执行</button></div>}
-          {!assistantTerminal(r.state)&&r.state!=='awaitingApproval'&&<div className="assistant-controls"><div className="button-row">{['planning','executing','waitingJobs'].includes(r.state)&&<button className="button small" disabled={busy||!connected} onClick={()=>control(r,'pause')}>暂停后续步骤</button>}{r.state==='paused'&&<button className="button small" disabled={busy||!connected} onClick={()=>control(r,'resume')}>恢复任务</button>}<button className="button small" disabled={busy||!connected} onClick={()=>control(r,'stop')}>停止任务</button></div><label><input type="checkbox" checked={stopAudio} onChange={e=>setStopAudio(e.target.checked)}/>停止时同时取消本任务的声音请求</label></div>}
-          {['paused','awaitingUser','needsReconciliation'].includes(r.state)&&<AssistantMandate key={r.id+':'+r.revision} run={r} stepCount={detail.steps.filter(s=>s.runId===r.id).length} voices={state.voices} connected={connected} busy={busy} previewVoice={id=>perform(()=>props.onUIAction({type:'play',kind:'voices',id}))} amend={body=>perform(async()=>props.withSavedScope(r.binding,async()=>{apply(await api<AssistantDetail>('/assistant/runs/'+encodeURIComponent(r.id)+'/control',{action:'amend',revision:r.revision,decisionId:crypto.randomUUID(),...body}));await props.refresh();}))}/>}
-          {(r.state==='needsReconciliation'||['paused','awaitingUser'].includes(r.state)&&(r.reconciliation?.assistantRequest?.state==='unknown'||!!r.reconciliation?.steps.length))&&<AssistantReconciliation run={r} connected={connected} busy={busy} reconcile={body=>perform(async()=>props.withSavedScope(r.binding,async()=>{apply(await api<AssistantDetail>('/assistant/runs/'+encodeURIComponent(r.id)+'/control',{action:'reconcile',revision:r.revision,decisionId:crypto.randomUUID(),...body}));await props.refresh();}))}/>}
+          {writable&&r.state==='awaitingApproval'&&<div className="button-row"><button className="button primary" disabled={busy||!connected||needsListening(r.id)} onClick={()=>decide(r,true)}>批准并开始</button><button className="button" disabled={busy||!connected} onClick={()=>decide(r,false)}>不执行</button></div>}
+          {writable&&!assistantTerminal(r.state)&&r.state!=='awaitingApproval'&&<div className="assistant-controls"><div className="button-row">{['planning','executing','waitingJobs'].includes(r.state)&&<button className="button small" disabled={busy||!connected} onClick={()=>control(r,'pause')}>暂停后续步骤</button>}{r.state==='paused'&&<button className="button small" disabled={busy||!connected} onClick={()=>control(r,'resume')}>恢复任务</button>}<button className="button small" disabled={busy||!connected} onClick={()=>control(r,'stop')}>停止任务</button></div><label><input type="checkbox" checked={stopAudio} onChange={e=>setStopAudio(e.target.checked)}/>停止时同时取消本任务的声音请求</label></div>}
+          {writable&&['paused','awaitingUser','needsReconciliation'].includes(r.state)&&<AssistantMandate key={r.id+':'+r.revision} run={r} stepCount={detail.steps.filter(s=>s.runId===r.id).length} voices={state.voices} connected={connected} busy={busy} previewVoice={id=>perform(()=>props.onUIAction({type:'play',kind:'voices',id}))} amend={body=>perform(async()=>props.withSavedScope(r.binding,async()=>{apply(await api<AssistantDetail>('/assistant/runs/'+encodeURIComponent(r.id)+'/control',{action:'amend',revision:r.revision,decisionId:crypto.randomUUID(),...body}));await props.refresh();}))}/>}
+          {writable&&(r.state==='needsReconciliation'||['paused','awaitingUser'].includes(r.state)&&(r.reconciliation?.assistantRequest?.state==='unknown'||!!r.reconciliation?.steps.length))&&<AssistantReconciliation run={r} connected={connected} busy={busy} reconcile={body=>perform(async()=>props.withSavedScope(r.binding,async()=>{apply(await api<AssistantDetail>('/assistant/runs/'+encodeURIComponent(r.id)+'/control',{action:'reconcile',revision:r.revision,decisionId:crypto.randomUUID(),...body}));await props.refresh();}))}/>}
         </section>)}
-        <details className="assistant-session-tools"><summary>会话管理</summary><p className="hint">归档保留执行记录；有进行中任务的会话须先完成或停止任务。</p>{sessions.filter(s=>s.state==='active').map(s=><div key={s.id} data-session-id={s.id} className="assistant-session-item"><span>{s.title}<small>{s.chapterId?resolve(s.chapterId):'工作区'}{s.id===detail.session.id?' · 当前会话':''}</small></span><button className="button small" aria-label={'归档会话 '+s.title} disabled={busy||!connected||(s.id===detail.session.id&&!!run)} onClick={()=>void perform(async()=>{await api('/assistant/sessions/'+encodeURIComponent(s.id),undefined,'DELETE');await list();if(current.current===s.id)apply(await api<AssistantDetail>('/assistant/sessions/'+encodeURIComponent(s.id)));})}>归档</button></div>)}</details>
+        <details className="assistant-session-tools"><summary>会话管理</summary><p className="hint">归档保留聊天、截图和执行记录，停止后续助手步骤。已提交的制作任务和费用不会撤销。</p>{sessions.map(s=><div key={s.id} data-session-id={s.id} className="assistant-session-item"><span>{s.title}<small>{s.chapterId?resolve(s.chapterId):'工作区'}{s.id===detail.session.id?' · 当前会话':''}{s.state!=='active'?' · 只读':''}</small></span><div className="button-row">{s.state==='active'&&<button className="button small" aria-label={'归档会话 '+s.title} disabled={busy||uploading||!connected} onClick={()=>void perform(async()=>{await api('/assistant/sessions/'+encodeURIComponent(s.id),undefined,'DELETE');await list();if(current.current===s.id)apply(await api<AssistantDetail>('/assistant/sessions/'+encodeURIComponent(s.id)));})}>归档</button>}{!s.contentDeletion&&<button className="text-button" aria-label={'删除对话内容 '+s.title} disabled={busy||uploading||!connected} onClick={()=>confirmDelete(s.id)}>删除对话内容</button>}</div></div>)}</details>
       </>}
     </div>
     {newMessages&&<button className="assistant-new button small" onClick={()=>{follow.current=true;const el=scroll.current;if(el)el.scrollTop=el.scrollHeight;setNewMessages(false);}}><ArrowDown size={14}/>查看新消息</button>}
@@ -153,6 +172,7 @@ export default function AssistantPanel(props:Props) {
       {!!draft.attachments.length&&!config?.vision&&<p className="hint assistant-image-hint" role="status">请在顶部连接设置中启用图片输入。</p>}
     </div>}
     {settings&&<AssistantConnection config={config} connected={connected} onSaved={setConfig} onClose={()=>setSettings(false)}/>}
+    {deleting&&<Dialog title="删除对话内容" onClose={()=>{if(!busy)setDeleting(null);}}><p>删除“{deleting.session.title}”的对话内容？</p><p>范围：{deleting.session.projectId?resolve(deleting.session.projectId):'工作区'}{deleting.session.chapterId?' / '+resolve(deleting.session.chapterId):''}，仅此会话。</p><p>将永久清除全部聊天、截图、模型原回复、读取材料和提案详情，以及本浏览器内此会话的未发送草稿。当前有 {deleting.messages.length} 条消息、{deleting.attachments.length} 张截图和 {deleting.steps.length} 条提案。无法恢复；其他会话不受影响。</p><p className="hint">会停止后续助手操作，并保留请求状态、使用次数、时间和结果引用等执行账本。已写入的制作设置、生成结果及其操作记录不会删除，已提交的生成和费用不会撤销；结果未确认的请求仍按未确认记录保留。</p><div className="button-row"><button className="button" disabled={busy} onClick={()=>setDeleting(null)}>保留对话</button><button className="button danger" disabled={busy||!connected} onClick={removeContent}>永久删除此会话内容</button></div></Dialog>}
     {zoom&&<Dialog title="截图预览" wide onClose={()=>setZoom(null)}><img className="assistant-zoom" src={attachmentURL(zoom)} alt="将发送给助手的实际截图"/><p className="hint">{zoom.width} × {zoom.height} · {(zoom.bytes/1024).toFixed(0)} KB。请在发送前确认截图中没有密钥或不需外发的内容。</p></Dialog>}
   </section>;
 }

@@ -6,7 +6,7 @@ import { compile, templateOf, templateCatalog, listTemplates, listUnitTemplates 
 import { createProjectFolder, renameProjectFolder, stageProjectDeletion, recoverProjectDeletions, projectFile, recordFiles } from './workspace.mjs';
 export { compile } from "./templates.mjs";
 import { createEnhancement, defaultFeatures } from "./enhancement.mjs";
-import { configurationDecided, decide, humanChanges, assistantActor, assistantChanges, assistantOverride, assistantMutation, inheritStructure, outstandingAttempts, policyOf } from './experience.mjs';
+import { configurationDecided, decide, humanChanges, assistantActor, assistantChanges, assistantOverride, assistantMutation, inheritStructure, outstandingAttempts, policyOf, assistantEffectState, assistantEffects, assertAssistantEffects } from './experience.mjs';
 import { shortRanges } from './semantic.mjs';
 import { importProblems } from './import-validation.mjs';
 
@@ -1170,12 +1170,14 @@ export function createDomain(store) {
       return {changeId,chapterId:c.id,chapterRevision:c.revision,repairedIds:p.ids};
     }
     if (['segment.split','segment.merge'].includes(action)) p={...p,operationId:p.operationId || uid()};
+    const effectsBefore = actor ? assistantEffectState(store,api,action==='chapter.create'?null:p.chapterId,action==='role.update'?p.id:null) : null;
     const before = p.chapterId && (/^segment\./.test(action) || action === 'role.update') ? api.list(p.chapterId) : [];
     const previousUnit = actor && /^(unit|event)\./.test(action) && (p.unitId || action.startsWith('unit.') && p.id) ? store.maybe('units',p.unitId || p.id) : null;
     const protectedEvents=actor&&action==='unit.restore'?store.all('events',p.id).filter(e=>e.state==='adopted'&&(!e.source?.kind||['user','inherited_user'].includes(e.source.kind))):[];
     if(actor&&action==='unit.dissolve'&&!previousUnit?.creationSource&&!assistantOverride(executionContext,p.id,'state'))fail('这项人工一起演绎设置受保护，请先核对具体修改',409);
     const previousEvent = actor && action.startsWith('event.') && p.id ? store.maybe('events',p.id) : null;
     const result = /^(voice-session|voice-candidate|unit|event)\./.test(action) ? enhancement.mutate(action,p) : originalMutate(action,p);
+    if (actor) assertAssistantEffects(assistantEffects(effectsBefore,assistantEffectState(store,api,action==='chapter.create'?result.id:p.chapterId,action==='role.update'?p.id:null)),executionContext);
     for (const previous of before) {
       const current = store.get('segments',previous.id);
       if (!actor && p.identityChosen !== true && !previous.decisions && !policyOf(store,store.get('chapters',current.chapterId).projectId).revision) continue;
@@ -1204,6 +1206,18 @@ export function createDomain(store) {
     if (result.id && /^segment\./.test(action) && store.maybe('segments',result.id)) return {...store.get('segments',result.id),...(result.chapterRevision ? {chapterRevision:result.chapterRevision} : {})};
     return result;
   })); };
+  api.previewAssistantEffects = (action,p,candidateVoiceId,apply) => {
+    if (!/^(segment|role)\./.test(action) && action!=='chapter.create' && !apply) return {voiceAssignments:[]};
+    const receipt = {};
+    try { store.transaction(() => {
+      if(candidateVoiceId && !store.maybe('voices',candidateVoiceId)) store.put('voices',{id:candidateVoiceId,state:'active'});
+      const before = assistantEffectState(store,api,action==='chapter.create'?null:p.chapterId,action==='role.update'?p.id:null);
+      const result=apply?apply():api.mutate(action,p);
+      receipt.effects = assistantEffects(before,assistantEffectState(store,api,action==='chapter.create'?result.id:p.chapterId,action==='role.update'?p.id:null));
+      throw receipt;
+    }); } catch (error) { if (error!==receipt) throw error; }
+    return receipt.effects;
+  };
   api.snapshot = () => {
     enhancement.syncLegacy();
     const result = originalSnapshot();

@@ -9,6 +9,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+import { createHash } from 'node:crypto';
 import { openStore, uid } from "../server/store.mjs";
 import {
   createDomain,
@@ -43,7 +46,7 @@ function wav(frames = 4800) {
     b.writeInt16LE(Math.round(Math.sin(i / 17) * 1000), 44 + i * 2);
   return b;
 }
-function setup(t) {
+function setup(t, options = {}) {
   const dir = mkdtempSync(join(tmpdir(), "dubbing-worker-"));
   const store = openStore(dir),
     d = createDomain(store);
@@ -80,6 +83,7 @@ function setup(t) {
     key: "test",
     model: "seed-audio-1.0",
     audioUrl: "https://example.invalid",
+    ...options,
   });
   const enqueue = (extra = {}) =>
     worker.enqueue({
@@ -105,6 +109,41 @@ function longTailSilenceWav() {
   const bytes = wav(96000);
   bytes.fill(0, 44 + 32000 * 2);
   return bytes;
+}
+
+function interceptReads(t, beforeRead) {
+  const readFile = fsPromises.readFile;
+  const mock = t.mock.method(fsPromises, 'readFile', async (file, ...args) => {
+    await beforeRead(String(file));
+    return readFile(file, ...args);
+  });
+  syncBuiltinESMExports();
+  const restore = () => { mock.mock.restore(); syncBuiltinESMExports(); };
+  t.after(restore);
+  return restore;
+}
+
+async function waitForBarrier(promise) {
+  let timer;
+  try {
+    return await Promise.race([promise,new Promise((_,reject)=>{
+      timer=setTimeout(()=>reject(Error('恢复测试未到达预期阶段屏障')),5000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+function deliveryEvidence(dir, attempt, raw) {
+  const file = join(dir, attempt.path), receipt = JSON.parse(readFileSync(`${file}.delivery.json`, 'utf8'));
+  const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+  assert.deepEqual(readFileSync(file), raw, '封存原件与供应商返回逐字节一致');
+  assert.equal(receipt.attemptId, attempt.id); assert.equal(receipt.raw.bytes, raw.length);
+  assert.equal(receipt.raw.sha256, digest(raw));
+  assert.equal(receipt.processing.version, receipt.processingVersion);
+  assert.equal(receipt.processing.analysis.detected, true);
+  const processed = readFileSync(join(dir, attempt.path.replace(/[^/]+$/, receipt.result.filename)));
+  assert.equal(receipt.result.sha256, digest(processed)); assert.equal(receipt.result.bytes, processed.length);
+  assert.ok(processed.length < raw.length, '夹具必须真实产生可追溯处理版');
+  return receipt;
 }
 
 test('生成自动清理干声尾脉冲和长空白，单条/声音单元/组合统一保存并供整章试听使用', async t => {
@@ -437,18 +476,40 @@ test("音频请求只发送三项允许参数，旧记录无法覆盖固定 WAV 
 });
 
 test("完整正式音频登记异常后，重开恢复历史产物且不复活或覆盖已结束批次", async t => {
-  for(const later of ["unchanged","edited","newer"]) await t.test(later,async t=>{
-    const {store,d,c,worker,enqueue,dir}=setup(t);let calls=0,failed=false;
-    const requests=t.mock.method(globalThis,"fetch",async()=>{calls++;return new Response(wav(),{headers:{"Content-Type":"audio/wav"}})});
-    const job=enqueue(),attempt=store.all("attempts",job.id)[0],put=store.put.bind(store);
+  for(const concurrency of [1,3]) for(const localDelay of [0,250]) for(const later of ["unchanged","edited","newer"]) await t.test(`${later}/${concurrency}路/本地${localDelay}ms`,async t=>{
+    const {store,d,c,worker,enqueue,dir}=setup(t,{audioConcurrency:concurrency,routeConcurrencyCap:3,localAudioConcurrency:2,audioStartIntervalMs:0,callLimit:10,usageScope:'recovery'});
+    const raw=longTailSilenceWav(),second=d.list(c.id)[1],voice={id:uid(),path:'held-reference.wav',state:'active'};
+    writeFileSync(join(dir,voice.path),wav());store.put('voices',voice);
+    d.mutate('segment.update',{id:second.id,chapterId:c.id,revision:d.chapter(c.id).revision,voiceId:voice.id});
+    let calls=0,failed=false;
+    const requests=t.mock.method(globalThis,"fetch",async()=>{calls++;return new Response(raw,{headers:{"Content-Type":"audio/wav"}})});
+    const job=enqueue(),[attempt,sibling]=store.all("attempts",job.id),put=store.put.bind(store);
+    const referenceHeld=Promise.withResolvers(),referenceGate=Promise.withResolvers(),unknown=Promise.withResolvers();
+    const restoreReads=interceptReads(t,async file=>{
+      if(file===join(dir,voice.path)){referenceHeld.resolve();await referenceGate.promise;}
+      if(file===join(dir,`${attempt.path}.delivery.json`)){
+        await waitForBarrier(referenceHeld.promise);
+        if(localDelay)await new Promise(resolve=>setTimeout(resolve,localDelay));
+      }
+    });
     const registration=t.mock.method(store,"put",(table,value,...args)=>{
       if(!failed&&value.id===attempt.id&&(later==="edited"?table==="attempts"&&value.status==="success":table==="audios")){failed=true;throw Error("registration failed")}
-      return put(table,value,...args);
+      const result=put(table,value,...args);
+      if(table==='attempts'&&value.id===attempt.id&&value.status==='unknown')unknown.resolve();
+      return result;
     });
-    await worker.tick();registration.mock.restore();
+    const pending=worker.tick();
+    try{
+      await waitForBarrier(unknown.promise);
+      assert.equal(store.get('attempts',sibling.id).createdAt,undefined,'兄弟停在参考准备屏障，尚未进入发送事务');
+      assert.equal(calls,1,'本地失败发生前只有已封存的首项真实发送');
+    }finally{referenceGate.resolve();await pending;restoreReads();registration.mock.restore();}
     assert.equal(failed,true);assert.equal(calls,1);assert.equal(store.get("jobs",job.id).status,"unknown");
     assert.equal(store.get("attempts",attempt.id).status,"unknown");assert.equal(store.all("audios").length,0);
-    const file=join(dir,attempt.path || `audio/${attempt.id}.wav`);
+    assert.equal(store.get('attempts',sibling.id).status,'stopped');assert.equal(store.get('attempts',sibling.id).quota.state,'released');
+    assert.equal(store.get('attempts',attempt.id).quota.state,'used');
+    assert.deepEqual([store.get('settings','audio-usage:recovery').used,store.get('settings','audio-usage:recovery').reserved],[1,0]);
+    const receipt=deliveryEvidence(dir,attempt,raw),file=join(dir,attempt.path);
     assert.ok(existsSync(file));assert.ok((await inspect(file)).duration>0);
     if(later==="edited")d.mutate("segment.update",{chapterId:c.id,revision:d.chapter(c.id).revision,id:attempt.segmentId,text:"登记失败后保存的新正文。"});
     if(later==="newer"){
@@ -456,6 +517,7 @@ test("完整正式音频登记异常后，重开恢复历史产物且不复活�
       await worker.recoverLocal(attempt.id);
       const newer=enqueue({retryUnknown:true});await worker.tick();assert.equal(store.get("jobs",newer.id).status,"success");
       for(const s of d.list(c.id))d.mutate("segment.review",{chapterId:c.id,revision:d.chapter(c.id).revision,id:s.id,audioId:s.current,basis:basisOf(s),state:"passed"});
+      assert.ok(d.list(c.id).every(s=>s.current!==attempt.id),'后来明确生成的新结果成为当前版');
     }
     const ended=store.get("jobs",job.id),segments=d.list(c.id),chapter=store.get("chapters",c.id),before=store.all("audios").length;
     store.close();store.close=()=>{};
@@ -464,10 +526,67 @@ test("完整正式音频登记异常后，重开恢复历史产物且不复活�
     requests.mock.mockImplementation(()=>assert.fail("恢复不得请求供应商"));
     await next.recover();await next.tick();
     assert.equal(reopened.get("audios",attempt.id).id,attempt.id);assert.equal(reopened.get("attempts",attempt.id).status,"success");
-    assert.equal(reopened.all("audios").length,before+(later==="newer"?0:1));assert.deepEqual(reopened.get("jobs",job.id),ended);
+    assert.equal(reopened.all("audios").length,before+(later==="newer"?0:2));assert.deepEqual(reopened.get("jobs",job.id),ended);
     assert.deepEqual(domain.list(c.id),segments);assert.deepEqual(reopened.get("chapters",c.id),chapter);
+    const original=reopened.get('audios',`${attempt.id}-original`),recovered=reopened.get('audios',attempt.id);
+    assert.equal(recovered.originalAudioId,original.id);assert.equal(recovered.tailRepair.sourceAudioId,original.id);
+    assert.equal(recovered.processing.inputSha256,receipt.raw.sha256);assert.equal(recovered.processing.resultSha256,receipt.result.sha256);
+    assert.equal(recovered.processing.cutFrame,receipt.processing.analysis.cutFrame);
+    assert.deepEqual(readFileSync(join(dir,original.path)),raw);
+    assert.deepEqual(deliveryEvidence(dir,attempt,raw),receipt,'恢复保留原有处理配方与完成凭据');
+    const usage=reopened.get('settings','audio-usage:recovery');assert.equal(usage.used,calls);assert.equal(usage.reserved,0);
     const restored=reopened.get("audios",attempt.id);await next.recover();
-    assert.equal(reopened.all("audios").length,before+(later==="newer"?0:1));assert.deepEqual(reopened.get("audios",attempt.id),restored);
+    assert.equal(reopened.all("audios").length,before+(later==="newer"?0:2));assert.deepEqual(reopened.get("audios",attempt.id),restored);
+    assert.deepEqual(reopened.get('settings','audio-usage:recovery'),usage);assert.deepEqual(deliveryEvidence(dir,attempt,raw),receipt);
+  });
+});
+test('原件封存后已发兄弟保留回执，故障后未发兄弟停止且恢复不重发',async t=>{
+  for(const concurrency of [1,3]) for(const localDelay of [0,250]) await t.test(`${concurrency}路/本地${localDelay}ms`,async t=>{
+    const {store,d,c,worker,enqueue,dir}=setup(t,{audioConcurrency:concurrency,routeConcurrencyCap:3,localAudioConcurrency:2,audioStartIntervalMs:0,callLimit:3,usageScope:'sealed-siblings'});
+    const third=d.mutate('segment.create',{chapterId:c.id,revision:d.chapter(c.id).revision,text:'第三条未发。'});
+    const voice={id:uid(),path:'held-reference.wav',state:'active'};writeFileSync(join(dir,voice.path),wav());store.put('voices',voice);
+    d.mutate('segment.update',{id:third.id,chapterId:c.id,revision:d.chapter(c.id).revision,voiceId:voice.id,roleConfirmed:true});
+    const job=enqueue(),[first,second,last]=store.all('attempts',job.id),raw=longTailSilenceWav();
+    const secondSent=Promise.withResolvers(),secondResponse=Promise.withResolvers(),referenceHeld=Promise.withResolvers(),referenceGate=Promise.withResolvers(),unknown=Promise.withResolvers();
+    let calls=0;
+    const requests=t.mock.method(globalThis,'fetch',async()=>{
+      calls++;
+      if(calls===2){secondSent.resolve();await secondResponse.promise;}
+      return new Response(raw,{headers:{'Content-Type':'audio/wav'}});
+    });
+    const restoreReads=interceptReads(t,async file=>{
+      if(file===join(dir,voice.path)){referenceHeld.resolve();await referenceGate.promise;}
+      if(file===join(dir,`${first.path}.delivery.json`)){
+        await waitForBarrier(secondSent.promise);if(concurrency===3)await waitForBarrier(referenceHeld.promise);
+        if(localDelay)await new Promise(resolve=>setTimeout(resolve,localDelay));
+      }
+    });
+    const put=store.put.bind(store),registration=t.mock.method(store,'put',(table,value,...args)=>{
+      if(table==='audios'&&value.id===first.id)throw Error('registration failed after sibling sent');
+      const result=put(table,value,...args);
+      if(table==='attempts'&&value.id===first.id&&value.status==='unknown')unknown.resolve();
+      return result;
+    });
+    const pending=worker.tick();
+    try{
+      await waitForBarrier(unknown.promise);
+      assert.equal(calls,2);assert.ok(store.get('attempts',second.id).createdAt);
+      assert.equal(store.get('attempts',second.id).status,'sending');
+      assert.equal(store.get('attempts',last.id).createdAt,undefined);
+    }finally{secondResponse.resolve();referenceGate.resolve();await pending;restoreReads();registration.mock.restore();}
+    assert.equal(calls,2);assert.deepEqual(store.all('attempts',job.id).map(a=>a.status),['unknown','success','stopped']);
+    assert.equal(store.get('jobs',job.id).status,'unknown');assert.equal(store.get('jobs',job.id).done,1);
+    assert.deepEqual([store.get('settings','audio-usage:sealed-siblings').used,store.get('settings','audio-usage:sealed-siblings').reserved],[2,0]);
+    const receipt=deliveryEvidence(dir,first,raw),current=d.list(c.id).map(s=>s.current),ended=store.get('jobs',job.id);
+    store.close();store.close=()=>{};const reopened=openStore(dir);t.after(()=>reopened.close());
+    const next=createWorker(reopened,createDomain(reopened),{key:'test',model:'seed-audio-1.0',audioUrl:'https://example.invalid',callLimit:3,usageScope:'sealed-siblings'});
+    requests.mock.mockImplementation(()=>assert.fail('恢复不得请求供应商'));
+    await next.recover();await next.tick();await next.recover();
+    assert.deepEqual(reopened.all('attempts',job.id).map(a=>a.status),['success','success','stopped']);
+    assert.equal(reopened.all('audios').length,4);assert.deepEqual(reopened.get('jobs',job.id),ended);
+    assert.deepEqual(createDomain(reopened).list(c.id).map(s=>s.current),current,'历史恢复不替换已结束批次的当前选择');
+    assert.deepEqual(deliveryEvidence(dir,first,raw),receipt);
+    assert.deepEqual([reopened.get('settings','audio-usage:sealed-siblings').used,reopened.get('settings','audio-usage:sealed-siblings').reserved],[2,0]);
   });
 });
 test("同配置返工失败保留旧结果与通过记录", async (t) => {
@@ -1326,26 +1445,66 @@ test('音频接收截断与磁盘写满保留临时文件和旧通过版，恢�
 
 test('生成文件正式改名后进程退出，重开数据库补登记且不再次请求',async t=>{
   const {execFileSync}=await import('node:child_process');
-  const {store,d,c,enqueue,dir}=setup(t),job=enqueue(),attempts=store.all('attempts',job.id);
+  for(const siblingState of ['before-send','after-send']) for(const concurrency of [1,3]) for(const localDelay of [0,250]) await t.test(`${siblingState}/${concurrency}路/本地${localDelay}ms`,async t=>{
+  const {store,d,c,enqueue,dir}=setup(t,{callLimit:2,usageScope:'crash-recovery'}),raw=longTailSilenceWav();
+  const voice={id:uid(),path:'held-reference.wav',state:'active'},second=d.list(c.id)[1];
+  writeFileSync(join(dir,voice.path),wav());store.put('voices',voice);
+  d.mutate('segment.update',{id:second.id,chapterId:c.id,revision:d.chapter(c.id).revision,voiceId:voice.id});
+  writeFileSync(join(dir,'response.wav'),raw);
+  const job=enqueue(),attempts=store.all('attempts',job.id);
   const child=`
     import {openStore} from './server/store.mjs';
     import {createDomain} from './server/domain.mjs';
     import {createWorker} from './server/worker.mjs';
     import {readFileSync,appendFileSync} from 'node:fs';
+    import fs from 'node:fs/promises';
+    import {syncBuiltinESMExports} from 'node:module';
     import {join} from 'node:path';
     const store=openStore(process.argv[1]),put=store.put.bind(store);
-    globalThis.fetch=async()=>{appendFileSync(join(store.directory,'calls.txt'),'request\\n');return new Response(readFileSync(join(store.directory,'reference.wav')),{headers:{'Content-Type':'audio/wav'}})};
+    const attempts=store.all('attempts',${JSON.stringify(job.id)}),readFile=fs.readFile;
+    const siblingState=${JSON.stringify(siblingState)},ready=Promise.withResolvers();let calls=0;
+    fs.readFile=async(file,...args)=>{
+      if(siblingState==='before-send'&&String(file)===join(store.directory,'held-reference.wav')){
+        appendFileSync(join(store.directory,'barriers.txt'),'reference-held\\n');ready.resolve();await new Promise(()=>{});
+      }
+      if(String(file)===join(store.directory,attempts[0].path+'.delivery.json')){
+        await ready.promise;
+        if(${localDelay})await new Promise(resolve=>setTimeout(resolve,${localDelay}));
+      }
+      return readFile(file,...args);
+    };syncBuiltinESMExports();
+    globalThis.fetch=async()=>{
+      calls++;appendFileSync(join(store.directory,'calls.txt'),'request\\n');
+      if(calls===2){ready.resolve();await new Promise(()=>{});}
+      return new Response(readFileSync(join(store.directory,'response.wav')),{headers:{'Content-Type':'audio/wav'}});
+    };
     store.put=(table,...args)=>{if(table==='audios')process.exit(73);return put(table,...args)};
-    await createWorker(store,createDomain(store),{key:'test',model:'seed-audio-1.0',audioUrl:'https://example.invalid'}).tick();
+    await createWorker(store,createDomain(store),{key:'test',model:'seed-audio-1.0',audioUrl:'https://example.invalid',
+      audioConcurrency:${concurrency},routeConcurrencyCap:3,localAudioConcurrency:2,audioStartIntervalMs:0,callLimit:2,usageScope:'crash-recovery'}).tick();
   `;
-  assert.throws(()=>execFileSync(process.execPath,['--input-type=module','-e',child,dir],{cwd:new URL('..',import.meta.url),stdio:'pipe'}),e=>e.status===73);
-  assert.ok(existsSync(join(dir,`audio/${attempts[0].id}.wav`)));assert.equal(store.all('audios').length,0);assert.equal(store.get('attempts',attempts[0].id).status,'sending');
+  assert.throws(()=>execFileSync(process.execPath,['--input-type=module','-e',child,dir],{cwd:new URL('..',import.meta.url),stdio:'pipe',timeout:10000}),e=>e.status===73);
+  const sent=siblingState==='after-send'?2:1;
+  assert.equal(readFileSync(join(dir,'calls.txt'),'utf8'),'request\n'.repeat(sent));
+  if(siblingState==='before-send')assert.equal(readFileSync(join(dir,'barriers.txt'),'utf8'),'reference-held\n');
+  const receipt=deliveryEvidence(dir,attempts[0],raw);
+  assert.ok(existsSync(join(dir,attempts[0].path)));assert.equal(store.all('audios').length,0);assert.equal(store.get('attempts',attempts[0].id).status,'sending');
+  assert.equal(store.get('attempts',attempts[1].id).status,siblingState==='after-send'?'sending':'queued');
+  assert.equal(Boolean(store.get('attempts',attempts[1].id).createdAt),siblingState==='after-send');
   const reopened=openStore(dir);t.after(()=>reopened.close());const domain=createDomain(reopened),worker=createWorker(reopened,domain,{key:'test',model:'seed-audio-1.0',audioUrl:'https://example.invalid'});
   t.mock.method(globalThis,'fetch',()=>assert.fail('恢复不得调用供应商'));
   await worker.recover();await worker.tick();
-  const audio=reopened.all('audios')[0];assert.equal(audio.id,attempts[0].id);assert.equal(domain.list(c.id)[0].current,audio.id);assert.equal(reopened.get('attempts',attempts[0].id).status,'success');assert.equal(reopened.get('attempts',attempts[1].id).status,'stopped');assert.equal(reopened.get('jobs',job.id).status,'stopped');
-  assert.equal(readFileSync(join(dir,'calls.txt'),'utf8'),'request\n');assert.ok((await inspect(join(dir,audio.path))).duration>0);
-  await worker.recover();assert.equal(reopened.all('audios').length,1);assert.deepEqual(domain.list(c.id),d.list(c.id));
+  const audio=reopened.get('audios',attempts[0].id);assert.equal(domain.list(c.id)[0].current,audio.id);assert.equal(reopened.get('attempts',attempts[0].id).status,'success');
+  assert.equal(reopened.get('attempts',attempts[1].id).status,siblingState==='after-send'?'unknown':'stopped');
+  assert.equal(reopened.get('attempts',attempts[1].id).quota.state,siblingState==='after-send'?'used':'released');
+  assert.equal(reopened.get('jobs',job.id).status,siblingState==='after-send'?'unknown':'stopped');assert.equal(reopened.get('jobs',job.id).done,1);
+  assert.deepEqual([reopened.get('settings','audio-usage:crash-recovery').used,reopened.get('settings','audio-usage:crash-recovery').reserved],[sent,0]);
+  assert.equal(audio.processing.inputSha256,receipt.raw.sha256);assert.equal(audio.processing.resultSha256,receipt.result.sha256);
+  assert.equal(audio.tailRepair.sourceAudioId,`${attempts[0].id}-original`);assert.ok((await inspect(join(dir,audio.path))).duration>0);
+  const ended=reopened.get('jobs',job.id),usage=reopened.get('settings','audio-usage:crash-recovery');
+  await worker.recover();assert.equal(reopened.all('audios').length,2);assert.deepEqual(domain.list(c.id),d.list(c.id));
+  assert.deepEqual(reopened.get('jobs',job.id),ended);assert.deepEqual(reopened.get('settings','audio-usage:crash-recovery'),usage);
+  assert.deepEqual(deliveryEvidence(dir,attempts[0],raw),receipt);assert.equal(readFileSync(join(dir,'calls.txt'),'utf8'),'request\n'.repeat(sent));
+  });
 });
 
 test('五十条队列在途停用只停止受影响项，不改用新默认且进度真实',async t=>{

@@ -2859,11 +2859,22 @@
     {
       "id": "read.chapter",
       "version": 1,
-      "description": "读取当前任务章节和实际声音状态",
+      "description": "分页读取当前任务章节的台词与声音单元；full仅指声明字段，事件与历史另读",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {},
+        "properties": {
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          }
+        },
         "required": []
       },
       "access": "read",
@@ -3050,6 +3061,216 @@
       "handler": "bounded projection",
       "chapter": false,
       "help": "workflow"
+    },
+    {
+      "id": "read.unit",
+      "version": 1,
+      "description": "发现当前章声音单元，按ID精读两种设置和事件数量；事件、历史另读",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          }
+        },
+        "required": []
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "scene"
+      ],
+      "target": "units",
+      "handler": "bounded projection",
+      "chapter": true,
+      "help": "scene"
+    },
+    {
+      "id": "read.events",
+      "version": 1,
+      "description": "分页精读指定单元的全部状态事件、版本、来源引文及当前有效性",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          }
+        },
+        "required": [
+          "unitId"
+        ]
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "scene"
+      ],
+      "target": "events",
+      "handler": "bounded projection",
+      "chapter": true,
+      "help": "scene"
+    },
+    {
+      "id": "read.suggestions",
+      "version": 1,
+      "description": "发现当前章已有分析；按ID分页精读建议项，历史复用须另作当前免费预检",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          }
+        },
+        "required": []
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "suggestions"
+      ],
+      "target": "suggestions",
+      "handler": "bounded projection",
+      "chapter": true,
+      "help": "suggestions"
+    },
+    {
+      "id": "read.voiceSession",
+      "version": 1,
+      "description": "发现本项目与共享音色会话；按ID分页读取候选及待决定状态",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          }
+        },
+        "required": []
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "voice-create"
+      ],
+      "target": "voiceSessions",
+      "handler": "bounded projection",
+      "chapter": false,
+      "help": "voice-create"
+    },
+    {
+      "id": "read.audioHistory",
+      "version": 1,
+      "description": "分页读取指定声音单元已有声音与原件、当前匹配状态及保存设置",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          }
+        },
+        "required": [
+          "unitId"
+        ]
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "history"
+      ],
+      "target": null,
+      "handler": "bounded projection",
+      "chapter": true,
+      "help": "history"
     },
     {
       "id": "read.state",

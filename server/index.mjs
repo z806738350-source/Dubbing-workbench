@@ -256,6 +256,7 @@ export async function startServer({
         if (resource === 'sessions' && !id && req.method === 'POST') return send(res, 200, assistant.create(await body(req)));
         if (resource === 'sessions' && id && !action && req.method === 'GET') return send(res, 200, assistant.get(id));
         if (resource === 'sessions' && id && !action && req.method === 'DELETE') return send(res, 200, await assistant.archive(id));
+        if (resource === 'sessions' && id && action === 'content-delete' && req.method === 'POST') return send(res, 200, await assistant.removeContent(id, await body(req)));
         if (resource === 'sessions' && id && action === 'messages' && req.method === 'POST') return send(res, 200, await assistant.send(id, await body(req)));
         if (resource === 'runs' && id && action === 'decision' && req.method === 'POST') return send(res, 200, await assistant.approve(id, await body(req)));
         if (resource === 'runs' && id && action === 'control' && req.method === 'POST') return send(res, 200, await assistant.control(id, await body(req)));

@@ -32,6 +32,55 @@ function fixture(t, answers,realWorker=false) {
 const send = (f, extra = {}) => f.assistant.send(f.session.id, { messageId: uid(), text: '请帮我处理', approved: true, materials: ['text'], ...extra });
 const proposal = (capabilityId, input) => ({ reply: '已准备修改方案，请核对。', steps: [{ capabilityId, input }] });
 
+for (const policy of ['askMissing','chooseFromApprovedSet']) test(`delegated segment voice assignment obeys ${policy} across generic writes`,async t=>{
+ const f=fixture(t,[]),s=f.domain.list(f.chapter.id)[0],a={id:uid(),name:'A',state:'active'},b={id:uid(),name:'B',state:'active'};f.store.put('voices',a);f.store.put('voices',b);
+ f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('segment.update',{id:s.id,voiceId:b.id}),{reply:'完成'});
+ await send(f,{mode:'task',voicePolicy:policy,allowedVoiceIds:[a.id],limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
+ const state=f.assistant.get(f.session.id);assert.equal(f.store.get('segments',s.id).voiceId,null);assert.equal(state.runs[0].state,'awaitingUser');assert.ok(state.runs[0].voiceQuestions.some(q=>q.segmentIds.includes(s.id)));
+});
+
+test('delegation cannot remove a sentence from preserved reading scope; a specific approved exclusion can',async t=>{
+ const f=fixture(t,[]),s=f.domain.list(f.chapter.id)[1];
+ f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('segment.update',{id:s.id,excluded:true}),{reply:'完成'});
+ await send(f,{mode:'task',limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
+ let state=f.assistant.get(f.session.id);assert.equal(f.store.get('segments',s.id).excluded,false);assert.equal(state.runs[0].state,'awaitingApproval');assert.match(state.runs[0].error,/朗读范围|省略/);
+ f.assistant.approve(state.runs[0].id,{decisionId:uid(),revision:state.runs[0].revision,accepted:false});f.answers.length=0;
+ f.answers.push(proposal('segment.update',{id:s.id,excluded:true}),{reply:'这句已按决定不朗读'});
+ await send(f,{text:'这句不要读，请提出第二句的排除方案',mode:'task'});await idle(f.assistant);state=f.assistant.get(f.session.id);assert.equal(state.runs.at(-1).state,'awaitingApproval');assert.ok(state.steps.at(-1).preview.effects.readingRange);
+ await approve(f);assert.equal(f.store.get('segments',s.id).excluded,true);assert.equal(f.store.get('segments',s.id).text,s.text);assert.equal(f.assistant.get(f.session.id).runs.at(-1).state,'completed');
+});
+
+test('allowed voice selection and unchanged saves continue without repeated approval',async t=>{
+ const f=fixture(t,[]),s=f.domain.list(f.chapter.id)[0],v={id:uid(),name:'A',state:'active'};f.store.put('voices',v);
+ f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('segment.update',{id:s.id,voiceId:v.id}),proposal('segment.update',{id:s.id,voiceId:v.id}),{reply:'完成'});
+ await send(f,{mode:'task',voicePolicy:'chooseFromApprovedSet',allowedVoiceIds:[v.id],limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
+ assert.equal(f.store.get('segments',s.id).voiceId,v.id);assert.equal(f.assistant.get(f.session.id).runs[0].state,'completed');assert.equal(f.store.all('assistantDecisions').length,1);
+});
+
+test('task completion rechecks preserved reading scope after external omission',async t=>{
+ const f=fixture(t,[]),s=f.domain.list(f.chapter.id)[1];f.answers.push(proposal('chapter.update',{gap:0.6}),()=>{f.store.put('segments',{...s,excluded:true},f.chapter.id);return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({reply:'全部完成',complete:true})}}]}));});
+ await send(f,{mode:'task',limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
+ const r=f.assistant.get(f.session.id).runs[0];assert.equal(r.state,'awaitingUser');assert.match(r.error,/朗读范围/);
+});
+
+for(const action of ['resetVoice','roleId','segment.rebind','segment.merge'])test(`indirect ${action} assignment cannot escape the approved voice set`,async t=>{
+ const f=fixture(t,[]),[s,n]=f.domain.list(f.chapter.id),a={id:uid(),name:'A',state:'active'},b={id:uid(),name:'B',state:'active'};f.store.put('voices',a);f.store.put('voices',b);
+ const role=f.store.get('roles',s.roleId);f.store.put('roles',{...role,voiceId:b.id},f.project.id);f.store.put('segments',{...s,voiceId:a.id,voiceSource:'default'},f.chapter.id);f.store.put('segments',{...n,voiceId:b.id},f.chapter.id);
+ let capabilityId='segment.update',input={id:s.id,resetVoice:true};
+ if(action==='roleId'||action==='segment.rebind'){const other=f.domain.mutate('role.create',{projectId:f.project.id,name:'另一角色'});f.store.put('roles',{...other,voiceId:b.id},f.project.id);if(action==='roleId')input={id:s.id,roleId:other.id};else {capabilityId='segment.rebind';input={ids:[s.id],roleId:other.id};}}
+ if(action==='segment.merge'){capabilityId=action;input={id:s.id,choice:'second'};}
+ f.answers.push(proposal('chapter.update',{gap:0.6}),proposal(capabilityId,input),{reply:'完成'});
+ await send(f,{mode:'task',voicePolicy:'chooseFromApprovedSet',allowedVoiceIds:[a.id],limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
+ assert.equal(f.assistant.get(f.session.id).runs[0].state,'awaitingUser');assert.equal(f.store.get('segments',s.id).voiceId,a.id);assert.equal(f.store.get('segments',s.id).retired,undefined);assert.equal(f.domain.list(f.chapter.id).length,2);
+});
+
+test('exact split and merge preserve reading scope without extra approvals or repeated voice decisions',async t=>{
+ const f=fixture(t,[]),s=f.domain.list(f.chapter.id)[0];
+ f.answers.push(proposal('chapter.update',{gap:0.6}),proposal('segment.split',{id:s.id,offset:2}),()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(proposal('segment.merge',{id:f.domain.list(f.chapter.id)[0].id}))}}]})),{reply:'完成'});
+ await send(f,{mode:'task',limits:{assistant:5,audio:0}});await idle(f.assistant);await approve(f);
+ const state=f.assistant.get(f.session.id);assert.equal(state.runs[0].state,'completed',state.runs[0].error);assert.equal(f.store.all('assistantDecisions').length,1);assert.equal(f.domain.list(f.chapter.id)[0].text,s.text);
+});
+
 test('ordinary question reads real context and ends without writes; message replay never resends', async t => {
   const f = fixture(t, [{ reply: '请在整章试听中播放当前章。' }]), messageId = uid();
   await send(f, { messageId }); await idle(f.assistant);
@@ -189,10 +238,10 @@ test('one corrupt waiting session cannot prevent other ready sessions from advan
  await f.assistant.tick();await idle(f.assistant);assert.equal(f.assistant.get(f.session.id).runs[0].state,'completed');assert.ok(['awaitingUser','completed'].includes(f.store.get('assistantRuns','bad-run').state));
 });
 
-test('each assistant call has a durable receipt, including format repair; archive removes response material',async t=>{
+test('each assistant call has a durable receipt, including format repair; archive retains response material until explicit deletion',async t=>{
  const bad={reply:'格式错误',steps:[{capabilityId:'unregistered',input:{}}]},f=fixture(t,[bad,{reply:'修正后回答'}]);await send(f);await idle(f.assistant);
  const rows=f.store.all('settings').filter(r=>r.id.startsWith('assistant-call:'));assert.equal(rows.length,2);assert.ok(rows.every(r=>r.state==='received'&&r.response&&r.runId&&r.sessionId&&r.messageIds.length));assert.equal(f.assistant.get(f.session.id).runs[0].callCounts.received,2);
- assert.ok(rows.every((r,i)=>r.inputSha256===createHash('sha256').update(JSON.stringify(f.requests[i].messages)).digest('hex')&&r.promptSha256&&r.promptVersion==='assistant-v1'&&r.capabilityVersion===1&&Array.isArray(r.materials)&&r.responseAt&&r.firstByteAt));assert.notEqual(rows[0].inputSha256,rows[1].inputSha256);assert.ok(!JSON.stringify(rows).includes('fixture-secret'));assert.ok(rows.every(r=>!r.headers&&!r.prompt));await f.assistant.archive(f.session.id);assert.ok(f.store.all('settings').filter(r=>r.id.startsWith('assistant-call:')).every(r=>!r.response&&!r.messageIds&&!r.attachmentIds));
+ assert.ok(rows.every((r,i)=>r.inputSha256===createHash('sha256').update(JSON.stringify(f.requests[i].messages)).digest('hex')&&r.promptSha256&&r.promptVersion==='assistant-v1'&&r.capabilityVersion===1&&Array.isArray(r.materials)&&r.responseAt&&r.firstByteAt));assert.notEqual(rows[0].inputSha256,rows[1].inputSha256);assert.ok(!JSON.stringify(rows).includes('fixture-secret'));assert.ok(rows.every(r=>!r.headers&&!r.prompt));await f.assistant.archive(f.session.id);assert.ok(f.store.all('settings').filter(r=>r.id.startsWith('assistant-call:')).every(r=>r.response&&r.messageIds));const session=f.assistant.get(f.session.id).session;await f.assistant.removeContent(session.id,{sessionId:session.id,revision:session.revision,confirmed:true});assert.ok(f.store.all('settings').filter(r=>r.id.startsWith('assistant-call:')).every(r=>!r.response&&!r.messageIds&&!r.attachmentIds));
 });
 
 test('changing assistant or production route requires the corresponding explicit amendment',async t=>{

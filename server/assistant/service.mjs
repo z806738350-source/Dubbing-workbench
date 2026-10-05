@@ -4,6 +4,7 @@ import { createAssistantModel } from './model.mjs';
 import { createAttachments } from './attachments.mjs';
 import { createCapabilities, validateCapabilityInput } from './capabilities.mjs';
 import { createAssistantContext, pick, getHelp, draftStatus } from './context.mjs';
+import { readingRange, assertAssistantEffects } from '../experience.mjs';
 
 const now = () => new Date().toISOString();
 const terminal = new Set(['completed', 'cancelled', 'failed', 'rejected']);
@@ -112,7 +113,7 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
     if (run?.state === 'paused') fail('任务已暂停，请先明确恢复或停止', 409);
     if (!run) {
       const mode = p.mode === 'task' ? 'task' : 'ask';
-      const allowedVoiceIds = p.allowedVoiceIds || (p.voicePolicy !== 'chooseFromApprovedSet' && s.chapterId ? [...new Set(domain.list(s.chapterId).map(row=>row.voiceId).filter(Boolean))] : []);
+      const allowedVoiceIds = p.allowedVoiceIds || (p.voicePolicy !== 'chooseFromApprovedSet' && s.projectId ? [...new Set([...(s.chapterId?domain.list(s.chapterId).map(row=>row.voiceId):[]),...store.all('roles',s.projectId).map(role=>s.chapterId?domain.roleVoice(store.get('chapters',s.chapterId),role):role.voiceId)].filter(id=>id && store.maybe('voices',id)?.state==='active'))] : []);
       if (!Array.isArray(allowedVoiceIds) || allowedVoiceIds.some(v => store.get('voices', v).state !== 'active')) fail('批准音色范围无效');
       const materials = p.materials || ['text'];
       if (!Array.isArray(materials) || materials.some(k => !['text', 'reference', 'image'].includes(k)) || !materials.includes('text') || attachmentIds.length && !materials.includes('image')) fail('本次外发材料范围不包含这些截图或文字', 403);
@@ -121,7 +122,8 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
         workflowKinds:workflows(p.workflowKinds),stepLimit:limit(p.stepLimit,40,200)||40,allowedVoiceIds, voicePolicy: p.voicePolicy === 'chooseFromApprovedSet' ? p.voicePolicy : 'askMissing', materials,
         textMutationPolicy: p.textMutationPolicy === 'explicitSpecifiedEdit' ? p.textMutationPolicy : 'preserveExact', connection: model.identity(),productionConnection:productionConnection(),
         completionTarget: p.completionTarget === 'chapter-master' || mode === 'task' && p.completionTarget !== 'requested-actions' && /配好|整章|完成.{0,8}章|生成.{0,8}章|制作.{0,8}章/.test(content) ? 'chapter-master' : 'requested-actions',
-        allowedCapabilityIds: capabilities.list().filter(d => d.delegation === 'allowed-in-mandate').map(d => d.id), toolReads: [], readFields: [] };
+        allowedCapabilityIds: capabilities.list().filter(d => d.delegation === 'allowed-in-mandate').map(d => d.id), toolReads: [], readFields: [],
+        ...(s.chapterId && domain.list(s.chapterId).length ? {readingRange:readingRange(domain.list(s.chapterId))} : {}) };
     }
     if (attachmentIds.length && !run.materials.includes('image')) fail('这些截图不在当前任务批准的外发材料中，请先调整任务范围', 403);
     if (reconciliation(run).assistantRequest || reconciliation(run).steps.length) fail('请先对结果未确认的请求作出明确决定；改写消息不会重新发送',409);
@@ -207,11 +209,15 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
       for (const proposal of p.steps) {
         const def = capabilities.list().find(d => d.id === proposal.capabilityId);
         if (!def || def.delegation === 'human-only' || def.access === 'read') fail('计划包含未获准的执行能力，尚未执行', 403);
-        const preview = await capabilities.preview(proposal.capabilityId, proposal.input, run.binding);
+        const preview = await previewStep(proposal.capabilityId, proposal.input, run.binding);
         prepared.push({ id: uid(), runId: id, ordinal: steps(id).length + prepared.length, operationId: uid(), capabilityId: def.id, description: proposal.description || def.description, input: proposal.input, preview, cost: preview.cost, state: 'proposed', planVersion: run.planVersion });
       }
       const latest = store.get('assistantRuns',id); if (!activeRun(latest)) return;
       run.state = run.mandate && prepared.every(s => s.preview.delegation==='allowed-in-mandate' && covered(run,s)) ? 'executing' : 'awaitingApproval';
+      if (run.state==='executing') for (const step of prepared) {
+        try { assertAssistantEffects(step.preview.effects,{actorKind:'assistant_delegated',voicePolicy:run.voicePolicy,allowedVoiceIds:run.allowedVoiceIds}); }
+        catch(error) { run.error=error.message;if(error.effectKind==='reading-range'){run.state='awaitingApproval';}else{run.voiceQuestions=missingVoices(run,step.preview.effects.voiceAssignments);run.state='awaitingUser';step.state='blocked';step.error=error.message;} }
+      }
       store.transaction(() => { for (const s of prepared) saveStep(s); markConsumed(run); saveRun(run); message(run.sessionId,p.reply,{runId:id}); });
       if (run.state === 'executing') return advance(id);
     } else {
@@ -230,8 +236,29 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
         else { run.delivery={masterId:master.id,chapterId:c.id,arrangement:c.arrangement,review:'pending'}; run.summary='当前章试听母版已就绪，请试听检查。'; }
       }
       run.voiceQuestions = missingVoices(run);
+      if (run.state==='completed') assertReadingRange(run);
       store.transaction(()=>{markConsumed(run);saveRun(run);message(run.sessionId,run.summary,{runId:id});});
     }
+  }
+  async function previewStep(id,input,binding) {
+    const preview = await capabilities.preview(id,input,binding);
+    const chapter = binding.chapterId && store.get('chapters',binding.chapterId);
+    const payload = {...input,...(binding.projectId ? {projectId:binding.projectId} : {}),...(chapter ? {chapterId:chapter.id,revision:chapter.revision} : {})};
+    let action = id;
+    if (id==='operation.useVoice' && input.scope!=='library') {
+      action=input.segmentId?'segment.update':'role.update';
+      Object.assign(payload,{id:input.segmentId || input.roleId,voiceId:input.voiceId || input.audioId,apply:input.apply!==false,chapterOnly:input.updateDefault!==true,identityChosen:true});
+    }
+    if (action==='role.update') payload.entityRevision=store.get('roles',payload.id).revision ?? 1;
+    let apply;
+    if(id==='analysis.apply') {const draft=store.get('suggestions',input.id);Object.assign(payload,{draftVersion:draft.draftVersion});apply=()=>analysis.apply(payload,false);}
+    if(id==='experience.undo')apply=()=>experience.undo(payload);
+    preview.effects=domain.previewAssistantEffects(action,payload,input.audioId && action!==id ? input.audioId : undefined,apply);
+    return preview;
+  }
+  function assertReadingRange(run) {
+    if (!run.readingRange && run.binding.chapterId && domain.list(run.binding.chapterId).length) run.readingRange=readingRange(domain.list(run.binding.chapterId));
+    if (run.mode==='task' && run.readingRange && run.binding.chapterId && !same(run.readingRange,readingRange(domain.list(run.binding.chapterId)))) fail('当前朗读范围与本任务已确认的正文范围不一致，请核对；尚未完成托管任务',409);
   }
   function approvedOverrides(row) {
     const fields=row.input.id?Object.keys(row.input).filter(k=>k!=='id').map(k=>row.input.id+'.'+k):[];
@@ -257,7 +284,7 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
         }
         run.workflowKinds=[...new Set([...(run.workflowKinds||['dry']),...proposed.flatMap(s=>s.preview.requiredWorkflows||[])])];
         if (run.mode === 'task') run.mandate = { id: p.decisionId, planVersion: run.planVersion, at: now() };
-        for (const s of proposed) saveStep({ ...s, approvedBy: p.decisionId, state: 'approved' });
+        for (const s of proposed) saveStep({ ...s, approvedBy: p.decisionId, approvedEffects:s.preview.effects, state: 'approved' });
         run.state = 'executing';
       }
       run.revision++; saveRun(run);
@@ -267,15 +294,15 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
   function bindCreated(run,step,result) {
     const id=result.id||result.result?.id;
     if (step.capabilityId==='project.create' && !run.binding.projectId && store.maybe('projects',id)) run.binding={projectId:id,chapterId:null};
-    else if(step.capabilityId==='chapter.create' && !run.binding.chapterId && store.maybe('chapters',id)?.projectId===run.binding.projectId)run.binding.chapterId=id;
+    else if(step.capabilityId==='chapter.create' && !run.binding.chapterId && store.maybe('chapters',id)?.projectId===run.binding.projectId){run.binding.chapterId=id;if(domain.list(id).length)run.readingRange=readingRange(domain.list(id));}
     else return;
     const sessionRow=session(run.sessionId);Object.assign(sessionRow,run.binding);sessionRow.revision++;store.put('assistantSessions',sessionRow,run.binding.projectId);
     if(run.mandate)createGrant(run);
   }
-  function missingVoices(run) {
+  function missingVoices(run, assignments=[]) {
     if (!run.binding.chapterId) return [];
     const grouped = new Map(), voices=store.all('voices').filter(v=>v.state==='active').map(v=>v.id);
-    for (const segment of domain.list(run.binding.chapterId).filter(s=>!s.excluded && (!s.voiceId || store.maybe('voices',s.voiceId)?.state!=='active'))) {
+    for (const segment of domain.list(run.binding.chapterId).filter(s=>!s.excluded && (!s.voiceId || store.maybe('voices',s.voiceId)?.state!=='active' || assignments.some(a=>a.segmentId===s.id || !a.segmentId && a.roleId===s.roleId)))) {
       if (!grouped.has(segment.roleId)) grouped.set(segment.roleId,{roleId:segment.roleId,roleName:store.get('roles',segment.roleId).name,segmentIds:[],availableVoiceIds:voices});
       grouped.get(segment.roleId).segmentIds.push(segment.id);
     }
@@ -295,9 +322,11 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
       for (const row of steps(id).filter(s => ['proposed', 'approved','blocked'].includes(s.state))) {
         run = store.get('assistantRuns', id); if (closing || run.state !== 'executing') return;
         if (!row.approvedBy && (!run.mandate || !covered(run,row))) fail('此步骤需要新的具体范围确认', 403);
-        const fresh = ['audio.tail.repair','project.delete'].includes(row.capabilityId) ? {...row.preview,...capabilities.current(row.capabilityId,row.input,run.binding)} : await capabilities.preview(row.capabilityId, row.input, run.binding);
+        const fresh = ['audio.tail.repair','project.delete'].includes(row.capabilityId) ? {...row.preview,...capabilities.current(row.capabilityId,row.input,run.binding)} : await previewStep(row.capabilityId, row.input, run.binding);
         if (!row.retryDecision?.maintenanceScope && !same(depend(row.preview),depend(fresh))) { saveStep({...row,state:'stale',error:'相关对象已经改变，请重新核对此步骤'}); fail('提案等待期间相关目标已改变，旧确认不能执行；已有结果保留',409); }
-        if (row.capabilityId === 'operation.useVoice' && !row.approvedBy && (run.voicePolicy !== 'chooseFromApprovedSet' || !row.input.voiceId || !run.allowedVoiceIds.includes(row.input.voiceId))) fail('请先按角色选择声音，或批准从指定音色集合中自动选择', 403);
+        const effectContext={actorKind:row.approvedBy?'human_approved_proposal':'assistant_delegated',voicePolicy:run.voicePolicy,allowedVoiceIds:run.allowedVoiceIds,approvedEffects:row.approvedEffects};
+        try { assertAssistantEffects(fresh.effects,effectContext); }
+        catch(error) { if(error.effectKind==='voice'){run.voiceQuestions=missingVoices(run,fresh.effects.voiceAssignments);saveRun(run);}throw error; }
         if (row.input.text !== undefined && row.capabilityId === 'segment.update' && (!run.readFields.includes(row.input.id) || run.readSources?.[row.input.id]!==store.get('segments',row.input.id).text || !row.approvedBy || run.textMutationPolicy !== 'explicitSpecifiedEdit')) fail('正文修改须先完整读取并明确授权，原文已保留', 403);
         const latest = store.get('assistantRuns',id); if (!activeRun(latest) || latest.state!=='executing') return;
         if (row.capabilityId.startsWith('operation.') && row.capabilityId.includes('Generate') || row.capabilityId==='operation.generateSelection') {
@@ -305,7 +334,7 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
         }
         const step = saveStep({ ...row, preview: fresh, state: 'executing', startedAt: now() });
         const ctx = { actorKind: row.approvedBy ? 'human_approved_proposal' : 'assistant_delegated', operationId: step.operationId, runId: id, stepId: step.id, mandateId: run.mandate?.id,
-          workflowKinds:run.workflowKinds||['dry'],baseRevisions: fresh.baseRevisions, preview: fresh.preview, grantId: run.grantId, textMutationPolicy: row.approvedBy ? run.textMutationPolicy : 'preserveExact',
+          workflowKinds:run.workflowKinds||['dry'],baseRevisions: fresh.baseRevisions, preview: fresh.preview, grantId: run.grantId, textMutationPolicy: row.approvedBy ? run.textMutationPolicy : 'preserveExact',...effectContext,
           ...(run.productionRouteDecision?{resumeRoute:true}:{}),
           ...(row.retryDecision || {}),
           namedOverrides: row.approvedBy && row.namedOverrides || (row.approvedBy ? approvedOverrides(row) : []) };
@@ -317,6 +346,7 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
         run = store.get('assistantRuns', id);
         const stopped = ['paused', 'cancelled'].includes(run.state);
         bindCreated(run,step,result);
+        if (row.approvedBy && fresh.effects.readingRange) run.readingRange=fresh.effects.readingRange.after;
         const refs = resultRefs(result);if(step.capabilityId==='analysis.resume')refs.analysisId=result.id; step.resultRefs = refs;
         if(result.state==='partial'){step.state='needsReconciliation';step.error='已有清理结果保留，部分段落需要核对后继续';if(!stopped)run.state='awaitingUser';run.error=step.error;}
         else if (result.error) { step.state = result.outcome==='needsInput' ? 'blocked' : 'needsReconciliation'; step.error = result.error; if (!stopped) run.state = 'awaitingUser'; run.error = result.error; }
@@ -337,7 +367,7 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
     } finally { if (writing.get(key) === id) writing.delete(key); }
     run = store.get('assistantRuns', id);
     if (run.mode === 'task' && run.mandate || run.replanAfterSteps) { delete run.replanAfterSteps; run.state = 'planning'; saveRun(run); return plan(id); }
-    run.state = 'completed'; run.summary = '已完成所批准的操作，请核对结果记录。'; saveRun(run); message(run.sessionId, run.summary, { runId: id });
+    assertReadingRange(run);run.state = 'completed'; run.summary = '已完成所批准的操作，请核对结果记录。'; saveRun(run); message(run.sessionId, run.summary, { runId: id });
   }
   async function tick() {
     if (closing) return;
@@ -406,8 +436,8 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
       if(!p.roleVoiceChoices || typeof p.roleVoiceChoices!=='object'||Array.isArray(p.roleVoiceChoices)||!run.binding.chapterId)fail('角色选声格式无效');
       for(const [roleId,voiceId] of Object.entries(p.roleVoiceChoices)) {
         if(!domain.list(run.binding.chapterId).some(s=>s.roleId===roleId&&!s.excluded) || store.get('roles',roleId).projectId!==run.binding.projectId || store.get('voices',voiceId).state!=='active')fail('角色或声音已改变',409);
-        const input={roleId,voiceId,updateDefault:false},preview=await capabilities.preview('operation.useVoice',input,run.binding);
-        prepared.push({id:uid(),runId:id,ordinal:-100+prepared.length,operationId:uid(),capabilityId:'operation.useVoice',description:'为'+store.get('roles',roleId).name+'使用所选声音',input,preview,cost:preview.cost,state:'approved',namedOverrides:preview.preview.affectedSegments.flatMap(s=>['voiceId','voiceSource'].map(field=>s.id+'.'+field)),approvedBy:p.decisionId,planVersion:run.planVersion});
+        const input={roleId,voiceId,updateDefault:false},preview=await previewStep('operation.useVoice',input,run.binding);
+        prepared.push({id:uid(),runId:id,ordinal:-100+prepared.length,operationId:uid(),capabilityId:'operation.useVoice',description:'为'+store.get('roles',roleId).name+'使用所选声音',input,preview,approvedEffects:preview.effects,cost:preview.cost,state:'approved',namedOverrides:preview.preview.affectedSegments.flatMap(s=>['voiceId','voiceSource'].map(field=>s.id+'.'+field)),approvedBy:p.decisionId,planVersion:run.planVersion});
         run.allowedVoiceIds=[...new Set([...run.allowedVoiceIds,voiceId])];
       }
     }
@@ -445,6 +475,7 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
     store.transaction(()=>{if(old)saveStep({...old,state:'acknowledged'});if(next)saveStep(next);store.put('assistantDecisions',{id:p.decisionId,runId:id,request:p,actor:'human',at:now()},id);run.state=run.requiresNewMessage?'awaitingUser':'paused';run.revision++;delete run.error;if(run.requiresNewMessage)run.questions=['已保留现有结果；请发送新的指示后再继续，不会自动重发上次消息。'];saveRun(run);});return get(run.sessionId);
   }
   function control(id, p) {
+    if(session(store.get('assistantRuns', id).sessionId,false).state!=='active')fail('会话已归档，不能继续执行',409);
     if(p.action==='amend')return amend(id,p);
     if(p.action==='reconcile')return reconcile(id,p);
     const run = store.get('assistantRuns', id);
@@ -470,16 +501,28 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
   async function archive(id) {
     const s = session(id, false);
     for (const run of storedRuns(id)) if (!terminal.has(run.state)) control(run.id, { action: 'stop', revision: run.revision });
-    s.state = 'archived'; s.revision++; store.put('assistantSessions', s, s.projectId || '');
+    if(s.state!=='archived'){s.state = 'archived'; s.revision++; store.put('assistantSessions', s, s.projectId || '');}
     await Promise.allSettled(storedRuns(id).map(r => pending.get(r.id)).filter(Boolean));
+    return get(id);
+  }
+  async function removeContent(id, p) {
+    const selected=session(id,false);
+    if(p?.sessionId!==id || p.confirmed!==true)fail('请明确确认删除此会话的对话内容',403);
+    if(selected.contentDeletion?.revision===p.revision)return get(id);
+    if(p.revision!==selected.revision)fail('会话已改变，请重新核对删除范围',409);
+    await archive(id);
     await attachments.removeSession(id);
     store.transaction(() => {
       for (const m of store.all('assistantMessages', id)) store.remove('assistantMessages', m.id);
       for(const call of store.all('settings').filter(r=>r.id.startsWith('assistant-call:')&&r.sessionId===id)){delete call.response;delete call.error;delete call.messageIds;delete call.attachmentIds;delete call.materials;store.put('settings',call);}
       for (const r of storedRuns(id)) {
-        r.objective = '已删除会话'; delete r.request; delete r.toolReads;delete r.readSources; delete r.view; delete r.summary; delete r.questions; saveRun(r);
-        for (const s of steps(r.id)) { delete s.input; delete s.preview; delete s.description; saveStep(s); }
+        const kept=pick(r,['id','sessionId','binding','mode','state','revision','budget','planVersion','connection','productionConnection','grantId','grantHistory','createdAt','updatedAt','delivery']);
+        if(r.request)kept.request=pick(r.request,['id','state','at','connection','providerRequestId','usage','receivedAt','responseAt','firstByteAt','consumedAt','decisionId','resolution']);
+        saveRun({...kept,objective:'已删除对话内容'});
+        for (const step of steps(r.id)) saveStep({...pick(step,['id','runId','ordinal','operationId','capabilityId','state','cost','resultRefs','planVersion','approvedBy','startedAt','completedAt']),description:'已删除提案详情',...(step.error?{error:'此步骤结果仍需核对，对话详情已删除'}:{})});
+        for(const decision of store.all('assistantDecisions',r.id)){delete decision.request;store.put('assistantDecisions',decision,r.id);}
       }
+      const s=session(id,false);s.title='已删除对话内容';s.contentDeletion={revision:p.revision,at:now()};s.revision++;store.put('assistantSessions',s,s.projectId||'');
     });
     return get(id);
   }
@@ -503,7 +546,7 @@ export function createAssistant({ store, domain, worker, analysis, experience, c
     }
   }
   const busy = projectId => [...pending.keys()].some(id => store.maybe('assistantRuns', id)?.binding?.projectId === projectId) || storedRuns().some(r => r.binding?.projectId === projectId && ['executing', 'planning', 'waitingJobs'].includes(r.state));
-  return { model, attachments, capabilities, create, get, send, approve, control, archive, tick, recover, busy,
+  return { model, attachments, capabilities, create, get, send, approve, control, archive, removeContent, tick, recover, busy,
     list: projectId => storedSessions().filter(s => !projectId || s.projectId === projectId),
     get active() { return pending.size + attachments.active; },
     stop() { closing = true; attachments.stop(); },
