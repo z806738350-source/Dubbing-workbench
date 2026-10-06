@@ -9,9 +9,34 @@ export type TaskGrant = {
   textReserved: number; audioReserved: number; expiresAt: string | null; revoked: boolean;
 };
 
-export default function TaskAuthorization({ projectId, chapterId, label, step = "audio", steps, requests = 1, voiceIds = [], model, onReady, disabled = false }: {
+export type TaskIntent = {projectId:string;chapterId?:string;step:"audio"|"text";steps:string[];requests:number;minimumRequests?:number;voiceIds?:string[];model?:string};
+export async function ensureTaskGrant(intent:TaskIntent):Promise<string> {
+  const voices=[...(intent.voiceIds||[])].sort(),now=Date.now(),workspace=sessionStorage.getItem("workbench-workspace")||"";
+  const key="workbench-grant/"+encodeURIComponent(workspace)+"/"+intent.projectId+"/"+(intent.chapterId||"project")+"/"+intent.steps.join(",");
+  const {grants}=await api<{grants:TaskGrant[]}>("/projects/"+intent.projectId+"/experience");
+  if((sessionStorage.getItem("workbench-workspace")||"")!==workspace)throw new Error("工作区已变化，本次请求未发送。请在目标工作区重新发起。");
+  const scoped=(grants||[]).filter(grant=>!grant.revoked&&(!grant.chapterId||grant.chapterId===intent.chapterId)&&(!grant.expiresAt||Date.parse(grant.expiresAt)>now)&&intent.steps.every(step=>grant.steps.includes(step))&&(!intent.model||grant.models[intent.step]===intent.model));
+  const available=(grant:TaskGrant)=>intent.step==="text"?grant.textLimit-grant.textUsed-grant.textReserved:grant.audioLimit-grant.audioUsed-grant.audioReserved;
+  const current=scoped.find(grant=>grant.materials.includes("text")&&(!voices.length||grant.materials.includes("reference"))&&voices.every(id=>grant.voiceIds.includes(id))&&available(grant)>=(intent.minimumRequests??intent.requests));
+  if(current){
+    const pending=localStorage.getItem(key);
+    if(pending&&JSON.parse(pending).payload?.grantId===(current.grantId||current.id))localStorage.removeItem(key);
+    return current.grantId||current.id;
+  }
+  if(scoped.length)throw Object.assign(new Error("本次范围或剩余额度不足，请决定是否允许这次具体请求；原有上限保持。"),{code:"task-grant-needed",requests:intent.requests,available:Math.max(...scoped.map(available))});
+  const signature=JSON.stringify({...intent,voiceIds:voices}),raw=localStorage.getItem(key),prior=raw?JSON.parse(raw) as {intent:string;payload:Record<string,unknown>}:null;
+  if(prior&&prior.intent!==signature)throw new Error("上一次授权回执尚未确认，请先恢复原操作，不能扩大范围。");
+  const payload=prior?.payload||{grantId:crypto.randomUUID(),projectId:intent.projectId,...(intent.chapterId?{chapterId:intent.chapterId}:{}),steps:intent.steps,materials:voices.length?["text","reference"]:["text"],voiceIds:voices,textLimit:intent.step==="text"?intent.requests:0,audioLimit:intent.step==="audio"?intent.requests:0,...(intent.step==="text"&&intent.model?{textModel:intent.model}:{}),expiresAt:new Date(now+24*60*60*1000).toISOString()};
+  localStorage.setItem(key,JSON.stringify({intent:signature,payload}));
+  const grant=await api<TaskGrant>("/experience/grant",payload);
+  localStorage.removeItem(key);
+  if((sessionStorage.getItem("workbench-workspace")||"")!==workspace)throw new Error("工作区已变化，原授权保留在原工作区，本次制作未发送。");
+  return grant.grantId||grant.id;
+}
+
+export default function TaskAuthorization({ projectId, chapterId, label, step = "audio", steps, requests = 1, voiceIds = [], model, onReady, onAuthorized, disabled = false }: {
   projectId: string; chapterId?: string; label: string; step?: "audio" | "text";
-  steps?: string[]; requests?: number; voiceIds?: string[]; model?: string; onReady: (grantId: string | null) => void; disabled?: boolean;
+  steps?: string[]; requests?: number; voiceIds?: string[]; model?: string; onReady: (grantId: string | null) => void; onAuthorized?:(grantId:string)=>Promise<void>; disabled?: boolean;
 }) {
   const allowedSteps = steps || (step === "text" ? ["extract", "director", "scene"] : ["generate", "unit-generate", "voice-create"]);
   const [grants, setGrants] = useState<TaskGrant[]>([]);
@@ -53,6 +78,7 @@ export default function TaskAuthorization({ projectId, chapterId, label, step = 
       localStorage.removeItem(key);
       setGrants(value => [grant, ...value.filter(item => item.id !== grant.id)]);
       onReady(grant.grantId || grant.id);
+      await onAuthorized?.(grant.grantId || grant.id);
     } catch (error) {
       const status = (error as { status?: number }).status;
       if (status && status >= 400 && status < 500 && status !== 409) localStorage.removeItem(key);
@@ -72,8 +98,8 @@ export default function TaskAuthorization({ projectId, chapterId, label, step = 
     </> : <>
       <p>{label}：将向{model || "已配置的" + (step === "text" ? "文本模型" : "声音模型")}发送本次文字{voiceIds.length ? "和所选参考录音" : ""}，用于{step === "text" ? "分析与建议" : "生成声音"}。</p>
       <Field label={step === "text" ? "允许文本请求次数" : "允许音频请求次数"}><input type="number" min={requests} max={1000} value={limit} disabled={disabled || pending} onChange={event => setLimit(event.target.value)} /></Field>
-      <p className="hint">仅{chapterId ? "当前章节" : "当前项目"}，24小时有效。金额以供应商账单为准；授权不会自动开始生成。</p>
-      <button className="button secondary" disabled={disabled || pending} onClick={() => void authorize()}>{pending ? "正在保存授权…" : "允许上述范围"}</button>
+      <p className="hint">仅{chapterId ? "当前章节" : "当前项目"}，24小时有效。金额以供应商账单为准；{onAuthorized?"提交后直接继续本次操作。":"授权不会自动开始生成。"}</p>
+      <button className="button secondary" disabled={disabled || pending} onClick={() => void authorize()}>{pending ? "正在处理…" : onAuthorized?"允许上述范围并继续":"允许上述范围"}</button>
     </>}
     {error && <p className="error-inline" role="alert">{error}</p>}
   </section>;

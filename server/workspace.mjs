@@ -224,7 +224,11 @@ export function projectExportFile(store, { chapterId, arrangement, id, format })
 }
 
 export async function revealExport(store, id, run = promisify(execFile)) {
-  const record = store.get('exports', id);
+  return revealOutput(store,'export',id,run);
+}
+export async function revealOutput(store, kind, id, run = promisify(execFile)) {
+  if (!['master','export'].includes(kind)) fail('成品类型无效');
+  const record = store.get(kind==='master'?'masters':'exports', id);
   if (!record.path) fail('成品文件已不存在，请重新导出', 404);
   const root = realpathSync(store.directory), file = resolve(root, record.path);
   let actual, info;

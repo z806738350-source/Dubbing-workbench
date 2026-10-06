@@ -19,7 +19,7 @@ import { createExperience } from './experience.mjs';
 import { createActionExecutor } from './actions.mjs';
 import { createAssistant } from './assistant/service.mjs';
 import { previewTailRepair, applyTailRepair } from './tail-maintenance.mjs';
-import { workspaceDirectory, workspaceIdentity, workspaceConfig as defaultWorkspaceConfig, copyWorkspace, saveWorkspaceLocation, recoverProjectFolders, chooseWorkspaceDirectory, readRuntime, workspaceDiagnostics, revealExport } from './workspace.mjs';
+import { workspaceDirectory, workspaceIdentity, workspaceConfig as defaultWorkspaceConfig, copyWorkspace, saveWorkspaceLocation, recoverProjectFolders, chooseWorkspaceDirectory, readRuntime, workspaceDiagnostics, revealExport, revealOutput } from './workspace.mjs';
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 if (existsSync(join(root, ".env.kunpo")))
@@ -75,7 +75,6 @@ export async function startServer({
     analysis = createAnalysis(store, domain, config);
     experience = createExperience(store,domain,worker,analysis,config);
     await worker.recover();
-    analysis.recover();
     audioTools = await toolsAvailable();
     if (audioTools) {
       const audios = store.all("audios");
@@ -145,6 +144,7 @@ export async function startServer({
       activity: (_action, payload) => ({ activeRequests: Math.max(1, activeRequests + (assistant?.active || 0)), referenceReads: referenceReads.size, attachmentWrites: assistant?.attachments.busy(payload.id) }) });
     assistant = createAssistant({ store, domain, worker, analysis, experience, config, executeAction, repairAudio, fetchImpl: assistantFetchImpl });
     assistant.recover();
+    analysis.recover();
   }
   connectAssistant();
   async function serveFile(req, res, file, type) {
@@ -256,6 +256,7 @@ export async function startServer({
         if (resource === 'sessions' && !id && req.method === 'POST') return send(res, 200, assistant.create(await body(req)));
         if (resource === 'sessions' && id && !action && req.method === 'GET') return send(res, 200, assistant.get(id));
         if (resource === 'sessions' && id && !action && req.method === 'DELETE') return send(res, 200, await assistant.archive(id));
+        if (resource === 'sessions' && id && action === 'deletion-plan' && req.method === 'GET') return send(res, 200, assistant.deletionPlan(id));
         if (resource === 'sessions' && id && action === 'content-delete' && req.method === 'POST') return send(res, 200, await assistant.removeContent(id, await body(req)));
         if (resource === 'sessions' && id && action === 'messages' && req.method === 'POST') return send(res, 200, await assistant.send(id, await body(req)));
         if (resource === 'runs' && id && action === 'decision' && req.method === 'POST') return send(res, 200, await assistant.approve(id, await body(req)));
@@ -302,6 +303,24 @@ export async function startServer({
       if (req.method === 'GET' && path === '/api/workspace/diagnostics') return send(res,200,workspaceDiagnostics(store));
       if (req.method === 'POST' && /^\/api\/exports\/[^/]+\/reveal$/.test(path))
         return send(res, 200, await revealExport(store, decodeURIComponent(path.split('/')[3])));
+      if (req.method === 'POST' && /^\/api\/outputs\/(master|export)\/[^/]+\/reveal$/.test(path)) {
+        const p=await body(req),kind=path.split('/')[3],id=decodeURIComponent(path.split('/')[4]);
+        if (Object.keys(p).some(key=>!['chapterId','projectId'].includes(key))) fail('成品定位参数无效');
+        const record=store.get(kind==='master'?'masters':'exports',id),chapter=store.get('chapters',p.chapterId);
+        if (record.chapterId!==chapter.id || p.projectId && p.projectId!==chapter.projectId) fail('成品不属于当前任务范围',403);
+        return send(res,200,await revealOutput(store,kind,id));
+      }
+      if (req.method === 'GET' && /^\/api\/chapters\/[^/]+\/(performance-coverage|outputs)$/.test(path)) {
+        const chapterId=decodeURIComponent(path.split('/')[3]),p=Object.fromEntries(new URL(req.url,`http://${host}`).searchParams);
+        if(path.endsWith('/performance-coverage')) {
+          if(Object.keys(p).some(key=>!['ids','analysisId'].includes(key))) fail('表演覆盖查询参数无效');
+          if(p.analysisId && store.get('suggestions',p.analysisId).chapterId!==chapterId) fail('分析不属于本章',403);
+          return send(res,200,analysis.coverage(chapterId,{...p,...(p.ids?{ids:p.ids.split(',')}: {})}));
+        }
+        if(Object.keys(p).some(key=>!['projectId','jobId','operationId','format','arrangement','limit','cursor'].includes(key)))fail('成品查询参数无效');
+        for(const key of ['arrangement','limit'])if(p[key]!==undefined)p[key]=Number(p[key]);
+        return send(res,200,domain.outputs({...p,chapterId}));
+      }
       if (req.method === 'GET' && /^\/api\/projects\/[^/]+\/deletion-plan$/.test(path))
         return send(res, 200, domain.deletionPlan({id:path.split('/')[3]}));
       if (req.method === 'GET' && /^\/api\/chapters\/[^/]+\/structural-repair-plan$/.test(path))
@@ -329,6 +348,7 @@ export async function startServer({
       if (req.method === 'GET' && path.startsWith('/api/operations/')) return send(res,200,experience.get(decodeURIComponent(path.split('/').pop())));
       if (req.method === 'POST' && path === '/api/operations/plan') return send(res,200,experience.plan(await body(req)));
       if (req.method === 'POST' && path === '/api/operations') return send(res,200,await experience.run(await body(req)));
+      if (req.method === 'POST' && path === '/api/experience/undo-performance') return send(res,200,experience.undoPerformance(await body(req)));
       if (req.method === 'POST' && /^\/api\/experience\/(policy|grant|revoke|undo|unprotect)$/.test(path)) return send(res,200,experience[path.split('/').pop()](await body(req)));
       if (req.method === "POST" && path === "/api/enhancement-preview")
         return send(res, 200, domain.enhancement.preview(await body(req)));
@@ -337,7 +357,7 @@ export async function startServer({
       if (req.method === "POST" && path === "/api/templates/preview")
         return send(res,200,domain.previewTemplate(await body(req)));
       if (req.method === "POST" && path === "/api/analysis")
-        return send(res, 200, await analysis.start(await body(req)));
+      {const p=await body(req);return send(res, 200, await analysis.start(p,p.includePerformance===false?{actorKind:'human_direct',performanceBasic:{source:{kind:'ui',id:p.operationId || 'direct-analysis'},segmentIds:p.ids}}:undefined));}
       if (req.method === "POST" && path === "/api/analysis/apply")
         return send(res, 200, analysis.apply(await body(req)));
       if (req.method === "POST" && path === "/api/analysis/reuse")

@@ -1,3 +1,4 @@
+import { assertCreationScope } from './scope.mjs';
 import { fail, same } from '../store.mjs';
 import { createActionExecutor } from '../actions.mjs';
 import { saveCandidateVoice } from '../audio.mjs';
@@ -43,7 +44,7 @@ function action(name, description, properties, required = ['id'], options = {}) 
 }
 const groupFields = { ids, guidance: text(2000) };
 const generationFields = { ids, unitId: id, mode, actionKind: values('fillMissing', 'updateSelected', 'redoRejected', 'forceRegenerate') };
-const analysisFields = { analysisKind: values('extract', 'director', 'scene'), ids, unitId: id, splitOnly: bool, autoApply: bool, source: text(1000000) };
+const analysisFields = { analysisKind: values('extract', 'director', 'scene'), ids, unitId: id, splitOnly: bool, autoApply: bool, source: text(1000000), includePerformance: bool, performanceMode: values('initial','fillMissing','replaceAi','selectedRewrite'), repairOf: id };
 action('project.create', '新建项目及旁白角色', { name: string(100) }, ['name'], { chapter: false, help: 'projects' });
 action('project.rename', '重命名当前项目及其文件夹', { id, name: string(100) }, ['id', 'name'], { chapter: false, help: 'projects' });
 action('project.delete', '删除已单独确认范围的项目', { id }, ['id'], { chapter: false, access: 'destructive', delegation: 'explicit-proposal', help: 'delete' });
@@ -90,7 +91,7 @@ for (const [name, description, fields, required, options] of [
 ]) define('operation.' + name, description, fields, required, { operation: name, handler: 'experience.run', sourceFile: 'server/experience.mjs', access: options.cost === 'local-only' ? 'local-write' : 'paid', ...options });
 define('generation.plan', '免费核对所选生成范围及请求数', generationFields, ['ids'], { access: 'read', handler: 'experience.plan', help: 'generation' });
 define('analysis.plan', '免费核对分析范围及文本请求数', analysisFields, [], { access: 'read', handler: 'analysis.plan', help: 'analysis' });
-define('analysis.resume', '继续明确未完成的分析批次', { id, batchIds: ids, replace: bool }, ['id'], { target: 'suggestions', handler: 'analysis.resume', access: 'paid', cost: 'selected-analysis-batches', help: 'tasks' });
+define('analysis.resume', '继续明确未完成的分析批次', { id, batchIds: ids, repairIds: ids, replace: bool }, ['id'], { target: 'suggestions', handler: 'analysis.resume', access: 'paid', cost: 'selected-analysis-batches', help: 'tasks' });
 define('analysis.edit', '校对已有分析中的一条标注', { id, batchId: id, itemId: id, remove: bool, item: object({ from: number(0, 1000000, true), to: number(0, 1000000, true), segmentId: id, roleId: id, newRoleKey: id, newRole: string(100), type: values('narration', 'dialogue', 'thought'), performance: text(2000), evidence: values('原文明示', '上下文推断', '创作建议', '用户补充'), evidenceRefs: array(number(0, 1000000, true)), reason: text(3000), uncertain: bool, unitId: id, ...Object.fromEntries(Object.entries(eventFields).filter(([key]) => !['evidence', 'state', 'transition'].includes(key))) }) }, ['id', 'batchId'], { target: 'suggestions', handler: 'analysis.edit', help: 'analysis' });
 define('analysis.apply', '采用当前有效建议或AI语义拆分', { id, selected: ids, replaceConfirmed: bool, inheritPerformanceConfirmed: bool }, ['id'], { target: 'suggestions', handler: 'analysis.apply', help: 'analysis' });
 for (const name of ['previewReuse', 'reuse']) define('analysis.' + name, name === 'reuse' ? '把历史场景建议加入当前场景' : '免费预检历史场景建议', { id, unitId: id, ...(name === 'reuse' ? { selected: ids } : {}) }, ['id', 'unitId', ...(name === 'reuse' ? ['selected'] : [])], { target: 'suggestions', handler: 'analysis.' + name, access: name === 'reuse' ? 'local-write' : 'read', help: 'suggestions' });
@@ -100,6 +101,8 @@ define('experience.revoke', '撤回指定任务授权，停止尚未外发的请
 define('job.master', '免费准备整章试听母版', {}, [], { handler: 'worker.submit', help: 'playback' });
 define('job.voice-test', '用已有参考朗读指定测试文字', { voiceId: id, text: string(300) }, ['voiceId', 'text'], { handler: 'worker.submit', chapter: false, access: 'paid', cost: 'one-audio-request', help: 'voices' });
 define('voice.save-candidate', '免费把合格候选保存到音色库', { audioId: id, name: string(100) }, ['audioId', 'name'], { chapter: false, handler: 'saveCandidateVoice', help: 'voice-create' });
+define('read.performanceCoverage','免费读取当前章有效台词的表演覆盖、保留与缺口',{ids,analysisId:id},[],{access:'read',handler:'analysis.coverage',help:'analysis'});
+define('read.outputs','发现本章真实母版与成品，按任务、操作、格式和编排查询',{jobId:id,operationId:id,format:values('wav','mp3'),arrangement:number(0,Number.MAX_SAFE_INTEGER,true),cursor:string(100),limit:pageFields.limit},[],{access:'read',handler:'bounded outputs',help:'export'});
 define('export.reveal', '在本机访达中定位已保存成品', { id }, ['id'], { target: 'exports', handler: 'revealExport', access: 'ui-only', help: 'export' });
 define('audio.tail.repair','免费预览并清理所选纯人声的尾部异常，保留原件',{unitIds:ids},['unitIds'],{handler:'repairAudio',help:'original-audio'});
 define('audio.original.restore', '免费恢复所选处理版对应的真实供应商原件', { id, mode, audioId: id, restoreSettings: bool }, ['id', 'mode', 'audioId'], { target: 'units', handler: 'unit.select-result / unit.restore', help: 'original-audio' });
@@ -149,9 +152,15 @@ export function validateCapabilityInput(schema, value, path = '参数') {
   } else if (typeof value !== 'number' || !Number.isFinite(value) || schema.type === 'integer' && !Number.isSafeInteger(value) || value < schema.minimum || value > schema.maximum) fail(path + '数值无效');
 }
 
+
 export function createCapabilities({ store, domain, worker, analysis, experience, config = {}, executeAction,repairAudio }) {
   const act = executeAction || createActionExecutor({ store, domain, experience });
   const definition = id => { const found = definitions.find(item => item.id === id); if (!found) fail('未注册的助手能力', 400); return found; };
+  function outputs(input={},scope={}) {
+    const {chapter}=scopedChapter(store,scope);if(!chapter)fail('成品发现需要明确绑定章节',403);
+    if(input.jobId&&store.get('jobs',input.jobId).chapterId!==chapter.id)fail('制作任务不属于本次章节',403);
+    return domain.outputs({...input,chapterId:chapter.id});
+  }
   function usesCurrentVoice(input,bound) {
     if(!bound.chapter || !input.voiceId || input.updateDefault || input.scope==='library' || input.apply===false)return false;
     const voice=store.maybe('voices',input.voiceId),rows=domain.list(bound.chapter.id).filter(s=>!s.excluded && (input.segmentId?s.id===input.segmentId:s.roleId===input.roleId));
@@ -231,6 +240,8 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     const { def, bound, target, p } = prepare(id, input, scope);
     if (def.access !== 'read') fail('该能力不是读取操作');
     if (id === 'help.search') return getHelp(input);
+    if (id==='read.performanceCoverage') return analysis.coverage(bound.chapter.id,input);
+    if (id==='read.outputs') return outputs(input,scope);
     if (id === 'generation.plan') return experience.plan({ ...p, kind: 'generateSelection' });
     if (id === 'analysis.plan') return analysis.plan({ ...p, kind: input.analysisKind });
     if (id === 'analysis.previewReuse') return analysis.previewReuse(p);
@@ -241,7 +252,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
       if (projectId !== scope.projectId || scope.chapterId && (request.chapterId || request.data?.chapterId) !== scope.chapterId) fail('操作不属于本次任务范围', 403);
       return pick(operation, ['operationId', 'kind', 'outcome', 'jobIds', 'createdObjectIds', 'errorStatus']);
     }
-    if (id === 'read.segment') return pick(target, ['id', 'chapterId', 'order', 'text', 'type', 'roleId', 'voiceId', 'performance', 'config', 'template', 'excluded', 'deletion', 'protectedFields', 'decisions', 'current', 'review']);
+    if (id === 'read.segment') return pick(target, ['id', 'chapterId', 'order', 'text', 'type', 'roleId', 'voiceId', 'performance','performanceSource','performanceDecision','performanceBasis', 'config', 'template', 'excluded', 'deletion', 'protectedFields', 'decisions', 'current', 'review']);
     if (id === 'read.voice') return pick(target, ['id', 'name', 'state', 'duration', 'revision', 'observations', 'inspection', 'sampleAudioId', 'sourceAudioId']);
     if (id === 'read.audio') return pick(target, ['id', 'chapterId', 'targetKind', 'targetId', 'duration', 'createdAt', 'review', 'processingVersion', 'sourceAudioId']);
     if (id === 'read.attempts') return store.all('attempts', target.id).map(a => pick(a, ['id', 'jobId', 'status', 'targetKind', 'targetId', 'unitId', 'mode', 'adopted', 'phase', 'createdAt']));
@@ -292,7 +303,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     }
     if (id === 'read.chapter') {
       const c = domain.chapter(bound.chapter.id);
-      const segmentFields = ['id', 'order', 'text', 'type', 'roleId', 'voiceId', 'performance', 'excluded', 'deletion', 'configurationDecided', 'protectedFields'];
+      const segmentFields = ['id', 'order', 'text', 'type', 'roleId', 'voiceId', 'performance','performanceSource','performanceDecision','performanceBasis', 'excluded', 'deletion', 'configurationDecided', 'protectedFields'];
       const unitFields = ['id', 'members', 'kind', 'mode', 'state', 'revision', 'readiness', 'variants'];
       const rows = input.deleted ? c.deletedSegments : c.segments, memberIds = new Set(rows.map(s => s.id));
       const segments = pageRecords(rows.map(s => pick(s, segmentFields)), input, segmentFields, 24000);
@@ -304,15 +315,16 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     fail('尚未实现此读取适配');
   }
 
-  async function preview(id, input = {}, scope = {}) {
+  async function preview(id, input = {}, scope = {}, executionContext = {}) {
     const { def, bound, target, unit, p, versions, dependencies, requiredWorkflows } = prepare(id, input, scope);
+    if (['project.create','chapter.create'].includes(id)) assertCreationScope(store,id,p,executionContext);
     if (def.delegation === 'human-only') return { capabilityId: id, delegation: def.delegation, description: def.description, helpRefs: def.helpRefs };
     let detail;
     if(id==='segment.update'||id==='role.update'||id==='chapter.update'){const before=target||bound.chapter;detail={id:before.id,changes:Object.entries(input).filter(([key])=>key!=='id').map(([field,after])=>({field,before:before[field]??null,after}))};}
     else if (['segment.delete', 'segment.restore-deleted'].includes(id)) detail = { segments: input.ids.map(segmentId => pick(store.get('segments', segmentId), ['id', 'text', 'excluded', 'deletion'])) };
     else if (id==='audio.tail.repair') {if(!repairAudio)fail('尾部维护接口尚未就绪');detail=await repairAudio({phase:'preview',projectId:scope.projectId,chapterId:scope.chapterId,unitIds:input.unitIds});}
     else if (id === 'operation.generateSelection') detail = experience.plan({ ...p, kind: 'generateSelection' });
-    else if (id === 'operation.prepareChapter') detail = analysis.plan({ ...p, kind: p.analysisKind });
+    else if (id === 'operation.prepareChapter') detail = analysis.plan({ ...p, kind: p.analysisKind },executionContext);
     else if (['unit.create', 'operation.groupAndGenerate'].includes(id)) detail = domain.enhancement.preview({ ...p, kind: 'group' });
     else if (['unit.restore', 'unit.dissolve', 'unit.template'].includes(id)) detail = domain.enhancement.preview({ ...p, kind: id.split('.')[1] === 'dissolve' ? 'dissolve' : id.split('.')[1] === 'template' ? 'template' : 'restore' });
     else if (id === 'segment.template') detail = domain.previewTemplate(p);
@@ -330,6 +342,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
 
   async function execute(id, input = {}, scope = {}, executionContext = {}) {
     const { def, bound, target, p, versions, requiredWorkflows } = prepare(id, input, scope);
+    if (['project.create','chapter.create'].includes(id)) assertCreationScope(store,id,p,executionContext);
     if (def.access === 'read') return read(id, input, scope);
     if (def.delegation === 'human-only') fail('此项必须由用户通过安全界面操作', 403);
     if (!['human_approved_proposal', 'assistant_delegated'].includes(executionContext.actorKind) || !executionContext.operationId) fail('缺少可信助手执行上下文', 403);
@@ -395,5 +408,5 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     if (id === 'export.reveal') { await revealExport(store, target.id); return { exportId: target.id, revealed: true }; }
     fail('此能力尚未接入受控执行器');
   }
-  return { list: () => definitions.map(({ action, operation, target, chapter, ...item }) => item), read, preview, execute, dependencies:(id,input,scope)=>prepare(id,input,scope).dependencies, current:(id,input,scope)=>{const p=prepare(id,input,scope);return {baseRevisions:p.versions,dependencies:p.dependencies};} };
+  return { outputs, list: () => definitions.map(({ action, operation, target, chapter, ...item }) => item), read, preview, execute, dependencies:(id,input,scope)=>prepare(id,input,scope).dependencies, current:(id,input,scope)=>{const p=prepare(id,input,scope);return {baseRevisions:p.versions,dependencies:p.dependencies};} };
 }

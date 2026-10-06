@@ -87,10 +87,11 @@ export interface Chapter {
   sourceVersion?: number;
 }
 export interface Segment {
+  identityPending?:boolean;
   configurationDecided?: boolean;
   analysisOrigin?: {draftId:string;itemId:string};
   protectedFields?: string[];
-  decisions?: Record<string, {source:"human"|"inherited"|"policy_ai"|"system";state?:"accepted"|"needsDecision";values:unknown;at:string;policyVersion?:number;draftId?:string}>;
+  decisions?: Record<string, {source:"human"|"human_accepted_ai"|"inherited"|"policy_ai"|"system";state?:"accepted"|"needsDecision";values:unknown;at:string;policyVersion?:number;draftId?:string}>;
   model?: string;
   id: string;
   chapterId: string;
@@ -146,6 +147,18 @@ export interface ExperienceGrant {
   revision: number;
 }
 export interface ExperiencePolicy {projectId:string;mode:"smart"|"review";revision:number}
+export interface PerformanceCoverage {
+  chapterId:string;chapterRevision:number;sourceVersion:number;analysisContractVersion:string;
+  eligibleCount:number;coveredCount:number;missingIds:string[];reviewRequiredIds:string[];waivedBasicIds:string[];
+  excludedCount:number;deletedCount:number;retiredCount:number;
+  currentRun:{writtenIds:string[];unchangedIds:string[];preservedHumanIds:string[];skippedChangedIds:string[];repairedIds:string[]};
+  phase:"analyzing"|"validating"|"repairing"|"saving"|"complete"|"partial"|"review"|"ready"|"needsInput"|"needsAttention";
+  affectedUnitIds?:string[];changeSetId?:string;uninitialized?:boolean;
+}
+export interface PerformanceReceipt {
+  writtenIds:string[];unchangedIds:string[];preservedHumanIds:string[];skippedChangedIds:string[];repairedIds:string[];
+  changeSetId?:string;coverage:PerformanceCoverage;affectedUnitIds?:string[];
+}
 export interface ExperienceState {policy:ExperiencePolicy;grants:ExperienceGrant[];changes:{changeId:string;chapterId:string;undoneAt?:string}[]}
 export interface OperationResult<T = unknown> {
   operationId: string;
@@ -300,6 +313,7 @@ export interface GenerationUnit {
 }
 export interface ActionReadiness {allowed:boolean;blockers:{code:string;scope:{unitId?:string;memberIds?:string[];mode?:"dry"|"scene"};message:string;resolution:string;attemptIds?:string[]}[];warnings:{code:string;message:string}[]}
 export interface ChapterDetail extends Chapter {
+  performanceCoverage?:PerformanceCoverage;
   outputDirectory: string;
   arrangementIssues?: string[];
   reviewItems?: {id:string;audioId:string|null;basis:Record<string,unknown>}[];

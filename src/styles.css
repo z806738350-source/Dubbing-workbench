@@ -2124,6 +2124,12 @@ input[type="range"]::-moz-range-thumb {
 .draft-notice.saved { background:transparent; color:var(--color-muted); padding:7px 16px; }
 .analysis-prepare { padding:16px; }
 .analysis-prepare > .hint { margin:10px 0; line-height:1.7; }
+.analysis-summary { flex-wrap:wrap; }
+.analysis-prepare .button-row { flex-wrap:wrap; }
+.analysis-prepare .button-row > * { min-width:0; max-width:100%; }
+.analysis-prepare .select-trigger { white-space:normal; }
+.script-row .performance { max-height:3.2em; overflow:hidden; overflow-wrap:anywhere; }
+.script-row.selected .performance { max-height:none; }
 .analysis-policy { margin-block:12px; }
 .analysis-policy button[aria-pressed="true"] { background:var(--color-paper); color:var(--color-ink); box-shadow:0 1px 3px var(--color-overlay); }
 .issue-judgment { margin:12px 0; padding:12px; background:var(--color-canvas); border-radius:var(--radius-sm); }

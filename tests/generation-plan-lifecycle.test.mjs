@@ -21,13 +21,14 @@ const chapter=(revision=4,id='chapter')=>({id,projectId:'project',revision,arran
 const plan=(revision=4,ids=['one'])=>({chapterId:'chapter',revision,arrangement:1,unitIds:ids,memberIds:ids,units:ids.map(id=>({unitId:id,members:[id],mode:'dry',reuse:false,audioId:null})),textRequests:0,audioRequests:ids.length});
 
 function fixture(){
-  const calls={api:[],paid:[],chapters:[],plans:[],errors:[],notices:[],refresh:0};
+  const calls={api:[],paid:[],grants:[],chapters:[],plans:[],errors:[],notices:[],refresh:0};
   const waiting=new Map();
-  const env={chapter:chapter(),chapterRef:{current:'chapter'},generationIntent:{current:0},generationPlan:{plan:plan(),ids:['one'],regenerate:true,retryUnknown:true,resumeRoute:true},grantId:'old-grant',state:{jobs:[]},
+  const env={chapter:chapter(),chapterRef:{current:'chapter'},generationIntent:{current:0},generationPlan:{plan:plan(),ids:['one'],regenerate:true,retryUnknown:true,resumeRoute:true},grantId:'old-grant',state:{jobs:[],settings:{model:'fixture-audio'}},
     playIntent:{current:0},segmentDeletionIntent:{current:0},pendingPlay:{current:null},pendingPlaySnapshot:{current:null},audio:{current:{pause(){}}},
     withSavedDrafts:async(_scope,_dependencies,next)=>{const pending=waiting.get('save')?.shift();if(pending)await pending.promise;return next();},hasDraft:()=>false,unitHasDraft:()=>false,draftScopeRevision:(_scope,revision)=>revision,
     api:async(path,payload)=>{calls.api.push({path,payload});const pending=waiting.get(path)?.shift();if(pending)return pending.promise;return path.startsWith('/chapters/')?chapter(7):plan(payload.revision,payload.ids);},
     submitOperation:async(...args)=>{calls.paid.push(args);const pending=waiting.get('submit')?.shift();return pending?pending.promise:{outcome:'completed',jobIds:['mock-job']};},
+    ensureTaskGrant:async intent=>{calls.grants.push(intent);const pending=waiting.get('grant')?.shift();return pending?pending.promise:'automatic-grant';},
     refresh:async()=>{calls.refresh++;},
     setGenerationPlan:value=>{env.generationPlan=typeof value==='function'?value(env.generationPlan):value;calls.plans.push(env.generationPlan);},
     setChapter:value=>{env.chapter=value;calls.chapters.push(value);},setChapterId:value=>{env.chapterId=value;},
@@ -69,6 +70,15 @@ test('正常重新核对使用新章版本并清授权，只有明确开始生�
   assert.equal(f.calls.paid.length,0);assert.deepEqual(f.calls.api.map(call=>call.path),['/chapters/chapter','/operations/plan']);
   f.render().grant('fresh-grant');await f.render().submit();
   assert.equal(f.calls.paid.length,1);assert.equal(f.calls.paid[0][1].revision,7);assert.equal(f.calls.paid[0][1].grantId,'fresh-grant');assert.equal(f.env.generationPlan,null);
+});
+
+test('真实按钮同一调用直接携带unknown及恢复决定，仍绑定确切attempt IDs',async()=>{
+  const f=fixture();f.env.generationPlan.retryUnknown=false;f.env.generationPlan.resumeRoute=false;f.env.generationPlan.plan.outstandingAttemptIds=['attempt-original'];
+  await f.render().submit('explicit-grant',{retryUnknown:true,resumeRoute:true});assert.equal(f.calls.paid.length,1);const payload=f.calls.paid[0][1];assert.equal(payload.retryUnknown,true);assert.equal(payload.resumeRoute,true);assert.deepEqual(payload.acknowledgedAttemptIds,['attempt-original']);assert.equal(payload.grantId,'explicit-grant');
+});
+
+test('同卡生成等候具体grant时取消，不发声音；迟到授权不重开窗口',async()=>{
+  const f=fixture();f.env.grantId=null;const grant=f.defer('grant'),callbacks=f.render(),pending=callbacks.submit(undefined,{retryUnknown:true});await tick();assert.equal(f.calls.grants.length,1);assert.equal(f.calls.paid.length,0);callbacks.close();grant.resolve('grant');await pending;assert.equal(f.calls.paid.length,0);assert.equal(f.env.generationPlan,null);
 });
 
 test('真实切章回调取消旧章核对，迟到读取不能触及新章或付费提交',async()=>{

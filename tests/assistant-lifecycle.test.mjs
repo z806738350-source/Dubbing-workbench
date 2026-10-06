@@ -80,7 +80,8 @@ test('HTTP uses independent settings, rejects unauthorised send, archives select
   assert.equal(archived.messages.length, 2);
   assert.equal((await request(`/assistant/sessions/${s1.id}/messages`, { messageId: uid(), text: '已归档不再发送', approved: true })).status,409);
   assert.equal((await request(`/assistant/sessions/${s1.id}/content-delete`, {sessionId:s2.id,revision:archived.session.revision,confirmed:true})).status,403);
-  const deleted=await request(`/assistant/sessions/${s1.id}/content-delete`, {sessionId:s1.id,revision:archived.session.revision,confirmed:true});
+  const deletionPlan=(await request(`/assistant/sessions/${s1.id}/deletion-plan`)).data;
+  const deleted=await request(`/assistant/sessions/${s1.id}/content-delete`, {sessionId:s1.id,scope:deletionPlan.scope,confirmed:true});
   assert.equal(deleted.status,200,JSON.stringify(deleted.data));assert.deepEqual(deleted.data,{sessionId:s1.id,deleted:true});
   assert.equal((await request(`/assistant/sessions/${s1.id}`)).status,404);
   assert.deepEqual(app.store.all('assistantMessages',s1.id),[]);

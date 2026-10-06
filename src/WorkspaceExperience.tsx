@@ -71,6 +71,9 @@ export function chapterIssues(chapter:ChapterDetail, roles:Role[], voices:Voice[
   const latest=suggestions.filter(d=>d.kind!=='scene').at(-1);
   const pending=latest?.items.filter(item=>latest.automation?.pendingItemIds?.includes(item.id))||[];
   if(pending.length)issues.push({key:'ai-advice',kind:'advice',title:'AI有表演建议等待选择',detail:`${pending.length} 项需判断，保持当前表演也可以继续制作。可查看建议与原文依据后一次采用。`,ids:pending.flatMap(i=>i.segmentId?[i.segmentId]:[])});
+  const performance=chapter.performanceCoverage;
+  if(performance?.missingIds.length)issues.push({key:'performance-missing',kind:'advice',title:'部分台词缺少表演指导',detail:`${performance.coveredCount}/${performance.eligibleCount} 段指导可用。可补齐缺失指导，已有指导与旧声音保留；普通试听和原合法导出继续可用。`,ids:performance.missingIds});
+  if(performance?.reviewRequiredIds.length)issues.push({key:'performance-conflict',kind:'advice',title:'部分表演指导与当前内容需核对',detail:`${performance.reviewRequiredIds.length} 段保留原值，可查看变化；其他合法内容继续使用。`,ids:performance.reviewRequiredIds});
   return issues.map(issue=>({...issue,code:issue.code||issue.key.split(':')[0],scope:issue.scope||{unitId:issue.unitId,mode:issue.mode,ids:issue.ids},resolution:issue.resolution||({structure:'repair_structure',configuration:'edit_prompt',identity:'confirm_configuration',voice:'choose_reference',request:'inspect_attempt',audio:'redo_rejected',advice:'inspect_advice'})[issue.kind]}));
 }
 export function IssueCenter({chapter,roles,voices,onClose,onLocate,onVoice,onSource,onUnit,onTasks,onConfirm,onAI}:{chapter:ChapterDetail;roles:Role[];voices:Voice[];onClose:()=>void;onLocate:(id:string)=>void;onVoice:(roleId:string)=>void;onSource:()=>void;onUnit:(id:string,mode?:'dry'|'scene')=>void;onTasks:()=>void;onConfirm:(ids:string[])=>Promise<unknown>;onAI:()=>void}){
@@ -200,19 +203,19 @@ export function RecoveryCenter({chapter,state,onClose,onRecovered}:{chapter:Chap
     {error&&<p className="error-inline" role="alert">{error}</p>}
   </Dialog>;
 }
-export function GeneratePlan({plan,chapter,model,concurrency,grantId,unknown,routeBlocked,retryUnknown,resumeRoute,busy,onGrant,onRetryUnknown,onResumeRoute,onGenerate,onRecheck,onEdit,onClose}:{plan:GenerationPlan;chapter:ChapterDetail;model?:string;concurrency?:import('react').ReactNode;grantId:string|null;unknown:boolean;routeBlocked:boolean;retryUnknown:boolean;resumeRoute:boolean;busy:boolean;onGrant:(id:string|null)=>void;onRetryUnknown:(value:boolean)=>void;onResumeRoute:(value:boolean)=>void;onGenerate:()=>Promise<void>;onRecheck:()=>Promise<void>;onEdit:(id:string)=>void;onClose:()=>void}){
-  const [invalid,setInvalid]=useState(false),[pending,setPending]=useState(false),[error,setError]=useState(''),[updated,setUpdated]=useState(false);
+export function GeneratePlan({plan,chapter,model,concurrency,unknown,routeBlocked,busy,onGrant,onGenerate,onRecheck,onEdit,onClose}:{plan:GenerationPlan;chapter:ChapterDetail;model?:string;concurrency?:import('react').ReactNode;unknown:boolean;routeBlocked:boolean;busy:boolean;onGrant:(id:string|null)=>void;onGenerate:(grantId?:string,decision?:{retryUnknown?:boolean;resumeRoute?:boolean})=>Promise<void>;onRecheck:()=>Promise<void>;onEdit:(id:string)=>void;onClose:()=>void}){
+  const [invalid,setInvalid]=useState(false),[pending,setPending]=useState(false),[error,setError]=useState(''),[updated,setUpdated]=useState(false),[grantNeeded,setGrantNeeded]=useState(false);
   const execute=async(recheck:boolean)=>{
     if(pending||busy||!recheck&&invalid)return;
     setPending(true);setError('');
-    try{if(recheck){await onRecheck();setInvalid(false);setUpdated(true);}else await onGenerate();}
-    catch(e){if((e as {status?:number}).status===409)setInvalid(true);else setError((e as Error).message);}
+    try{if(recheck){await onRecheck();setInvalid(false);setUpdated(true);}else await onGenerate(undefined,{retryUnknown:unknown,resumeRoute:routeBlocked});}
+    catch(e){if((e as {status?:number}).status===409)setInvalid(true);else{setError((e as Error).message);setGrantNeeded((e as {code?:string}).code==='task-grant-needed');}}
     finally{setPending(false);}
   };
   return <Dialog title="生成这次待办" presentation="sidepanel" onClose={onClose} footer={invalid
     ? <button className="button primary" disabled={busy||pending} onClick={()=>void execute(true)}>{pending?'正在重新核对…':'重新核对生成范围'}</button>
     : plan.audioRequests===0 ? <button className="button primary" disabled={busy||pending} onClick={onClose}>完成核对</button>
-    : <button className="button primary" disabled={busy||pending||!grantId||(routeBlocked&&!resumeRoute)||(unknown&&!retryUnknown)} onClick={()=>void execute(false)}>{pending?'正在提交…':`开始生成 ${plan.audioRequests} 个声音`}</button>}>
+    : !grantNeeded&&<button className="button primary" disabled={busy||pending} onClick={()=>void execute(false)}>{pending?'正在提交…':unknown?`重新发送 ${plan.audioRequests} 次并继续${routeBlocked?'（同时恢复接口）':''}`:routeBlocked?`恢复接口并生成 ${plan.audioRequests} 个声音`:`开始生成 ${plan.audioRequests} 个声音`}</button>}>
     {invalid&&<div className="task-outcome" role="alert"><h3>内容已变化，本次未发送</h3><p>先免费重新核对生成范围。更新后的范围会在这里展示，再由你决定开始生成。</p></div>}
     {!invalid&&updated&&<p className="hint" role="status">已按当前内容重新核对，请查看下面的范围后再开始生成。</p>}
     <p className="task-panel-summary">{invalid?'之前核对的范围：':'本次覆盖 '}{plan.memberIds.length} 条台词，其中 {plan.units.filter(u=>u.reuse).length} 个已有声音直接复用；实际发送 {plan.audioRequests} 次音频请求。</p>
@@ -224,9 +227,10 @@ export function GeneratePlan({plan,chapter,model,concurrency,grantId,unknown,rou
     })}
     {!invalid&&plan.audioRequests>0&&<>
       {concurrency}
-      <TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="生成所列台词" steps={["unit-generate"]} model={model} requests={plan.audioRequests} voiceIds={[...new Set(chapter.segments.filter(s=>plan.memberIds.includes(s.id)).flatMap(s=>s.voiceId?[s.voiceId]:[]))]} onReady={onGrant} disabled={busy||pending}/>
-      {unknown&&<label className="check-label warning"><input type="checkbox" checked={retryUnknown} disabled={busy||pending} onChange={e=>onRetryUnknown(e.target.checked)}/>上次结果不明，可能已计费；明确再发送上述请求。</label>}
-      {routeBlocked&&<label className="check-label warning"><input type="checkbox" checked={resumeRoute} disabled={busy||pending} onChange={e=>onResumeRoute(e.target.checked)}/>已核对接口权限与额度，恢复本次声音请求。</label>}
+      <p className="hint">点击开始即使用 {model||'当前声音模型'}，发送所列正文、表演指导及已选参考录音；仅生成以上范围，沿用已有明确上限。</p>
+      {unknown&&<p className="warning">上次结果不明，可能已计费。本次将发送上列 {plan.audioRequests} 次请求，可能重复计费；点击“重新发送并继续”作出这次具体决定。关闭窗口不会发送。</p>}
+      {routeBlocked&&<p className="warning">接口曾因权限或额度问题暂停。请先确认服务已恢复；点击下方明确的恢复操作后，才继续上列请求。</p>}
+      {grantNeeded&&<TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label={`本次 ${plan.audioRequests} 次声音请求需要新增的范围${unknown?'（包含结果不明的重新发送，可能重复计费）':''}${routeBlocked?'，并恢复已暂停的接口':''}`} steps={["unit-generate"]} model={model} requests={plan.audioRequests} voiceIds={[...new Set(chapter.segments.filter(s=>plan.memberIds.includes(s.id)).flatMap(s=>s.voiceId?[s.voiceId]:[]))]} onReady={onGrant} onAuthorized={id=>onGenerate(id,{retryUnknown:unknown,resumeRoute:routeBlocked})} disabled={busy||pending}/>}
     </>}
     {!invalid&&plan.audioRequests===0&&<p className="hint">当前范围已有匹配声音，可以直接复用，无需发送新的配音请求。</p>}
     {error&&<p className="error-inline" role="alert">{error}</p>}

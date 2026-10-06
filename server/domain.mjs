@@ -1,14 +1,15 @@
-import { existsSync, rmSync, readdirSync } from "node:fs";
+import { existsSync, rmSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { fail, same, text, uid } from "./store.mjs";
 import { storedAudioUnavailable } from "./audio.mjs";
 import { compile, templateOf, templateCatalog, listTemplates, listUnitTemplates } from "./templates.mjs";
-import { createProjectFolder, renameProjectFolder, stageProjectDeletion, recoverProjectDeletions, projectFile, recordFiles } from './workspace.mjs';
+import { createProjectFolder, renameProjectFolder, stageProjectDeletion, recoverProjectDeletions, projectFile, recordFiles, deletionPath } from './workspace.mjs';
 export { compile } from "./templates.mjs";
 import { createEnhancement, defaultFeatures } from "./enhancement.mjs";
 import { configurationDecided, decide, humanChanges, assistantActor, assistantChanges, assistantOverride, assistantMutation, inheritStructure, outstandingAttempts, policyOf, assistantEffectState, assistantEffects, assertAssistantEffects } from './experience.mjs';
 import { shortRanges } from './semantic.mjs';
 import { importProblems } from './import-validation.mjs';
+import { performanceCoverage, eligiblePerformanceSegment, hasReadableText, performanceDependency } from './performance.mjs';
 
 export const defaultConfig = templateOf("dry-v1").defaults;
 export const active = (j) => ["queued", "running"].includes(j.status);
@@ -36,7 +37,7 @@ export function knownRoles(store, chapter, replacementSource) {
     !id || (store.maybe("chapters", id)?.order ?? Infinity) <= chapter.order;
   return store
     .all("roles", chapter.projectId)
-    .filter((r) => !r.archived && known(r.introducedIn))
+    .filter((r) => !r.archived && known(r.introducedIn) && !r.identityPending)
     .map((r) => {
       const aliases = (r.aliasSources || []).filter(a => known(a.chapterId) && validAliasSource(store, a, r.projectId, chapter));
       return {
@@ -1171,6 +1172,27 @@ export function createDomain(store) {
     if (actor && action === 'segment.create' && executionContext.textMutationPolicy !== 'explicitSpecifiedEdit') fail('本次任务要求保留原文，不能新增朗读正文',403);
     if (actor && ['segment.review','unit.review'].includes(action) && p.state === 'passed' && !executionContext.humanReview?.audioIds?.includes(p.audioId)) fail('未取得用户对这份声音的人工听评决定',403);
     return action === 'project.delete' ? deleteProject(p, executionContext) : assistantMutation(store,action,p,executionContext,()=>store.transaction(() => {
+    if(action==='segment.performance-basic') {
+      if(actor&&!executionContext.performanceBasic)fail('只有明确的基础朗读选择才允许豁免指导',403);
+      text(p.operationId,'操作标识',100);
+      const key='ux-basic:'+p.operationId,previous=store.maybe('settings',key);
+      if(previous){if(!same(previous.request,p))fail('同一基础朗读操作的范围不同',409);return previous.result;}
+      const c=editable(p.chapterId,p.revision);
+      if(!Array.isArray(p.ids)||!p.ids.length||new Set(p.ids).size!==p.ids.length)fail('请选择有效台词');
+      if(actor && (executionContext.performanceBasic.segmentIds || executionContext.performanceTargetIds)?.some && p.ids.some(id=>!(executionContext.performanceBasic.segmentIds || executionContext.performanceTargetIds).includes(id)))fail('基础朗读超出用户指定台词范围',403);
+      const rows=p.ids.map(id=>store.get('segments',id));
+      if(rows.some(s=>s.chapterId!==c.id||!eligiblePerformanceSegment(s)))fail('基础朗读仅作用于所选有效台词',403);
+      const changedIds=[],preservedIds=[];
+      for(const s of rows) {
+        if(hasReadableText(s.performance)){preservedIds.push(s.id);continue;}
+        if(s.decisions?.performance?.waivedBasic===true)continue;
+        s.decisions={...s.decisions,performance:{source:'human',at:new Date().toISOString(),values:s.performance,waivedBasic:true,waiverSource:executionContext?.performanceBasic?.source || {kind:'ui',id:p.operationId},dependencies:performanceDependency(s)}};
+        s.protectedFields=[...new Set([...(s.protectedFields || []),'performance'])];store.put('segments',s,c.id);changedIds.push(s.id);
+      }
+      if(changedIds.length)touch(c,true,false);
+      const result={chapterId:c.id,chapterRevision:c.revision,changedIds,preservedIds,performanceCoverage:performanceCoverage(store,c.id)};
+      store.put('settings',{id:key,projectId:c.projectId,chapterId:c.id,request:structuredClone(p),result},c.id);return result;
+    }
     if (action === 'chapter.repair-structural-decisions') {
       const c=editable(p.chapterId,p.revision),plan=api.structuralRepairPlan({chapterId:c.id});
       if (!p.scope || !same(p.scope,plan.scope)) fail('结构修复预览范围已变化，请重新核对；未修改任何决定',409);
@@ -1194,7 +1216,14 @@ export function createDomain(store) {
     for (const previous of before) {
       const current = store.get('segments',previous.id);
       if (!actor && p.identityChosen !== true && !previous.decisions && !policyOf(store,store.get('chapters',current.chapterId).projectId).revision) continue;
-      if ((actor ? assistantChanges(previous,current,action,p,executionContext) : humanChanges(previous,current,action,p))) store.put('segments',current,current.chapterId);
+      if ((actor ? assistantChanges(previous,current,action,p,executionContext,store) : humanChanges(previous,current,action,p))) {
+        store.put('segments',current,current.chapterId);
+        const decision=current.decisions?.role;
+        if(current.roleConfirmed&&!current.identityPending&&decision?.state==='accepted'&&(decision.source==='human'||decision.actorKind==='human_approved_proposal')&&same(decision.values,[current.roleId,current.type])) {
+          const role=store.get('roles',current.roleId);
+          if(role.identityPending){role.identityPending=false;store.put('roles',role,role.projectId);}
+        }
+      }
     }
     for(const old of protectedEvents){const current=store.get('events',old.id);if(['kind','description','memberId','position','startMemberId','endMemberId','startPosition','endPosition','transition','evidence','state'].some(field=>!same(old[field],current[field]))&&!assistantOverride(executionContext,old.id,'state'))fail('这项人工声音事件受保护，请先核对具体修改',409);}
     if (actor && ['unit.create','unit.update','unit.restore'].includes(action)) {
@@ -1253,7 +1282,25 @@ export function createDomain(store) {
     });
     const playbackItems=rows.map(r=>{const u=units.find(u=>u.id===r.s.id);return {id:r.s.id,unitId:r.s.id,members:r.s.members,mode:r.s.mode,audioId:r.a?.id || null,basis:r.basis,validity:r.validity,review:r.review,latest:u?.outstandingAttemptIds.length?'unknown':u?.variants[r.s.mode].latest,outstandingAttemptIds:u?.outstandingAttemptIds || [],readiness:u?.readiness};});
     const segments=result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, configurationDecided:configurationDecided(s), ...(group ? {groupId:group.id} : {}) }; });
-    return { ...result, arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems, segments:segments.filter(s=>!s.deletion), deletedSegments:segments.filter(s=>s.deletion), exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && same(e.confirmation?.reviewItems, reviewItems) })) };
+    return { ...result, performanceCoverage:performanceCoverage(store,id), arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems, segments:segments.filter(s=>!s.deletion), deletedSegments:segments.filter(s=>s.deletion), exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && same(e.confirmation?.reviewItems, reviewItems) })) };
+  };
+  api.outputs = (p) => {
+    const chapter=api.chapter(p.chapterId);
+    if (p.projectId && p.projectId!==chapter.projectId) fail('成品不属于当前项目',403);
+    const limit=p.limit ?? 20,offset=p.cursor===undefined || p.cursor===null ? 0 : Number(p.cursor);
+    if (!Number.isSafeInteger(limit) || limit<1 || limit>100 || !Number.isSafeInteger(offset) || offset<0 || p.cursor && !/^\d+$/.test(String(p.cursor))) fail('成品分页范围无效');
+    if (p.format!==undefined && !['wav','mp3'].includes(p.format) || p.arrangement!==undefined && (!Number.isSafeInteger(p.arrangement) || p.arrangement<0)) fail('成品查询条件无效');
+    const jobs=store.all('jobs',chapter.id);
+    if (p.jobId && !jobs.some(j=>j.id===p.jobId)) fail('任务不属于当前章节',403);
+    const selected=jobs.filter(j=>(!p.jobId || j.id===p.jobId)&&(!p.operationId || j.commandId===p.operationId || store.maybe('settings','ux-operation:'+p.operationId)?.jobIds?.includes(j.id)));
+    const items=['masters','exports'].flatMap(table=>store.all(table,chapter.id).map(row=>{
+      const job=selected.find(j=>j.id===row.jobId || j.masterId===row.id || j.exportId===row.id || j.result?.masterId===row.id || j.result?.exportId===row.id);
+      let available=false;try {available=!!row.path&&!row.invalid&&statSync(deletionPath(store,row.path)).isFile();}catch{}
+      const kind=table==='masters'?'master':'export',format=kind==='master'?'wav':row.format;
+      const current=available&&!row.superseded&&row.arrangement===chapter.arrangement&&(kind==='master'?chapter.playbackItems.length>0&&chapter.playbackItems.every(item=>item.validity==='matched'):chapter.exports.find(e=>e.id===row.id)?.current===true);
+      return {id:row.id,kind,...(kind==='master'?{masterId:row.id}:{exportId:row.id,masterId:row.masterId}),projectId:chapter.projectId,chapterId:chapter.id,jobId:job?.id || row.jobId,operationId:job?.commandId || null,format,arrangement:row.arrangement,current,available,filename:basename(row.path || ''),createdAt:row.createdAt,...((p.jobId||p.operationId)&&!job?{outsideQuery:true}:{})};
+    })).filter(row=>!row.outsideQuery&&(!p.format || row.format===p.format)&&(p.arrangement===undefined || row.arrangement===p.arrangement)).sort((a,b)=>(b.createdAt || '').localeCompare(a.createdAt || '')||a.id.localeCompare(b.id));
+    return {items:items.slice(offset,offset+limit),total:items.length,nextCursor:offset+limit<items.length?String(offset+limit):null};
   };
   return api;
 }

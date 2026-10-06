@@ -1,14 +1,16 @@
 import { fail, same, text } from './store.mjs';
 import { saveCandidateVoice } from './audio.mjs';
 import { scenePresenceConflicts } from './templates.mjs';
+import { assertCreationScope, recordCreated } from './assistant/scope.mjs';
+import { performanceDependency, segmentPerformanceIssues } from './performance.mjs';
 
 const now = () => new Date().toISOString();
 const recordId = (kind, id) => `ux-${kind}:${id}`;
-export const policyOf = (store, projectId) => store.maybe('settings', recordId('policy', projectId)) || {projectId, mode:'review', revision:0};
+export const policyOf = (store, projectId) => store.maybe('settings', recordId('policy', projectId)) || {projectId, mode:'smart', revision:0};
 const valuesOf = (s, field) => field === 'role' ? [s.roleId,s.type] : [s.roleId,s.voiceId,s.voiceSource];
 const fieldDecided = (s, field) => s[field === 'role' ? 'roleConfirmed' : 'identityConfirmed'] && (!s.decisions?.[field] || s.decisions[field].state === 'accepted' && same(s.decisions[field].values,valuesOf(s,field)));
 export function configurationDecided(s) {
-  return ['role','identity'].every(field => fieldDecided(s,field));
+  return !s.identityPending && ['role','identity'].every(field => fieldDecided(s,field));
 }
 export function decide(s, field, source, extra = {}) {
   s.decisions = {...s.decisions, [field]:{source, at:now(), values:valuesOf(s,field), state:s[field === 'role' ? 'roleConfirmed' : 'identityConfirmed'] ? 'accepted' : 'needsDecision', ...extra}};
@@ -16,6 +18,7 @@ export function decide(s, field, source, extra = {}) {
 export function inheritStructure(s, parents, action, operationId) {
   const provenance = {parentIds:parents.map(p=>p.id),parentRevision:s.source.parentRevision,action,...(operationId ? {operationId} : {})};
   s.protectedFields = [...new Set(parents.flatMap(p=>p.protectedFields || []))];
+  if(parents.some(p=>p.identityPending))s.identityPending=true;
   for (const field of ['role','identity']) {
     s[field === 'role' ? 'roleConfirmed' : 'identityConfirmed'] = parents.every(p=>fieldDecided(p,field));
     decide(s,field,'structural',provenance);
@@ -50,11 +53,14 @@ export function outstandingAttempts(store, targets, history=store.all('attempts'
   return history.filter(a=>a.status === 'unknown' && targets.some(target=>(related ? relatedTarget(store,target,a) : same(attemptScope(target),attemptScope(a))) && !decisions.some(sent=>sent.acknowledgedAttemptIds.includes(a.id) && decisionCovers(store,sent,target))));
 }
 export function humanChanges(before, after, action, payload) {
+  if(action==='segment.performance-basic')return !same(before,after);
   const fields = ['text','roleId','voiceId','voiceSource','performance','type','config','excluded'];
   const changed = fields.filter(field => !same(before[field], after[field]));
   const confirming = action === 'segment.confirm' && Array.isArray(payload.ids) && payload.ids.includes(after.id);
+  if(before.identityPending&&changed.includes('roleId'))after.roleConfirmed=true;
   after.protectedFields = [...new Set([...(before.protectedFields || []), ...changed])];
   if (changed.includes('roleId') || changed.includes('type') || before.roleConfirmed !== after.roleConfirmed || confirming) decide(after,'role','human');
+  if(before.identityPending)after.identityPending=!(after.roleConfirmed&&(changed.includes('roleId')||changed.includes('type')||before.roleConfirmed!==after.roleConfirmed||confirming));
   if (changed.includes('voiceId') || changed.includes('voiceSource') || changed.includes('roleId') || before.identityConfirmed !== after.identityConfirmed || confirming && payload.roleOnly !== true) decide(after,'identity',action === 'role.update' || payload.resetVoice ? 'inherited' : 'human');
   if (changed.includes('performance')) after.decisions = {...after.decisions,performance:{source:'human',at:now(),values:after.performance}};
   return changed.length || confirming || !same(before.decisions,after.decisions);
@@ -109,7 +115,34 @@ export function assertAssistantEffects(effects={voiceAssignments:[]}, context) {
 }
 export function assistantMutation(store, action, payload, context, apply) {
   const actor = assistantActor(context);
-  if (!actor || !context.operationId || context.receiptOwner) return apply();
+  if (actor) assertCreationScope(store,action,payload,context);
+  if(actor && ['project.create','chapter.create'].includes(action) && !context.operationId)fail('新建对象必须有当前任务的稳定操作标识',403);
+  if (actor && context.performanceRewrite) {
+    const run=store.maybe('assistantRuns',context.runId),source=store.maybe('assistantMessages',context.performanceRewrite.source?.id);
+    if (!run || !same(run.performanceRewrite,context.performanceRewrite) || source?.role!=='user' || source.sessionId!==run.sessionId) fail('表演重写缺少当前任务的真实用户来源',403);
+  }
+  if (actor && context.performanceBasic) {
+    const run=store.maybe('assistantRuns',context.runId),source=store.maybe('assistantMessages',context.performanceBasic.source?.id);
+    if (!run || !same(run.performanceBasic,context.performanceBasic) || source?.role!=='user' || source.sessionId!==run.sessionId) fail('基础朗读缺少当前任务的真实用户选择',403);
+  }
+  if(actor && context.performanceTargetIds) {
+    const run=store.maybe('assistantRuns',context.runId);
+    if(!run || !same(run.performanceTargetIds,context.performanceTargetIds))fail('表演目标范围缺少当前任务来源',403);
+  }
+  if(actor && context.performanceTask) {
+    const run=store.maybe('assistantRuns',context.runId),source=store.maybe('assistantMessages',context.performanceTask.source?.id);
+    if(!run || !same(run.performanceTask,context.performanceTask) || source?.role!=='user' || source.sessionId!==run.sessionId)fail('表演用途缺少当前任务的真实用户来源',403);
+  }
+  const created=result=>{
+    recordCreated(store,action,result,context);
+    if(action==='chapter.create') {
+      const run=store.maybe('assistantRuns',context.runId),rows=store.all('segments',result.id);
+      if(run?.binding.chapterId===result.id && !run.readingRange && rows.length) {run.readingRange=readingRange(rows);store.put('assistantRuns',run,run.sessionId);}
+    }
+    return result;
+  };
+  if (!actor || !context.operationId) return apply();
+  if (context.receiptOwner) return store.transaction(()=>created(apply()));
   return store.transaction(() => {
     const id = 'assistant-operation:' + context.operationId, request = JSON.parse(JSON.stringify(payload));
     const previous = store.maybe('settings',id);
@@ -117,21 +150,33 @@ export function assistantMutation(store, action, payload, context, apply) {
       if (previous.action !== action || !same(previous.request,request)) fail('同一助手步骤的业务参数不同',409);
       return previous.result;
     }
-    const result = apply();
+    const result = created(apply());
     store.put('settings',{id,operationId:context.operationId,action,request,result,executionSource:actor,
       ...(context.capabilityId ? {capabilityId:context.capabilityId,capabilityInput:context.capabilityInput} : {}),
       projectId:payload.projectId || (payload.chapterId && store.maybe('chapters',payload.chapterId)?.projectId),chapterId:payload.chapterId,at:now()});
     return result;
   });
 }
-export function assistantChanges(before, after, action, payload, context) {
+export function assistantChanges(before, after, action, payload, context, store) {
   const actor = assistantActor(context);
   if (!actor) return humanChanges(before, after, action, payload);
+  if(action==='segment.performance-basic')return !same(before,after);
   const changed = ['text', 'roleId', 'voiceId', 'voiceSource', 'performance', 'type', 'config', 'excluded'].filter(field => !same(before[field], after[field]));
+  if(before.identityPending) {
+    if(context.actorKind!=='human_approved_proposal'&&(after.roleConfirmed||changed.includes('roleId')||changed.includes('type')))fail('这条角色身份尚未核对，请集中明确实际角色；助手不会自行确认',403);
+    if(context.actorKind==='human_approved_proposal'&&changed.includes('roleId'))after.roleConfirmed=true;
+    after.identityPending=context.actorKind==='human_approved_proposal'&&after.roleConfirmed&&(changed.includes('roleId')||changed.includes('type')||before.roleConfirmed!==after.roleConfirmed||action==='segment.confirm')?false:true;
+  }
+  if(changed.includes('performance') && context.performanceTargetIds && !context.performanceTargetIds.includes(before.id))fail('表演修改超出用户指定台词范围',403);
+  if(context.performanceOnly && (changed.some(field=>field!=='performance') || before.roleConfirmed!==after.roleConfirmed || before.identityConfirmed!==after.identityConfirmed))fail('本次只安排表演，不能改正文、角色、音色或其他设置',403);
+  if(changed.includes('performance') && context.performanceTask?.mode==='fillMissing' && !segmentPerformanceIssues(store,store.get('chapters',before.chapterId),before).length)fail('本次只补齐缺失指导，已有有效指导及基础朗读选择已保留',409,{code:'assistant-replan'});
   if (changed.includes('text') && context.textMutationPolicy !== 'explicitSpecifiedEdit') fail('本次任务要求保留原文，不能改写朗读正文', 403);
   for (const field of changed) {
     const protectedField = before.protectedFields?.includes(field) || field === 'performance' && !!before.performance && before.decisions?.performance?.source !== 'policy_ai' && !before.aiAllowedFields?.includes(field);
-    if (protectedField && !assistantOverride(context, before.id, field)) fail('这项人工设置受保护，请先对具体修改作出决定', 409);
+    const rewrite=context.performanceRewrite;
+    const base=rewrite?.bases?.find(s=>s.segmentId===before.id);
+    const rewritable=field==='performance' && rewrite?.includeHuman===true && rewrite.segmentIds?.includes(before.id) && rewrite.source?.kind==='message' && base && same(base.performance,before.performance) && same(base.decision,before.decisions?.performance) && same(base.dependencies,performanceDependency(before));
+    if (protectedField && !assistantOverride(context, before.id, field) && !rewritable) fail('这项人工设置受保护；未被明确重写的范围或之后的新修改已保留', 409);
   }
   const confirming = action === 'segment.confirm' && payload.ids?.includes(after.id);
   after.protectedFields = [...(before.protectedFields || [])];
@@ -230,8 +275,11 @@ export function createExperience(store, domain, worker, analysis, config) {
     store.get('projects',projectId);
     return {policy:policyOf(store,projectId),grants:store.all('settings').filter(r => r.id.startsWith('ux-grant:') && r.projectId === projectId).map(({request,...g}) => g),changes:store.all('settings').filter(r => r.id.startsWith('ux-change:') && r.projectId === projectId)};
   }
-  function plan(p) {
-    if (p.kind === 'prepareChapter') return analysis.plan({...p,kind:p.analysisKind});
+  function plan(p,executionContext) {
+    if (p.kind === 'prepareChapter') {
+      const context=executionContext || (p.includePerformance===false?{actorKind:'human_direct',performanceBasic:{source:{kind:'ui',id:p.operationId || 'prepare-preview'}}}:undefined);
+      return analysis.plan({...p,kind:p.analysisKind || (domain.list(p.chapterId).length ? 'director' : 'extract')},context);
+    }
     const c = domain.editable(p.chapterId,p.revision);
     if (p.arrangement !== undefined && p.arrangement !== c.arrangement) fail('实际声音编排在核对后已变化，请重新查看生成范围',409);
     if (!Array.isArray(p.ids) || !p.ids.length || new Set(p.ids).size !== p.ids.length || p.ids.some(id => !domain.list(c.id).some(s => s.id === id && !s.excluded))) fail('请选择当前章节的有效台词');
@@ -262,11 +310,14 @@ export function createExperience(store, domain, worker, analysis, config) {
     const result = {...op}; delete result.request;
     if (op.result?.analysis?.id) {
       const a = store.get('suggestions',op.result.analysis.id);
-      result.result = {...op.result,analysis:a,applied:a.automation?.applied || 0,needsDecision:a.automation?.needsDecision || a.items.filter(i => i.uncertain || i.issues?.length).length};
-      result.outcome = a.status === 'running' ? 'processing' : a.batches?.some(b => b.status === 'unknown') ? 'unknown' : a.status === 'applied' ? 'completed' : 'needsInput';
+      const performanceCoverage=a.performancePolicy?.enabled ? analysis.coverage(a.chapterId,{analysisId:a.id}) : undefined;
+      result.result = {...op.result,analysis:a,applied:a.automation?.applied || 0,needsDecision:a.automation?.needsDecision || a.items.filter(i => i.uncertain || i.issues?.length).length,...(performanceCoverage ? {performanceCoverage,performanceReceipt:a.performanceReceipt,changeSetId:a.performanceReceipt?.changeSetId} : {})};
+      result.outcome = a.status === 'running' ? 'processing' : a.batches?.some(b => b.status === 'unknown') || a.performanceRepairs?.some(b=>b.status==='unknown') ? 'unknown' : a.status === 'applied' && (!performanceCoverage || (a.performanceReceipt?.scopeCoverage || performanceCoverage).phase==='ready') ? 'completed' : 'needsInput';
     }
     if (op.jobIds.length) {
       const jobs = op.jobIds.map(id => store.get('jobs',id));
+      const outputs=jobs.flatMap(j=>domain.outputs({chapterId:j.chapterId,jobId:j.id,limit:100}).items);
+      if (outputs.length) result.result={...result.result,outputs,...Object.fromEntries(jobs.flatMap(j=>Object.entries(j.result || {}).filter(([key])=>['masterId','exportId','format','chapterId','arrangement'].includes(key))))};
       result.outcome = jobs.some(j => ['queued','running'].includes(j.status)) ? 'processing' : jobs.some(j => j.status === 'unknown') ? 'unknown' : jobs.every(j => j.status === 'success') ? 'completed' : 'needsInput';
     }
     return result;
@@ -298,7 +349,7 @@ export function createExperience(store, domain, worker, analysis, config) {
     try {
       if (p.kind === 'save') {
         step('completed',() => {
-          const result = domain.mutate(p.action,{...p.data,...(['segment.split','segment.merge'].includes(p.action)?{operationId:p.operationId}:{})},mutationContext);
+          const result = domain.mutate(p.action,{...p.data,...(['segment.split','segment.merge','segment.performance-basic'].includes(p.action)?{operationId:p.operationId}:{})},mutationContext);
           op.result = p.data.chapterId ? {...result,chapterRevision:store.get('chapters',p.data.chapterId).revision} : result;
           op.dependencies = {chapterId:p.data.chapterId || result.chapterId,segmentIds:p.action.startsWith('segment.') ? p.data.ids || [p.data.id].filter(Boolean) : [],unitIds:p.data.unitId ? [p.data.unitId] : [],roleIds:p.action === 'role.update' ? [p.data.id] : []};
           return true;
@@ -306,7 +357,11 @@ export function createExperience(store, domain, worker, analysis, config) {
         op.outcome = 'completed';
       } else if (p.kind === 'prepareChapter') {
         const existing = store.all('suggestions').find(a => a.operationId === p.operationId);
-        const a = existing || await analysis.start({...p,kind:p.analysisKind || (domain.list(p.chapterId).length ? 'director' : 'extract'),...(p.analysisKind === 'scene' ? {sceneEnabled:true} : {}),autoApply:p.autoApply !== false,requireGrant:true},executionContext);
+        const performanceMode=p.performanceMode || (domain.list(p.chapterId).length ? 'fillMissing' : 'initial');
+        const performanceRewrite=!actor && p.ids?.length && (performanceMode==='replaceAi' || performanceMode==='selectedRewrite' && p.includeHumanPerformance===true) ? {segmentIds:p.ids,includeHuman:p.includeHumanPerformance===true,source:{kind:'ui',id:p.operationId}} : executionContext?.performanceRewrite;
+        const performanceBasic=!actor && p.includePerformance===false ? {segmentIds:p.ids,source:{kind:'ui',id:p.operationId}} : executionContext?.performanceBasic;
+        const analysisContext=actor ? executionContext : performanceRewrite || performanceBasic ? {actorKind:'human_direct',...(performanceRewrite?{performanceRewrite}:{}),...(performanceBasic?{performanceBasic}:{})} : executionContext;
+        const a = existing || await analysis.start({...p,performanceMode,kind:p.analysisKind || (domain.list(p.chapterId).length ? 'director' : 'extract'),...(p.analysisKind === 'scene' ? {sceneEnabled:true} : {}),autoApply:p.autoApply !== false,requireGrant:true},analysisContext);
         op.result = {analysis:a}; op.createdObjectIds = [a.id]; op.steps.analysis = a.id;
       } else if (p.kind === 'useVoice') {
         let voice = op.steps.voice ? store.get('voices',op.steps.voice) : p.audioId ? await saveCandidateVoice(store,{audioId:p.audioId,name:p.name || '新声音'}) : store.get('voices',p.voiceId);
@@ -386,5 +441,5 @@ export function createExperience(store, domain, worker, analysis, config) {
       domain.touch(c,true,!!splits.length); domain.enhancement.syncLegacy(); change.undoneAt = now(); return store.put('settings',change);
     }));
   }
-  return {policy,grant,revoke,project,plan,run,get,undo,unprotect,projectBusy};
+  return {policy,grant,revoke,project,plan,run,get,undo,undoPerformance:p=>analysis.undoPerformance(p),unprotect,projectBusy};
 }

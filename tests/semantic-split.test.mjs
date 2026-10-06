@@ -29,7 +29,11 @@ function setup(t,segmented=true){
     assert.ok(Array.from(parent.text).length>longSegment);
   }
   const config={key:'fixture',model:'seed-audio-1.0',baseUrl:'https://example.invalid/v1',audioUrl:'https://example.invalid/v1/audio/speech'};
-  const w=createWorker(store,d,config),a=createAnalysis(store,d,config),e=createExperience(store,d,w,a,config);
+  const w=createWorker(store,d,config),a=createAnalysis(store,d,config);
+  // Replay the frozen legacy analyzer contract through real operation receipts;
+  // new explicit-basic and PG preparation are covered by performance-analysis.
+  const legacyAnalysis={...a,start:p=>a.start({...p,performanceMode:undefined,includePerformance:false}),plan:p=>a.plan({...p,performanceMode:undefined,includePerformance:false})};
+  const e=createExperience(store,d,w,legacyAnalysis,config);
   t.after(async()=>{await a.close();w.close();store.close();rmSync(dir,{recursive:true,force:true});});
   e.policy({projectId:p.id,revision:0,mode:'smart'});
   const grant=e.grant({grantId:uid(),projectId:p.id,chapterId:c.id,steps:['extract','director'],materials:['text'],textLimit:20,audioLimit:0});
@@ -42,7 +46,7 @@ function setup(t,segmented=true){
       :input.blocks.map(b=>({...narration,from:b.id,to:b.id,roleId:role.id,type:'narration',evidenceRefs:[b.id]}));
     return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({items:transform(items,input)})}}]});
   });}
-  async function prepare(data={}){const op=await e.run({operationId:uid(),kind:'prepareChapter',chapterId:c.id,revision:rev(),grantId:grant.grantId,...data});assert.ok(!op.error,op.error);await a.close();return e.get(op.operationId);}
+  async function prepare(data={}){const op=await e.run({operationId:uid(),kind:'prepareChapter',includePerformance:false,chapterId:c.id,revision:rev(),grantId:grant.grantId,...data});assert.ok(!op.error,op.error);await a.close();return e.get(op.operationId);}
   const rows=()=>d.list(c.id),snapshot=()=>({chapter:store.get('chapters',c.id),segments:store.all('segments',c.id),units:store.all('units',c.id),events:store.all('events',c.id)});
   return {dir,store,d,p,c,v,override,role,rev,edit,parent,w,a,e,grant,calls,mock,prepare,rows,snapshot};
 }

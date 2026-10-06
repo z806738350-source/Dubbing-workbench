@@ -47,7 +47,7 @@ import { ObjectDraftTools, useObjectDraft } from "./ObjectDraft";
 import { saveAction, speechDraftProblem, withSavedDrafts, draftScopeRevision } from "./autosave";
 import { useDraftSaveStatus } from "./ObjectDraft";
 import { chapterIssues, chapterMemberState, configurationDecided, playbackIdentity, IssueCenter, ProjectOverview, VoicePicker, RecoveryCenter, QuickHelp, GeneratePlan, type RecoveryTarget } from "./WorkspaceExperience";
-import TaskAuthorization from "./TaskAuthorization";
+import TaskAuthorization, { ensureTaskGrant } from "./TaskAuthorization";
 import { submitOperation } from "./taskOperations";
 import { LocalAudioRecovery } from "./AudioProvenance";
 import AssistantPanel from "./AssistantPanel";
@@ -70,6 +70,7 @@ import type {
   VoiceSession,
   GenerationUnit,
   GenerationPlan,
+  OperationResult,
 } from "./types";
 
 const inVoiceLibrary = (voice: Voice) => voice.state !== "deleted" && !voice.deletePending;
@@ -426,6 +427,17 @@ export default function App() {
   const openUnit = (id:string,mode?:"dry"|"scene",eventId?:string)=>{setInspectorOpen(false);setModal(null);setUnitInitialMode(mode);setUnitInitialEvent(eventId);setUnitPanelId(id);};
   const locate = (id:string)=>{setModal(null);setSelected(id);setFilter("all");setSearch("");setPanelMode("settings");if(window.innerWidth<1216)setInspectorOpen(true);setTimeout(()=>document.getElementById("segment-"+id)?.scrollIntoView({block:"center"}),0);};
   const effectiveStatus = (s:Segment) => chapter ? chapterMemberState(chapter,s) : s;
+  const useBasicPerformance=async(ids:string[])=>{
+    if(!chapter||!connectionReady||locked||!ids.length)return;
+    const chapterId=chapter.id,workspace=draftWorkspace(),targets=[...new Set(ids)].sort();
+    const current=()=>chapterRef.current===chapterId&&draftWorkspace()===workspace;
+    try{await withSavedDrafts("chapter:"+chapterId,targets.map(id=>"segment:"+id),async()=>{
+      if(!current())return;
+      const receipt=await submitOperation("performance-basic:"+chapterId,{kind:"save",action:"segment.performance-basic",data:{chapterId,revision:draftScopeRevision("chapter:"+chapterId,chapter.revision),ids:targets}},state?.jobs||[]);
+      if(receipt.error)throw new Error(receipt.error);
+      if(current())setNotice("所选空指导已按基础朗读保留，不再自动补齐；非空指导、原文和已有声音保持。");
+    });}catch(error){if(current())throw error;}
+  };
   const visible = segments.filter((s) => {
     if (
       search &&
@@ -521,8 +533,8 @@ export default function App() {
   };
   const planIntent=generationIntent.current;
   const generationUnknown = !!generationPlan?.plan.outstandingAttemptIds?.length || generationPlan?.plan.units.some(planned=>!!chapter?.units?.find(u=>u.id===planned.unitId)?.variants[planned.mode].outstandingAttemptIds?.length || chapter?.units?.find(u=>u.id===planned.unitId)?.variants[planned.mode].latest === "unknown") || false;
-  const submitGeneration = async () => {
-    if(!generationPlan||!chapter||!grantId)return;
+  const submitGeneration = async (authorizedGrant?:string,decision?:{retryUnknown?:boolean;resumeRoute?:boolean}) => {
+    if(!generationPlan||!chapter)return;
     const request=generationPlan;
     const intent=generationIntent.current;
     const dependencies=request.plan.memberIds.map(id=>"segment:"+id).concat(request.plan.units.flatMap(u=>["unit:"+u.unitId,"unit:"+u.unitId+"/"+u.mode,...(u.mode==="scene"?["events:"+u.unitId]:[])]));
@@ -531,8 +543,10 @@ export default function App() {
       if(chapterRef.current!==request.plan.chapterId)throw new Error("章节已切换，本次未发送。");
       if(request.plan.memberIds.some(id=>hasDraft(id))||request.plan.units.some(p=>{const u=chapter.units?.find(u=>u.id===p.unitId);return u&&unitHasDraft(u,chapter.events||[],p.mode);}))throw new Error("相关其他页面的草稿仍需处理，本次未发送。");
       if(draftScopeRevision("chapter:"+chapter.id,request.plan.revision)!==request.plan.revision)throw Object.assign(new Error("生成范围在核对后已变化，请重新核对生成范围。"),{status:409});
+      const allowed=authorizedGrant||grantId||await ensureTaskGrant({projectId:chapter.projectId,chapterId:chapter.id,step:"audio",steps:["unit-generate"],model:state?.settings.model,requests:request.plan.audioRequests,voiceIds:[...new Set(chapter.segments.filter(segment=>request.plan.memberIds.includes(segment.id)).flatMap(segment=>segment.voiceId?[segment.voiceId]:[]))]});
+      if(generationIntent.current!==intent||chapterRef.current!==request.plan.chapterId)return;
       playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;audio.current?.pause();setPlayer(null);
-      const receipt=await submitOperation("generate:"+chapter.id,{kind:"generateSelection",chapterId:chapter.id,revision:request.plan.revision,arrangement:request.plan.arrangement,ids:request.ids,regenerate:request.regenerate,actionKind:request.plan.actionKind,grantId,...(request.retryUnknown?{retryUnknown:true,acknowledgedAttemptIds:request.plan.outstandingAttemptIds}:{}),...(request.resumeRoute?{resumeRoute:true}:{})},state?.jobs||[]);
+      const receipt=await submitOperation("generate:"+chapter.id,{kind:"generateSelection",chapterId:chapter.id,revision:request.plan.revision,arrangement:request.plan.arrangement,ids:request.ids,regenerate:request.regenerate,actionKind:request.plan.actionKind,grantId:allowed,...(decision?.retryUnknown||request.retryUnknown?{retryUnknown:true,acknowledgedAttemptIds:request.plan.outstandingAttemptIds}:{}),...(decision?.resumeRoute||request.resumeRoute?{resumeRoute:true}:{})},state?.jobs||[]);
       if(generationIntent.current!==intent||chapterRef.current!==request.plan.chapterId){await refresh();return;}
       if(receipt.error)throw Object.assign(new Error(receipt.error),{status:receipt.errorStatus});
       if(chapterRef.current!==request.plan.chapterId)return;
@@ -1013,7 +1027,7 @@ export default function App() {
                     <button className="button small" disabled={locked||!selectedUnit||state?.settings.features?.scenes===false} onClick={()=>selectedUnit&&openUnit(selectedUnit.id,"scene")}><AudioLines size={15}/>声音背景</button>
                     <button className="button secondary small" onClick={()=>openUnit("list")}>历史与版本</button>
                     {!!chapter.deletedSegments?.length && <button className="button secondary small" onClick={()=>setModal("deleted-segments")}>已删除台词 · {chapter.deletedSegments.length}</button>}
-                    <details className="workspace-more"><summary>更多</summary><div><button onClick={()=>setModal("source")}>查看原文</button><button onClick={()=>setModal("manual")}>添加台词</button><button onClick={()=>setModal("roles")}>角色资料</button><button onClick={()=>{const value=density==="compact"?"comfortable":"compact";setDensity(value);localStorage.setItem("reading-density",value);}}>切换{density==="compact"?"舒适":"紧凑"}密度</button><label>正文字号<input aria-label="正文字号" type="range" min="17" max="34" value={readingSize} onChange={e=>{setReadingSize(Number(e.target.value));localStorage.setItem("reading-size",e.target.value);}}/></label></div></details>
+                    <details className="workspace-more"><summary>更多</summary><div><button onClick={()=>setModal("source")}>查看原文</button><button onClick={()=>setModal("manual")}>添加台词</button><button onClick={()=>setModal("roles")}>角色资料</button><button disabled={!checked.length||locked||busy||!connectionReady} onClick={()=>void run(()=>useBasicPerformance(checked))}>所选句按基础朗读（保留空指导）</button><button onClick={()=>{const value=density==="compact"?"comfortable":"compact";setDensity(value);localStorage.setItem("reading-density",value);}}>切换{density==="compact"?"舒适":"紧凑"}密度</button><label>正文字号<input aria-label="正文字号" type="range" min="17" max="34" value={readingSize} onChange={e=>{setReadingSize(Number(e.target.value));localStorage.setItem("reading-size",e.target.value);}}/></label></div></details>
                   </div>
                   {checked.length > 0 && (
                     <div className="selection-bar" role="group" aria-label="所选片段操作">
@@ -1153,7 +1167,7 @@ export default function App() {
                             </span>
                             <span className="spoken-text">{s.text}</span>
                             {s.performance && (
-                              <span className="performance">
+                              <span className="performance" title={s.performance}>
                                 <SlidersHorizontal size={12} />
                                 {s.performance}
                               </span>
@@ -1443,8 +1457,8 @@ export default function App() {
         }}
         play={(id,title,historical)=>{const unit=chapter.units!.find(u=>u.id === unitPanelId)!;const mode=unit.variants.scene.current === id ? "scene" : "dry";setCurrentMembers(unit.kind === "group" && !historical ? unit.members : []);
           void startPlay("audios",id,title,undefined,!!historical,historical ? undefined : {id:unit.id,mode,audioId:id,basis:unit.variants[mode].status.basis,state:unit.state});}}/>}
-      {generationPlan && chapter && <GeneratePlan plan={generationPlan.plan} chapter={chapter} model={state?.settings.model} concurrency={<ConcurrencySettings key={state?.settings.workspaceIdentity} status={state?.settings.scheduler} connected={connectionReady} refresh={refresh}/>} grantId={grantId} unknown={generationUnknown} routeBlocked={!!state?.settings.routeBlocked} retryUnknown={generationPlan.retryUnknown} resumeRoute={generationPlan.resumeRoute} busy={busy}
-        onGrant={id=>{if(generationIntent.current===planIntent)setGrantId(id);}} onRetryUnknown={value=>{if(generationIntent.current===planIntent)setGenerationPlan(current=>current?{...current,retryUnknown:value}:null);}} onResumeRoute={value=>{if(generationIntent.current===planIntent)setGenerationPlan(current=>current?{...current,resumeRoute:value}:null);}} onGenerate={submitGeneration} onClose={closeGeneration} onEdit={id=>{closeGeneration();locate(id);}} onRecheck={async()=>{
+      {generationPlan && chapter && <GeneratePlan plan={generationPlan.plan} chapter={chapter} model={state?.settings.model} concurrency={<ConcurrencySettings key={state?.settings.workspaceIdentity} status={state?.settings.scheduler} connected={connectionReady} refresh={refresh}/>} unknown={generationUnknown} routeBlocked={!!state?.settings.routeBlocked} busy={busy}
+        onGrant={id=>{if(generationIntent.current===planIntent)setGrantId(id);}} onGenerate={submitGeneration} onClose={closeGeneration} onEdit={id=>{closeGeneration();locate(id);}} onRecheck={async()=>{
           const request=generationPlan;
           const intent=++generationIntent.current;
           const current=()=>generationIntent.current===intent&&chapterRef.current===request.plan.chapterId;
@@ -1508,7 +1522,7 @@ export default function App() {
           key={draftWorkspace()+"/"+projectId}
           projectId={projectId}
           onClose={() => setModal(null)}
-          onCreated={async (id,prepare) => {
+          onCreated={async (id,prepare,importOperationId) => {
             if(projectRef.current!==projectId)return false;
             const workspaceIdentity=draftWorkspace();
             pickChapter(id);
@@ -1517,7 +1531,25 @@ export default function App() {
             if(prepare&&window.innerWidth<1216)setInspectorOpen(true);
             await refresh();
             if(projectRef.current!==projectId||draftWorkspace()!==workspaceIdentity)return false;
-            if(prepare)setNotice("原文已导入。选择AI协作方式和本章文本授权后，开始准备。");
+            if(prepare){
+              setNotice("原文已导入，正在同时分段并安排逐段表演。");
+              try{
+                const operationId=(importOperationId||"import:"+id)+":prepare";
+                let receipt:OperationResult<{analysis:{status:string}}> | undefined;
+                try{receipt=await api<OperationResult<{analysis:{status:string}}>>("/operations/"+operationId);}catch(error){if((error as {status?:number}).status!==404)throw error;}
+                if(!receipt){
+                  const target=await api<ChapterDetail>("/chapters/"+id),model=stateRef.current?.settings.textModel||"gemini-3.8-flash";
+                  const payload={kind:"prepareChapter",chapterId:id,revision:target.revision,ids:[],includePerformance:true,performanceMode:"initial",model};
+                  const plan=await api<{kind:string;textRequests:number;maxTextRequests?:number}>("/operations/plan",payload);
+                  if(projectRef.current!==projectId||draftWorkspace()!==workspaceIdentity)return true;
+                  const grantId=await ensureTaskGrant({projectId,chapterId:id,step:"text",steps:[plan.kind],model,requests:plan.maxTextRequests??plan.textRequests,minimumRequests:plan.textRequests});
+                  receipt=await api<OperationResult<{analysis:{status:string}}>>("/operations",{...payload,operationId,grantId});
+                }
+                if(receipt.error)throw new Error(receipt.error);
+                if(receipt.outcome==="unknown"&&projectRef.current===projectId&&draftWorkspace()===workspaceIdentity)setNotice("章节和已收到的结果保留。部分分析请求结果未确认，尚未再次发送；请查看本轮分析记录。");
+                await refresh();
+              }catch(error){if(projectRef.current===projectId&&draftWorkspace()===workspaceIdentity)setNotice("章节已保留，AI 准备暂未完成："+(error as Error).message);}
+            }
             return true;
           }}
         />
@@ -1977,7 +2009,7 @@ function RenameProject({ project, save, onClose }: { project: Project; save: (a:
 
 type ImportCommand = {operationId:string;payload:Record<string,unknown>;chapterId?:string;rejection?:{message:string;fieldErrors:Record<string,string>;at:string}};
 type ImportDraft = {source:string;title:string;prepare:boolean;imported:{text:string;name:string}|null;command?:ImportCommand;history?:ImportCommand[]};
-function ImportChapter({projectId,onClose,onCreated}:{projectId:string;onClose:()=>void;onCreated:(id:string,prepare?:boolean)=>Promise<void|boolean>}) {
+function ImportChapter({projectId,onClose,onCreated}:{projectId:string;onClose:()=>void;onCreated:(id:string,prepare?:boolean,operationId?:string)=>Promise<void|boolean>}) {
   const draftId="import-chapter/"+projectId;
   const workspaceIdentity=useRef(draftWorkspace()).current;
   const [draft,setDraft]=useState<ImportDraft>(()=>readDraft<ImportDraft>(draftId)?.draft||{source:"",title:"",prepare:true,imported:null});
@@ -2035,7 +2067,7 @@ function ImportChapter({projectId,onClose,onCreated}:{projectId:string;onClose:(
         if(!recordCommand(next.command!))return;
       }
       if(!current()||draftRef.current.command?.operationId!==next.command!.operationId)return;
-      if(await onCreated(next.command!.chapterId!,next.prepare)===false)return;
+      if(await onCreated(next.command!.chapterId!,next.prepare,next.command!.operationId)===false)return;
       const stored=readDraft<ImportDraft>(draftId,workspaceIdentity);
       if(stored?.draft.command?.operationId===next.command!.operationId){
         if(stored.draft.history?.length)persist({source:"",title:"",prepare:true,imported:null,history:[...stored.draft.history,next.command!]},false);
@@ -2059,11 +2091,12 @@ function ImportChapter({projectId,onClose,onCreated}:{projectId:string;onClose:(
     }catch(failure){if(current())setError((failure as Error).message);}finally{if(current())setReading(false);}
   };
   return <Dialog title="导入章节" onClose={close} wide>
-    <Form label={draft.command?.chapterId?"打开已导入章节":draft.command?.rejection?"修改后重新导入":draft.command?"恢复这次导入回执":draft.prepare?"导入并进入AI准备":"仅导入并本地分段"} busy={reading||pending} onSubmit={submit}>
+    <Form label={draft.command?.chapterId?"打开已导入章节":draft.command?.rejection?"修改后重新导入":draft.command?"恢复这次导入回执":draft.prepare?"导入并准备这一章":"仅导入并本地分段"} busy={reading||pending} onSubmit={submit}>
       <label className="upload-zone"><Upload size={22}/><strong>{reading?"正在读取文件…":"选择 TXT / Markdown 文件"}</strong><span>UTF-8 编码 · 最多4 MB · Markdown 按纯文本保留</span><input type="file" accept=".txt,.md" disabled={pending||locked} onChange={event=>{const file=event.target.files?.[0];if(file)void readFile(file);}}/></label>
       <Field label="章节名称" hint={`${draft.title.trim().length} / ${importLimits.title} 字符 · 留空使用“新章节”`}><input value={draft.title} disabled={pending||locked} aria-invalid={!!problems.title} aria-describedby={problems.title?"import-title-error":undefined} onChange={event=>edit({title:event.target.value})} placeholder="例如：第一章"/>{problems.title&&<p id="import-title-error" className="error-inline" role="alert">{problems.title}</p>}</Field>
       <Field label="原文预览" hint="原文完整保留；编辑预览不会改写导入文件来源。"><textarea value={draft.source} disabled={pending||locked} aria-invalid={!!(problems.source||problems.importedSource)} onChange={event=>edit({source:event.target.value})} rows={9} placeholder="在这里粘贴本章原文"/>{(problems.source||problems.importedSource)&&<p className="error-inline" role="alert">{problems.source||problems.importedSource}</p>}</Field>
-      <label className="check-label"><input type="checkbox" checked={draft.prepare} disabled={pending||locked} onChange={event=>edit({prepare:event.target.checked})}/>导入后进入AI准备</label>
+      <label className="check-label"><input type="checkbox" checked={draft.prepare} disabled={pending||locked} onChange={event=>edit({prepare:event.target.checked})}/>同时分析分段、角色与逐段表演</label>
+      {draft.prepare&&<p className="hint">点击导入即准备本章，使用当前文本分析连接，不生成音频；分批与局部补齐在当前明确上限内完成，已有人工指导保留。</p>}
       <p className="hint">非空草稿关闭后仍可找回。仅本地分段不产生 API 费用。</p>
       {draft.command&&<p className="hint" role="status">{draft.command.chapterId?"章节已经创建。继续只打开原章节，不会再次创建或发起AI请求。":draft.command.rejection?"上次导入明确未创建章节。原文仍保留，请修改后重新导入。":"本次导入回执尚未确认。重试只核对同一次命令，不会创建第二章。"}</p>}
       <p className={saved?"hint":"warning"} role="status">{saved?"导入草稿已暂存在本机":"草稿尚未可靠暂存，请先复制原文"}</p>

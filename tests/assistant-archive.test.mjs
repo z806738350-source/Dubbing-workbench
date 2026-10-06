@@ -45,7 +45,7 @@ test('永久删除只接受具体会话与当前版本确认，清材料而保�
   assert.deepEqual(f.assistant.get(f.session.id),before);
   const run=before.runs[0],step={id:uid(),runId:run.id,operationId:uid(),ordinal:0,capabilityId:'segment.update',state:'completed',description:'私有提案',input:{text:'私有正文'},preview:{private:'私有预览'},approvedEffects:{voiceAssignments:[{segmentText:'私有音色台词'}],readingRange:{before:{text:'私有原朗读文字'},after:{text:'私有拟朗读文字'}}},resultRefs:{audioId:'existing-audio'}};
   f.store.put('assistantSteps',step,run.id);f.store.put('assistantDecisions',{id:uid(),runId:run.id,request:{instructions:'私有决定'},actor:'human',at:new Date().toISOString()},run.id);
-  const request={sessionId:f.session.id,revision:before.session.revision,confirmed:true},deleted=await f.assistant.removeContent(f.session.id,request);
+  const request={sessionId:f.session.id,scope:f.assistant.deletionPlan(f.session.id).scope,confirmed:true},deleted=await f.assistant.removeContent(f.session.id,request);
   assert.deepEqual(deleted,{sessionId:f.session.id,deleted:true});
   assert.equal(f.store.all('assistantMessages',f.session.id).length,0);assert.equal(f.store.all('assistantAttachments',f.session.id).length,0);assert.equal(existsSync(join(f.directory,file.path)),false);assert.equal(existsSync(join(f.directory,file.sourcePath)),false);
   assert.ok(f.store.get('assistantSessions',f.session.id).contentDeletion);assert.equal(f.store.get('assistantRuns',run.id).budget.used.assistant,1);
@@ -74,7 +74,7 @@ test('删除未知结果会话保留费用计数、unknown账本和已生成声�
   execFileSync(ffmpeg,['-nostdin','-v','error','-f','lavfi','-i','sine=frequency=440:duration=0.1','-c:a','pcm_s16le',join(f.directory,audioPath)]);
   f.store.put('audios',{id:'existing-audio',state:'ready',path:audioPath,provenance:'provider-original'});f.store.put('jobs',{id:'existing-job',status:'success',resultAudioId:'existing-audio'});
   const original=f.store.get('audios','existing-audio'),originalBytes=readFileSync(join(f.directory,audioPath));
-  const deleted=await f.assistant.removeContent(f.session.id,{sessionId:f.session.id,revision:before.session.revision,confirmed:true});
+  const deleted=await f.assistant.removeContent(f.session.id,{sessionId:f.session.id,scope:f.assistant.deletionPlan(f.session.id).scope,confirmed:true});
   assert.deepEqual(deleted,{sessionId:f.session.id,deleted:true});assert.equal(f.store.get('assistantRuns',run.id).budget.used.assistant,1);
   assert.equal(f.store.all('settings').filter(s=>s.id.startsWith('assistant-call:')&&s.runId===run.id&&s.state==='unknown').length,1);
   assert.deepEqual(f.store.get('audios','existing-audio'),original);assert.equal(f.store.get('jobs','existing-job').status,'success');
@@ -88,7 +88,7 @@ test('永久删除收束迟到回复后隐藏旧入口，重发与恢复不复�
   const f=fixture(t,async()=>{calls++;started.resolve();return response.promise;});
   const messageId=uid(),image=await screenshot(f),originalFile=f.store.get('assistantAttachments',image.id);
   await send(f,{messageId,attachmentIds:[image.id],materials:['text','image']});await started.promise;
-  const before=f.assistant.get(f.session.id),run=before.runs[0],request={sessionId:f.session.id,revision:before.session.revision,confirmed:true};
+  const before=f.assistant.get(f.session.id),run=before.runs[0],request={sessionId:f.session.id,scope:f.assistant.deletionPlan(f.session.id).scope,confirmed:true};
   const deleting=f.assistant.removeContent(f.session.id,request);
   response.resolve(Response.json({choices:[{message:{content:JSON.stringify({reply:'绝不重新出现的迟到回复',steps:[{capabilityId:'project.create',input:{name:'迟到禁止创建'}}]})}}]}));
   assert.deepEqual(await deleting,{sessionId:f.session.id,deleted:true});

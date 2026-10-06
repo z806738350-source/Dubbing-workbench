@@ -653,9 +653,42 @@ export function createWorker(store, domain, config) {
         });
       } finally { clearTimeout(networkTimer); controller.abort(); for (const lease of leases) lease.release(); }
   }
+  function rememberOutput(job,kind,record) {
+    const current=store.get('jobs',job.id);
+    if(!active(current)||current.stop)return false;
+    job.outputRecords={...job.outputRecords,[kind]:record};
+    job.masterId=kind==='master'?record.id:record.masterId;
+    if(kind==='export')job.exportId=record.id;
+    job.result={chapterId:job.chapterId,arrangement:job.arrangement,masterId:job.masterId,...(job.exportId?{exportId:job.exportId,format:job.format}:{})};
+    job.localOutputPending=true;
+    setJob({...current,outputRecords:job.outputRecords,masterId:job.masterId,...(job.exportId?{exportId:job.exportId}:{}),result:job.result,localOutputPending:true});return true;
+  }
+  async function recoverOutputs(job) {
+    if(!['master','export'].includes(job.kind))return false;
+    const before=JSON.stringify(job);
+    for(const [kind,record]of Object.entries(job.outputRecords || {})) {
+      const table=kind==='master'?'masters':kind==='export'?'exports':null;
+      if(!table || record.chapterId!==job.chapterId || record.arrangement!==job.arrangement || !record.id || !record.path || !existsSync(join(store.directory,record.path)))continue;
+      if(!store.maybe(table,record.id)) {
+        try {const meta=await inspect(join(store.directory,record.path));if(kind==='master'&&Math.abs(meta.duration*48000-record.frames)>1)continue;}
+        catch {continue;}
+        store.put(table,record,job.chapterId);
+      }
+    }
+    let masters=store.all('masters',job.chapterId).filter(m=>m.id===(job.masterId||job.result?.masterId||job.outputRecords?.master?.id)||m.jobId===job.id);
+    const exports=store.all('exports',job.chapterId).filter(e=>e.id===(job.exportId||job.result?.exportId)||e.jobId===job.id);
+    if(!masters.length&&job.kind==='master'&&job.status==='success')masters=store.all('masters',job.chapterId).filter(m=>m.arrangement===job.arrangement&&!m.invalid&&!m.superseded&&existsSync(join(store.directory,m.path)));
+    const exported=exports.length===1&&exports[0].format===job.format?exports[0]:null;
+    const master=exported?store.maybe('masters',exported.masterId):masters.length===1?masters[0]:null;
+    if(!master || master.arrangement!==job.arrangement || master.invalid || !existsSync(join(store.directory,master.path)) || job.kind==='export'&&(!exported || !existsSync(join(store.directory,exported.path))))return false;
+    job.masterId=master.id;if(exported)job.exportId=exported.id;
+    job.result={chapterId:job.chapterId,arrangement:job.arrangement,masterId:master.id,...(exported?{exportId:exported.id,format:exported.format}:{})};
+    if((active(job)||job.localOutputPending)&&!job.stop&&!master.superseded&&!exported?.superseded) {job.status='success';job.done=job.total;job.finishedAt=new Date().toISOString();delete job.error;}
+    job.localOutputPending=false;if(JSON.stringify(job)!==before)setJob(job);return true;
+  }
   async function render(job) {
     const c = store.get("chapters", job.chapterId);
-    const isCurrent = () => active(store.get("jobs", job.id)) && store.get("chapters", c.id).arrangement === job.arrangement;
+    const isCurrent = () => {const current=store.get('jobs',job.id);return active(current)&&!current.stop&&store.get("chapters", c.id).arrangement === job.arrangement;};
     const rows = domain.enhancement?.resolve(c.id) || domain.list(c.id).filter(s => !s.excluded).map(s => ({s,a:s.current && store.maybe("audios",s.current)}));
     for (const [index,{s,a}] of rows.entries()) {
       if (!a || !await validateStoredAudio(store, a)) fail(`第 ${(s.order ?? index) + 1} 条音频损坏或缺失，请先恢复文件`);
@@ -680,7 +713,9 @@ export function createWorker(store, domain, config) {
       }
     }
     if (!master) {
-      const id = uid();
+      if (!isCurrent()) fail('构建任务或编排已失效，请按当前版本重新准备');
+      const id = job.masterId || uid();
+      job.masterId=id;setJob({...store.get('jobs',job.id),masterId:id});
       const info = await buildMaster(store, rows, c.gap, id);
       master = {
         id,
@@ -691,34 +726,28 @@ export function createWorker(store, domain, config) {
         ...info,
         createdAt: new Date().toISOString(),
       };
+      rememberOutput(job,'master',master);
       store.put("masters", master, c.id);
-      if (master.superseded) fail("旧构建已保留，未替换当前母版");
+      if (master.superseded) {job.localOutputPending=false;fail("旧构建已保留，未替换当前母版");}
     }
+    if(job.masterId!==master.id || !job.outputRecords?.master)rememberOutput(job,'master',master);
     if (job.kind === "export") {
       if (!isCurrent()) fail("构建任务或编排已失效，请按当前版本重新准备");
-      const id = uid(),
-        path = await exportMaster(store, master, id, job.format);
+      const id = job.exportId || uid();job.exportId=id;setJob({...store.get('jobs',job.id),exportId:id});
+      const path = await exportMaster(store, master, id, job.format);
       const superseded = !isCurrent();
+      const output={id,jobId:job.id,superseded,path,format:job.format,chapterId:c.id,arrangement:c.arrangement,masterId:master.id,confirmation:job.confirmation,createdAt:new Date().toISOString()};
+      rememberOutput(job,'export',output);
       store.put(
         "exports",
-        {
-          id,
-          jobId: job.id,
-          superseded,
-          path,
-          format: job.format,
-          chapterId: c.id,
-          arrangement: c.arrangement,
-          masterId: master.id,
-          confirmation: job.confirmation,
-          createdAt: new Date().toISOString(),
-        },
+        output,
         c.id,
       );
-      if (superseded) fail("旧导出已保留，未替换当前结果");
+      if (superseded) {job.localOutputPending=false;fail("旧导出已保留，未替换当前结果");}
     }
     job.done = job.total;
     job.status = "success";
+    job.localOutputPending=false;
   }
   const pendingJob = id => [...executing.values()].some(item => item.jobId === id);
   function stopQueued(job) {
@@ -797,6 +826,7 @@ export function createWorker(store, domain, config) {
   }
   async function recover() {
     for (const j of store.all("jobs")) {
+      if(await recoverOutputs(j))continue;
       const interrupted = active(j);
       for (const a of store.all("attempts", j.id)) {
         const file = join(store.directory, a.path || `audio/${a.id}.wav`);

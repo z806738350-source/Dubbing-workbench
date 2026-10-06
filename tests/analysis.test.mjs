@@ -13,7 +13,8 @@ function setup(t, source='  他停步。\n\n“你好。”\n\n她回头。😀'
   const a=createAnalysis(store,domain,{key:'test',baseUrl:'https://example.invalid'}), native=global.fetch;
   t.after(()=>{global.fetch=native;store.close();rmSync(dir,{recursive:true,force:true});});
   const get=id=>store.get('suggestions',id);
-  const start=()=>a.start({chapterId:c.id,revision:store.get('chapters',c.id).revision});
+  // These inherited assertions cover legacy batching/replay. PG sizing and repair have their own behavioral coverage.
+  const start=()=>a.start({chapterId:c.id,revision:store.get('chapters',c.id).revision,includePerformance:false});
   const rows=input=>input.blocks.map(b=>({from:b.id,to:b.id,roleId:input.roles[0].id,type:'narration',performance:'自然',evidence:'原文明示',evidenceRefs:[b.id],reason:'原文',uncertain:false}));
   const result=items=>Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({items})}}]});
   return {store,domain,project,c,a,get,start,rows,result};
@@ -130,7 +131,7 @@ test('导演多选采用原子写入并保留逐条采用记录，拒绝过期�
   for(const text of ['第一句。','第二句。','第三句。'])domain.mutate('segment.create',{chapterId:c.id,revision:store.get('chapters',c.id).revision,text});
   const guidance=['疲惫地轻声说，句尾收弱。','兴奋地加快语速。','以陌生口音低声表达。'],rolesBefore=structuredClone(store.all('roles'));
   global.fetch=async(_,init)=>result(input(init).segments.map((s,i)=>({segmentId:s.id,performance:guidance[i],evidence:'创作建议',evidenceRefs:[],reason:'无原文依据的待采用声音建议',age:75,gender:'男',accent:'四川口音',facts:[{text:'模型杜撰的人物性格'}]})));
-  const begin=async()=>{const r=await a.start({chapterId:c.id,revision:store.get('chapters',c.id).revision,kind:'director'});await a.close();return get(r.id)};
+  const begin=async()=>{const r=await a.start({chapterId:c.id,revision:store.get('chapters',c.id).revision,kind:'director',includePerformance:false});await a.close();return get(r.id)};
   const stale=await begin(), p=store.get('projects',project.id);p.contextRevision++;store.put('projects',p);
   const before=domain.list(c.id);
   assert.throws(()=>a.apply({id:stale.id,draftVersion:stale.draftVersion,revision:store.get('chapters',c.id).revision,selected:[stale.items[0].id]}),/过期/);

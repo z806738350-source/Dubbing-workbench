@@ -24,19 +24,20 @@ function setup(t,segment=false) {
   const config={key:'fixture',model:'seed-audio-1.0',baseUrl:'https://example.invalid/v1',audioUrl:'https://example.invalid/v1/audio/speech'},w=createWorker(store,d,config),a=createAnalysis(store,d,config),e=createExperience(store,d,w,a,config);
   t.after(async()=>{await a.close();w.close();store.close();rmSync(dir,{recursive:true,force:true});});
   const grant=(limits={})=>e.grant({grantId:uid(),projectId:p.id,chapterId:c.id,steps:['extract','director','scene','unit-generate','voice-create'],textLimit:10,audioLimit:10,...limits});
-  const smart=()=>e.policy({projectId:p.id,revision:0,mode:'smart'});
+  const smart=()=>e.policy({projectId:p.id,revision:e.project(p.id).policy.revision,mode:'smart'});
   const begin=g=>e.run({operationId:uid(),kind:'prepareChapter',chapterId:c.id,revision:rev(),grantId:g.grantId});
   const response=(init,transform=items=>items)=>{
     const input=JSON.parse(JSON.parse(init.body).messages[1].content);
-    const items=input.segments ? input.segments.map(s=>({segmentId:s.id,performance:'自然',evidence:'原文明示',evidenceRefs:[0],uncertain:false,reason:'自拟原文'})) : input.blocks.map(b=>({from:b.id,to:b.id,roleId:input.roles[0].id,type:'narration',performance:'自然',evidence:'原文明示',evidenceRefs:[b.id],uncertain:false,reason:'自拟原文'}));
+    const items=input.targets ? input.targets.map(s=>({targetId:s.targetId,performance:'自然',performanceEvidence:{kind:'创作建议',refs:[]},performanceUncertain:false,performanceAnchors:[]})) : input.segments ? input.segments.map(s=>({segmentId:s.id,performance:'自然',evidence:'原文明示',evidenceRefs:[0],uncertain:false,reason:'自拟原文'})) : input.blocks.map(b=>({from:b.id,to:b.id,roleId:input.roles[0].id,type:'narration',performance:'自然',evidence:'原文明示',evidenceRefs:[b.id],uncertain:false,reason:'自拟原文'}));
     return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({items:transform(items)})}}]});
   };
   return {dir,store,d,p,c,v,role,rev,config,w,a,e,grant,smart,begin,response};
 }
 
-test('AR01/AR02/AR10 智能初稿来源成立而非人工听验；旧项目默认逐项',async t=>{
+test('AR01/AR02/AR10 初稿默认智能安排，来源成立而非人工听验',async t=>{
   const {e,smart,grant,begin,a,d,c,store,response}=setup(t);
-  assert.equal(e.project(c.projectId).policy.revision,0);assert.equal(e.project(c.projectId).policy.mode,'review');
+  assert.equal(e.project(c.projectId).policy.revision,0);assert.equal(e.project(c.projectId).policy.mode,'smart');
+  e.policy({projectId:c.projectId,revision:0,mode:'review'});assert.equal(e.project(c.projectId).policy.mode,'review','已明确选择审阅的策略仍保留');
   smart();const g=grant();t.mock.method(globalThis,'fetch',async(_,init)=>response(init));const op=await begin(g);await a.close();
   const rows=d.list(c.id);assert.equal(rows.map(s=>s.text).join(''),c.source);assert.ok(rows.every(configurationDecided));assert.ok(rows.every(s=>s.decisions.role.source==='policy_ai'&&s.review===null));
   assert.equal(e.get(op.operationId).outcome,'completed');assert.equal(store.get('settings',g.id).textUsed,1);assert.equal(store.get('settings',g.id).textReserved,0);
@@ -187,8 +188,8 @@ test('AR03 常规中性词组合自动应用；人工保护和相同值不重复
   t.mock.method(globalThis,'fetch',async(_,init)=>response(init,items=>items.map(i=>({...i,performance:'自然、清楚地表达'}))));const op=await begin(grant());await a.close();assert.equal(d.list(c.id)[0].performance,'用户低声');assert.equal(d.list(c.id)[1].performance,'自然、清楚地表达');assert.equal(e.get(op.operationId).result.needsDecision,0);
   const repeat=await begin(grant());await a.close();assert.equal(e.get(repeat.operationId).result.needsDecision,0);
 });
-test('AR03 强表演不在中性白名单自动应用',async t=>{
-  const {smart,grant,begin,a,d,c,response,e}=setup(t,true);smart();t.mock.method(globalThis,'fetch',async(_,init)=>response(init,items=>items.map(i=>({...i,performance:'大声哭喊，并播放背景音乐'}))));const op=await begin(grant());await a.close();assert.ok(d.list(c.id).every(s=>s.performance===''));assert.equal(e.get(op.operationId).result.needsDecision,2);
+test('AR03 表演不得越权加入背景；修补失败保留缺口而不制造角色审批',async t=>{
+  const {smart,grant,begin,a,d,c,response,e}=setup(t,true);smart();t.mock.method(globalThis,'fetch',async(_,init)=>response(init,items=>items.map(i=>({...i,performance:'大声哭喊，并播放背景音乐'}))));const op=await begin(grant());await a.close();assert.ok(d.list(c.id).every(s=>s.performance===''));const result=e.get(op.operationId);assert.equal(result.result.needsDecision,0);assert.equal(result.result.performanceCoverage.missingIds.length,2);assert.equal(result.outcome,'needsInput');
 });
 test('OP05 已绑定角色换声默认仅本章，重置单句及新建片段沿同一本章继承',async t=>{
   const {d,c,rev,e,smart,store,v,dir,role,p}=setup(t,true);smart();const replacement={...v,id:uid(),path:'chapter-only.wav'};writeFileSync(join(dir,replacement.path),wav());store.put('voices',replacement);

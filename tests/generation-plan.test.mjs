@@ -33,10 +33,21 @@ test('failed recheck keeps the old plan blocked and its error local without any 
   await press(f.tree(),'开始生成');await press(f.tree(),'重新核对生成范围');const tree=f.tree();assert.equal(submissions,1);assert.equal(rechecks,1);assert.equal(button(tree,'开始生成'),undefined);assert.ok(button(tree,'重新核对生成范围'));assert.match(words(tree),/连接未恢复，当前范围尚未重新核对/);
 });
 test('unknown remains an explicit fee decision and pending recheck cannot submit or recheck again',async()=>{
-  let release,rechecks=0,submissions=0;
-  const f=await setup({unknown:true,onGenerate:async()=>{submissions++;throw Object.assign(new Error('内容已变化'),{status:409});},onRecheck:async()=>{rechecks++;await new Promise(resolve=>{release=resolve;});}});
-  assert.equal(button(f.tree(),'开始生成').props.disabled,true);f.update({retryUnknown:true});await press(f.tree(),'开始生成');
+  let release,rechecks=0,submissions=0,decision;
+  const f=await setup({unknown:true,onGenerate:async(_grant,flags)=>{submissions++;decision=flags;throw Object.assign(new Error('内容已变化'),{status:409});},onRecheck:async()=>{rechecks++;await new Promise(resolve=>{release=resolve;});}});
+  const initial=f.tree();assert.equal(button(initial,'开始生成'),undefined);assert.equal(nodes(initial).some(node=>node.type==='input'&&node.props.type==='checkbox'),false);assert.match(words(initial),/可能重复计费/);assert.equal(submissions,0);await press(initial,'重新发送 1 次并继续');assert.deepEqual(decision,{retryUnknown:true,resumeRoute:false});
   await press(f.tree(),'重新核对生成范围');const pending=f.tree();assert.equal(button(pending,'正在重新核对').props.disabled,true);assert.equal(button(pending,'开始生成'),undefined);assert.equal(rechecks,1);assert.equal(submissions,1);release();await new Promise(resolve=>setImmediate(resolve));
+});
+
+test('unknown与接口恢复在同一张卡一次提交，具体flags不依赖第二次点击或旧state',async()=>{
+  const calls=[];const f=await setup({unknown:true,routeBlocked:true,retryUnknown:false,resumeRoute:false,onGenerate:async(...args)=>calls.push(args)}),tree=f.tree();
+  assert.equal(nodes(tree).some(node=>node.type==='input'&&node.props.type==='checkbox'),false);assert.match(words(tree),/接口曾因权限或额度问题暂停/);await press(tree,'重新发送 1 次并继续（同时恢复接口）');assert.deepEqual(calls,[[undefined,{retryUnknown:true,resumeRoute:true}]]);
+});
+
+test('确实缺額时同卡追加范围并继续，unknown決定只带原卡真实flags',async()=>{
+  const calls=[];const f=await setup({unknown:true,routeBlocked:true,onGenerate:async(...args)=>{calls.push(args);if(!args[0])throw Object.assign(new Error('已有上限不足'),{code:'task-grant-needed'});}});
+  await press(f.tree(),'重新发送');const tree=f.tree(),authorize=nodes(tree).find(node=>node.type==='TaskAuthorization');assert.ok(authorize);assert.equal(button(tree,'重新发送'),undefined);assert.match(authorize.props.label,/1 次.*可能重复计费.*恢复/);
+  await authorize.props.onAuthorized('explicit-added-grant');assert.deepEqual(calls,[[undefined,{retryUnknown:true,resumeRoute:true}],['explicit-added-grant',{retryUnknown:true,resumeRoute:true}]]);
 });
 test('rechecked all-reuse scope finishes with no paid start or authorization controls',async()=>{
   let submissions=0,closed=0;

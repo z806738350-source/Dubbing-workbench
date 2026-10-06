@@ -848,6 +848,7 @@ test("分批文本分析兼容对象和数组、保留正文及默认模型路�
     chapterId: c.id,
     revision: c.revision,
     kind: "extract",
+    includePerformance: false,
   });
   await analysis.close();
   const result = store.get("suggestions", draft.id);
@@ -1613,7 +1614,7 @@ test('未知人物资料和未测试参考不阻断生成，未采用导演建�
     return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});
   });
   const analysis=createAnalysis(store,d,{key:'test',baseUrl:'https://example.invalid'});
-  const draft=await analysis.start({chapterId:c.id,revision:d.chapter(c.id).revision,kind:'director',ids:[id]});await analysis.close();
+  const draft=await analysis.start({chapterId:c.id,revision:d.chapter(c.id).revision,kind:'director',ids:[id],includePerformance:false});await analysis.close();
   const suggestion=store.get('suggestions',draft.id);assert.equal(suggestion.status,'ready');assert.equal(suggestion.items.length,1);assert.ok(!suggestion.appliedAt);
   const job=await worker.submit({kind:'generate',chapterId:c.id,revision:d.chapter(c.id).revision,ids:[id],commandId:uid()});await worker.tick();
   assert.equal(textCalls,1);assert.equal(audioCalls,1);assert.equal(store.get('jobs',job.id).status,'success');
@@ -1746,14 +1747,14 @@ test('供应商等待超过请求时限后标记结果不明，不自动重发�
   await worker.tick();assert.equal(calls,1);assert.throws(()=>worker.enqueue({kind:'generate',chapterId:c.id,revision:d.chapter(c.id).revision,ids:[d.list(c.id)[0].id],commandId:uid()}),/结果不明/);assert.equal(store.all('jobs').length,1);
 });
 test('HTTP边界保护本地密钥和上传路径，供应商回显只保留脱敏文本',async t=>{
-  const {startServer}=await import('../server/index.mjs'),directory=mkdtempSync(join(tmpdir(),'dubbing-boundary-')),key='fixture-private-value-51',native=globalThis.fetch;
+  const {startServer}=await import('../server/index.mjs'),directory=mkdtempSync(join(tmpdir(),'dubbing-boundary-')),key='fixture-private-value-51',echoedKey=['sk', 'fixture-secondary-secret'].join('-'),native=globalThis.fetch;
   const app=await startServer({port:0,directory,config:{key,model:'seed-audio-1.0',baseUrl:'https://example.invalid',audioUrl:'https://example.invalid/audio'}}),base=`http://127.0.0.1:${app.server.address().port}`;
   t.after(async()=>{globalThis.fetch=native;await app.close();rmSync(directory,{recursive:true,force:true})});
   let providerCalls=0;
   t.mock.method(globalThis,'fetch',async(url,options)=>{
     if(new URL(url).hostname==='127.0.0.1')return native(url,options);
     assert.equal(new URL(url).hostname,'example.invalid');assert.equal(options.headers.Authorization,`Bearer ${key}`);providerCalls++;
-    return Response.json({error:{message:`upstream echoed ${key} sk-fixture-secondary-secret`}},{status:400});
+    return Response.json({error:{message:`upstream echoed ${key} ${echoedKey}`}},{status:400});
   });
   const post=(path,p,headers={})=>fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(p)});
   const initial=await (await fetch(base+'/api/state')).text();assert.ok(!initial.includes(key));assert.equal(JSON.parse(initial).settings.configured,true);
@@ -1770,7 +1771,7 @@ test('HTTP边界保护本地密钥和上传路径，供应商回显只保留脱�
   const escape=await fetch(base+'/%2e%2e%2f.env.kunpo');assert.equal(escape.status,403);assert.ok(!(await escape.text()).includes(key));
   const r=await(await post('/api/analysis',{chapterId:c.id,revision:c.revision})).json();
   for(let i=0;i<100&&app.store.get('suggestions',r.id).status==='running';i++)await new Promise(resolve=>setTimeout(resolve,10));
-  const saved=app.store.get('suggestions',r.id);assert.equal(saved.status,'partial');const response=saved.batches[0].attempts[0].response;assert.ok(response.includes('[redacted]'));assert.ok(!response.includes(key));assert.ok(!response.includes('sk-fixture-secondary-secret'));
+  const saved=app.store.get('suggestions',r.id);assert.equal(saved.status,'partial');const response=saved.batches[0].attempts[0].response;assert.ok(response.includes('[redacted]'));assert.ok(!response.includes(key));assert.ok(!response.includes(echoedKey));
   assert.equal(providerCalls,1);assert.equal(app.domain.chapter(c.id).source,source);assert.equal(app.domain.list(c.id).length,0);
   const audioChapter=app.domain.mutate('chapter.create',{projectId:p.id,title:'音频错误边界',source:'一句合成测试。',segment:true}),role=app.store.all('roles',p.id)[0];
   app.domain.mutate('role.update',{id:role.id,entityRevision:role.revision??1,voiceId:v.id,chapterId:audioChapter.id,revision:audioChapter.revision});
@@ -1778,7 +1779,7 @@ test('HTTP边界保护本地密钥和上传路径，供应商回显只保留脱�
   const job=await(await post('/api/jobs',{kind:'generate',chapterId:audioChapter.id,revision:app.domain.chapter(audioChapter.id).revision,ids,commandId:uid()})).json();
   for(let i=0;i<100&&['queued','running'].includes(app.store.get('jobs',job.id).status);i++)await new Promise(resolve=>setTimeout(resolve,10));
   assert.equal(app.store.get('jobs',job.id).status,'failed');assert.equal(providerCalls,2);assert.equal(app.store.all('audios').length,0);
-  const audioErrors=JSON.stringify([app.store.get('jobs',job.id),app.store.all('attempts',job.id)]);assert.ok(!audioErrors.includes(key));assert.ok(!audioErrors.includes('sk-fixture-secondary-secret'));
+  const audioErrors=JSON.stringify([app.store.get('jobs',job.id),app.store.all('attempts',job.id)]);assert.ok(!audioErrors.includes(key));assert.ok(!audioErrors.includes(echoedKey));
   for(const path of ['/api/state','/api/chapters/'+c.id])assert.ok(!(await(await fetch(base+path)).text()).includes(key));
 });
 

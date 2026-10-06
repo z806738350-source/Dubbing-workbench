@@ -1,7 +1,7 @@
 {
   "manifestVersion": 1,
-  "sourceCommit": "ae96c84cb2c7c6ae209e428010faa289a0b9e181",
-  "scope": "M0 existing behavior inventory plus implemented assistant adapters; not permission to forward arbitrary HTTP/action",
+  "sourceCommit": "27a6ae7dfe28ec8342982cfc3eecf82317ed63a8",
+  "scope": "PG/GA v1.1 adapters; sourceCommit is the design baseline, current definitions are checked by ordinary tests",
   "capabilities": [
     {
       "id": "project.create",
@@ -1874,6 +1874,22 @@
           "source": {
             "type": "string",
             "maxLength": 1000000
+          },
+          "includePerformance": {
+            "type": "boolean"
+          },
+          "performanceMode": {
+            "enum": [
+              "initial",
+              "fillMissing",
+              "replaceAi",
+              "selectedRewrite"
+            ]
+          },
+          "repairOf": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
           }
         },
         "required": []
@@ -2227,6 +2243,22 @@
           "source": {
             "type": "string",
             "maxLength": 1000000
+          },
+          "includePerformance": {
+            "type": "boolean"
+          },
+          "performanceMode": {
+            "enum": [
+              "initial",
+              "fillMissing",
+              "replaceAi",
+              "selectedRewrite"
+            ]
+          },
+          "repairOf": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
           }
         },
         "required": []
@@ -2254,6 +2286,16 @@
             "maxLength": 100
           },
           "batchIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "repairIds": {
             "type": "array",
             "items": {
               "type": "string",
@@ -2739,6 +2781,92 @@
       "chapter": false,
       "handler": "saveCandidateVoice",
       "help": "voice-create"
+    },
+    {
+      "id": "read.performanceCoverage",
+      "version": 1,
+      "description": "免费读取当前章有效台词的表演覆盖、保留与缺口",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "analysisId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": []
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "analysis"
+      ],
+      "handler": "analysis.coverage",
+      "help": "analysis"
+    },
+    {
+      "id": "read.outputs",
+      "version": 1,
+      "description": "发现本章真实母版与成品，按任务、操作、格式和编排查询",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "format": {
+            "enum": [
+              "wav",
+              "mp3"
+            ]
+          },
+          "arrangement": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          }
+        },
+        "required": []
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "export"
+      ],
+      "handler": "bounded outputs",
+      "help": "export"
     },
     {
       "id": "export.reveal",
@@ -6171,6 +6299,16 @@
       ],
       "undo": "可重新删除",
       "assistantAdaptation": "仅注册Schema字段可入模；版本、确认、来源、操作ID由服务端注入"
+    },
+    {
+      "action": "segment.performance-basic",
+      "capabilityId": "operation.prepareChapter",
+      "access": "write",
+      "source": {
+        "file": "server/domain.mjs",
+        "anchor": "action==='segment.performance-basic'"
+      },
+      "boundary": "Only explicit user basic-reading intent; assistant uses trusted basic prepare scope, not arbitrary action forwarding"
     }
   ],
   "operations": [

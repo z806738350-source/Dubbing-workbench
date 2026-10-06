@@ -9,6 +9,7 @@ import { createCapabilities, capabilityDefinitions } from '../server/assistant/c
 import { createAssistantContext, getHelp } from '../server/assistant/context.mjs';
 import { createActionExecutor } from '../server/actions.mjs';
 import { createAnalysis } from '../server/analysis.mjs';
+import { creationScope } from '../server/assistant/scope.mjs';
 import { createExperience } from '../server/experience.mjs';
 
 function fixture(t, overrides = {}) {
@@ -27,6 +28,16 @@ function fixture(t, overrides = {}) {
   const scope = { projectId: project.id, chapterId: chapter.id };
   return { directory, store, domain, project, chapter, other, otherChapter, calls, capabilities, scope, analysis, experience, worker };
 }
+
+function trustedCreation(f,binding,input,context) {
+  const runId=uid(),sessionId=uid(),messageId=uid(),content=input.name?'新建项目“'+input.name+'”。':'新建章节“'+input.title+'”。\n文本：\n'+input.source;
+  f.store.put('assistantSessions',{id:sessionId,projectId:binding.projectId||null,chapterId:binding.chapterId||null,state:'active',revision:1});
+  const scope={projectId:binding.projectId||null,chapterId:binding.chapterId||null};
+  f.store.put('assistantMessages',{id:messageId,sessionId,runId,role:'user',content,binding:scope},sessionId);
+  const creation=creationScope(f.store,scope,messageId,content);f.store.put('assistantRuns',{id:runId,sessionId,binding:scope,creationScope:creation,state:'executing'},sessionId);
+  return {...context,runId,creationScope:creation};
+}
+
 async function approved(capabilities, id, input, scope, additions = {}) {
   const plan = await capabilities.preview(id, input, scope);
   return { actorKind: 'human_approved_proposal', operationId: uid(), baseRevisions: plan.baseRevisions, preview: plan.preview, ...additions };
@@ -161,11 +172,11 @@ test('review passed requires an explicit human audio decision and never uses mod
 });
 
 test('empty project can initialize without guessed chapter or inherited model configuration', async t => {
-  const { capabilities, store } = fixture(t);
-  const input = { name: '助手新项目' }, context = await approved(capabilities, 'project.create', input, {});
+  const f=fixture(t),{capabilities,store}=f;
+  const input = { name: '助手新项目' }, context = trustedCreation(f,{},input,await approved(capabilities, 'project.create', input, {}));
   const p = await capabilities.execute('project.create', input, {}, context);
   const scope = { projectId: p.id }, chapterInput = { title: '新章', source: '保持原文。', segment: false };
-  const c = await capabilities.execute('chapter.create', chapterInput, scope, await approved(capabilities, 'chapter.create', chapterInput, scope));
+  const c = await capabilities.execute('chapter.create', chapterInput, scope, trustedCreation(f,scope,chapterInput,await approved(capabilities, 'chapter.create', chapterInput, scope)));
   assert.equal(c.projectId, p.id); assert.equal(c.source, '保持原文。'); assert.equal(store.all('segments', c.id).length, 0);
 });
 
@@ -313,7 +324,7 @@ for (const policy of ['chooseFromApprovedSet', 'askMissing']) test(`chapter crea
   f.store.put('roles', { ...narrator, voiceId: voiceB.id }, f.project.id);
   const scope = { projectId: f.project.id, chapterId: null }, input = { title: '托管导入的新章', source: '导入原文。\n第二句话。', segment: true };
   const preview = await f.capabilities.preview('chapter.create', input, scope), before = f.store.all('chapters', f.project.id);
-  const context = { actorKind: 'assistant_delegated', operationId: uid(), baseRevisions: preview.baseRevisions, textMutationPolicy: 'preserveExact', voicePolicy: policy, allowedVoiceIds: [policy === 'askMissing' ? voiceB.id : voiceA.id] };
+  const context = trustedCreation(f,scope,input,{ actorKind: 'assistant_delegated', operationId: uid(), baseRevisions: preview.baseRevisions, textMutationPolicy: 'preserveExact', voicePolicy: policy, allowedVoiceIds: [policy === 'askMissing' ? voiceB.id : voiceA.id] });
   if (policy === 'chooseFromApprovedSet') {
     await assert.rejects(f.capabilities.execute('chapter.create', input, scope, context), /指定音色集合/);
     assert.deepEqual(f.store.all('chapters', f.project.id), before);
