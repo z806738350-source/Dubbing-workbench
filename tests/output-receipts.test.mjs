@@ -7,6 +7,9 @@ import {openStore,uid} from '../server/store.mjs';
 import {createDomain,inputOf,basisOf} from '../server/domain.mjs';
 import {createWorker} from '../server/worker.mjs';
 import {revealOutput} from '../server/workspace.mjs';
+import { updateAudioRange, resolveAudioRange } from '../server/audio-range.mjs';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 function wav(){const b=Buffer.alloc(9644);b.write('RIFF');b.writeUInt32LE(b.length-8,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(48000,24);b.writeUInt32LE(96000,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(9600,40);return b;}
 function setup(t){
  const directory=mkdtempSync(join(tmpdir(),'output-receipts-')),store=openStore(directory),domain=createDomain(store),config={key:'fixture',model:'seed-audio-1.0',audioUrl:'https://fixture.invalid/audio',baseUrl:'https://fixture.invalid'};
@@ -19,6 +22,28 @@ function setup(t){
  const submit=async(kind,format)=>{const c=domain.chapter(chapter.id),job=await worker.submit({kind,chapterId:c.id,revision:c.revision,arrangement:c.arrangement,commandId:uid(),...(format?{format,reviewItems:c.reviewItems,confirm:false}:{})});await worker.tick();return store.get('jobs',job.id);};
  return {directory,store,domain,chapter,project,submit,get worker(){return worker;},next:()=>worker=createWorker(store,domain,config)};
 }
+test('裁剪保存后WAV与MP3引用新母版与真实范围签名，恢复全长复用旧母版且模型basis不变',async t=>{
+ const f=setup(t),before=f.domain.chapter(f.chapter.id),legacy=await f.submit('master'),target=before.playbackItems[0];
+ const range=await resolveAudioRange(f.store,target.unitId,'dry',target.audioId);
+ const saved=await updateAudioRange(f.store,{operationId:uid(),unitId:target.unitId,mode:'dry',audioId:target.audioId,expectedRevision:0,startFrame:37,endFrame:4079,sourceHash:range.range.sourceHash,decodeProfile:range.range.decodeProfile});
+ const clipped=f.domain.chapter(f.chapter.id);assert.equal(clipped.arrangement,before.arrangement);assert.equal(clipped.revision,before.revision);assert.deepEqual(clipped.playbackItems.map(i=>i.basis),before.playbackItems.map(i=>i.basis));assert.equal(clipped.playbackItems[0].review,'pending');assert.equal(clipped.playbackItems[1].review,'passed');
+ f.domain.mutate('unit.review',{chapterId:clipped.id,revision:clipped.revision,entityRevision:clipped.units.find(u=>u.id===target.unitId).revision,id:target.unitId,mode:'dry',audioId:target.audioId,basis:target.basis,rangeContentKey:clipped.reviewItems[0].rangeContentKey,state:'passed'});
+ const wav=await f.submit('export','wav'),mp3=await f.submit('export','mp3');assert.equal(wav.status,'success',wav.error);assert.equal(mp3.status,'success',mp3.error);assert.notEqual(wav.masterId,legacy.masterId);assert.equal(wav.masterId,mp3.masterId);
+ const master=f.store.get('masters',wav.masterId);assert.equal(master.mapping[0].endFrame-master.mapping[0].startFrame,4042);assert.equal(master.mapping[0].clipStartFrame,37);assert.equal(master.mapping[0].clipEndFrame,4079);assert.equal(master.renderSignature,clipped.renderSignature);assert.equal(wav.result.renderSignature,clipped.renderSignature);
+ const outputs=f.domain.outputs({chapterId:clipped.id});assert.ok(outputs.items.find(o=>o.id===legacy.masterId&&!o.current));assert.ok(outputs.items.filter(o=>o.kind==='export').every(o=>o.current&&o.renderSignature===clipped.renderSignature));
+ await updateAudioRange(f.store,{operationId:uid(),unitId:target.unitId,mode:'dry',audioId:target.audioId,expectedRevision:saved.range.revision,startFrame:0,endFrame:range.range.sourceFrames});assert.equal(f.domain.chapter(clipped.id).renderSignature,null);const restored=await f.submit('master');assert.equal(restored.masterId,legacy.masterId);
+});
+test('连续范围变化合并排队母版，冻结旧构建只入历史，后来的播放范围不被旧结果覆盖',async t=>{
+ const f=setup(t),c=f.domain.chapter(f.chapter.id),target=c.playbackItems[0],scope={unitId:target.unitId,mode:'dry',audioId:target.audioId};
+ const range=await resolveAudioRange(f.store,scope.unitId,'dry',scope.audioId);
+ const write=async(startFrame,endFrame,expectedRevision)=>updateAudioRange(f.store,{...scope,operationId:uid(),startFrame,endFrame,expectedRevision});
+ await write(20,4700,0);const first=await f.worker.submit({kind:'master',chapterId:c.id,revision:c.revision,commandId:uid()});
+ await write(100,4600,1);const last=await f.worker.submit({kind:'master',chapterId:c.id,revision:c.revision,commandId:uid()});assert.equal(f.store.get('jobs',first.id).status,'stopped');assert.equal(f.store.all('jobs').filter(j=>j.status==='queued').length,1);
+ const original=fsPromises.appendFile;let changed=false;
+ t.mock.method(fsPromises,'appendFile',async(...args)=>{if(!changed){changed=true;await write(200,4500,2);}return original(...args);});syncBuiltinESMExports();
+ t.after(()=>{t.mock.restoreAll();syncBuiltinESMExports();});await f.worker.tick();const old=f.store.get('jobs',last.id);assert.equal(old.status,'failed');assert.ok(f.store.get('masters',old.masterId).superseded);assert.equal(f.store.get('masters',old.masterId).mapping[0].clipStartFrame,100);assert.equal(f.domain.outputs({chapterId:c.id}).items.find(o=>o.id===old.masterId).current,false);
+ const latest=await f.submit('master');assert.equal(latest.status,'success',latest.error);assert.equal(f.store.get('masters',latest.masterId).mapping[0].clipStartFrame,200);assert.equal(f.domain.chapter(c.id).playbackItems[0].clipStartFrame,200);assert.equal(range.range.sourceFrames,4800);
+});
 test('actual master and WAV/MP3 export receipts expose their real IDs, reuse the master and preserve source audio',async t=>{
  const f=setup(t),sources=f.store.all('audios'),master=await f.submit('master');assert.equal(master.status,'success');assert.ok(master.masterId);assert.equal(master.result.masterId,master.masterId);
  for(const format of ['wav','mp3']){const job=await f.submit('export',format);assert.equal(job.status,'success');assert.equal(job.masterId,master.masterId);assert.equal(job.result.format,format);const output=f.store.get('exports',job.exportId);assert.equal(output.masterId,master.masterId);assert.ok(existsSync(join(f.directory,output.path)));const found=f.domain.outputs({chapterId:f.chapter.id,jobId:job.id});assert.ok(found.items.some(o=>o.exportId===job.exportId&&o.masterId===master.masterId&&o.current&&o.available));}

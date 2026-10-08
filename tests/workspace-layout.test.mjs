@@ -27,13 +27,14 @@ function fixture(mode='dry'){
     setCurrentMembers:value=>calls.members.push(value),setCurrentSegment(){},startPlay:(...args)=>calls.play.push(args),openUnit:(...args)=>calls.open.push(args),
     run:fn=>fn(),generate:async(...args)=>calls.generate.push(args),setChecked(){},setSelected(){},setPanelMode(){},setInspectorOpen(){},
     openVoice:(...args)=>calls.voice.push(args),onDeleteSegments:(...args)=>calls.delete.push(args),bookmarks:{current:{}},chapterId:'chapter',setOldPreview(){},mutate:async()=>{},basis:()=>({}),names:{passed:'已检查',matched:'声音已更新'},
-    Play:'Play',Users:'Users',RefreshCw:'RefreshCw',Check:'Check',Trash2:'Trash2',SlidersHorizontal:'SlidersHorizontal',Status:'Status'};
+    Play:'Play',Users:'Users',RefreshCw:'RefreshCw',Check:'Check',Trash2:'Trash2',SlidersHorizontal:'SlidersHorizontal',Status:'Status',SegmentWaveform:'SegmentWaveform',player:null,state:null,position:0};
   return {env,calls,group,render:()=>env.visible.map(project(rows,env))};
 }
 
 for(const mode of ['dry','scene'])test(`筛选后的组头${mode}试听/重做仍覆盖完整成员，成员单句动作不冒充组动作`,async()=>{
   const f=fixture(mode);f.env.visible=f.env.segments.slice(1);
   const rendered=f.render(),headers=rendered.flatMap(nodes).filter(node=>node.props.className==='group-strip');assert.equal(headers.length,1);assert.match(text(headers[0]),/第 1—3 句/);
+  const waves=rendered.flatMap(nodes).filter(node=>node.type==='SegmentWaveform');assert.equal(waves.filter(w=>w.props.unitId==='group').length,1);assert.equal(waves.find(w=>w.props.unitId==='group').props.audioId,'group-'+mode);
   button(headers[0],'试听整段').props.onClick();assert.deepEqual(f.calls.members,[f.group.members]);
   assert.equal(f.calls.play[0][1],'group-'+mode);assert.equal(f.calls.play[0][5].id,'group');assert.equal(f.calls.play[0][5].mode,mode);
   button(headers[0],'重做这 3 句').props.onClick();assert.deepEqual(f.calls.generate,[ [f.group.members,false,{regenerate:true}] ]);
@@ -98,7 +99,7 @@ test('任务摘要仅按记录变化定位焦点，同一记录轮询不抢回�
 
 function headerFixture(){
   const calls={modals:[],panels:[],inspector:[],generate:[],play:0,mutations:[],notices:[]};
-  const env={React,chapter:{id:'chapter',title:'自拟长章名 · 保留角色与台词',coverage:{valid:true},playbackItems:[]},total:2,ready:0,passed:0,issues:[],criticalIssues:[],saveStatus:'saved',locked:false,busy:false,connectionReady:true,panelMode:'settings',
+  const env={React,chapter:{id:'chapter',title:'自拟长章名 · 保留角色与台词',coverage:{valid:true},playbackItems:[]},total:2,ready:0,passed:0,issues:[],criticalIssues:[],saveStatus:'saved',locked:false,busy:false,playPreparing:false,connectionReady:true,panelMode:'settings',
     segments:[{id:'one',order:0,excluded:false},{id:'two',order:1,excluded:false},{id:'excluded',order:2,excluded:true}],effectiveStatus:s=>({validity:s.id==='one'?'matched':'missing'}),window:{innerWidth:960},
     job:{id:'job',kind:'generate',done:6,total:95,failed:1,elapsedSeconds:333,currentSegmentId:'two',stop:false},playIntent:{current:0},pendingPlay:{current:{chapterId:'chapter'}},pendingPlaySnapshot:{current:{version:1}},time:()=> '05:33',
     setModal:value=>calls.modals.push(value),setPanelMode:value=>calls.panels.push(value),setInspectorOpen:value=>calls.inspector.push(value),run:fn=>fn(),generate:async(...args)=>calls.generate.push(args),playChapter:async()=>{calls.play++;},mutate:async(...args)=>calls.mutations.push(args),setNotice:value=>calls.notices.push(value),

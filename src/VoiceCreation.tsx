@@ -3,7 +3,6 @@ import { action } from "./api";
 import { Field, Status } from "./components";
 import { ObjectDraftTools, useObjectDraft } from "./ObjectDraft";
 import { saveAction, draftScopeRevision, withSavedDrafts } from "./autosave";
-import TaskAuthorization from "./TaskAuthorization";
 import { submitOperation } from "./taskOperations";
 import type { Job, Voice, VoiceCandidate, VoiceSession } from "./types";
 
@@ -41,7 +40,7 @@ export default function VoiceCreation(props: VoiceCreationProps) {
 function SessionEditor({ session, draftId, enabled, configured, audioTools, routeBlocked, voices, jobs, playingId, play, refresh, bind, target, projectId, chapterId, model, onUsed, resumeSelection, created }: VoiceCreationProps & {
   session?: VoiceSession; draftId: string; resumeSelection?: Selection; created: (session: VoiceSession, warning?: string, selection?: Selection) => void;
 }) {
-  const [error, setError] = useState(""), [pending, setPending] = useState(false), [grantId, setGrantId] = useState<string | null>(null), [retryUnknown, setRetryUnknown] = useState(false), [resumeRoute,setResumeRoute]=useState(false);
+  const [error, setError] = useState(""), [pending, setPending] = useState(false), [retryUnknown, setRetryUnknown] = useState(false), [resumeRoute,setResumeRoute]=useState(false);
   const text = useRef<HTMLTextAreaElement>(null), active = useRef(true), savedSession = useRef<VoiceSession | undefined>(session);
   useEffect(() => () => { active.current = false; }, []);
   useEffect(() => { if (resumeSelection && text.current) { text.current.focus(); text.current.setSelectionRange(resumeSelection.start || 0, resumeSelection.end || 0); } }, []);
@@ -68,13 +67,14 @@ function SessionEditor({ session, draftId, enabled, configured, audioTools, rout
   useEffect(()=>{setResumeRoute(false);},[actualProject,actualChapter,target?.roleId,target?.segmentId,target?.scope,model,routeBlocked]);
   const generate = async () => {
     if(routeBlocked&&!resumeRoute){setError("请先核对接口权限与额度，再明确恢复本次声音请求。");return;}
+    if(unknown&&!retryUnknown){setError("请先核对上次记录，再明确选择再次生成候选。");return;}
     setPending(true); setError("");
     try {
       const saved = await draft.flush();
       if(!active.current)return;
       const id = session?.id || saved.targetId || savedSession.current?.id;
       if (!id || saved.dirty) throw new Error("描述仍有未保存修改，请稍后再生成。");
-      const operation = await submitOperation("voice-candidate:" + id, { kind: "voiceCandidate", projectId: actualProject, ...(actualChapter ? { chapterId: actualChapter, revision: target?.revision } : {}), sessionId: id, entityRevision: saved.revision, grantId, ...(unknown && retryUnknown ? { retryUnknown: true } : {}), ...(resumeRoute?{resumeRoute:true}:{}) }, jobs);
+      const operation = await submitOperation("voice-candidate:" + id, { kind: "voiceCandidate", projectId: actualProject, ...(actualChapter ? { chapterId: actualChapter, revision: target?.revision } : {}), sessionId: id, entityRevision: saved.revision, ...(unknown && retryUnknown ? { retryUnknown: true } : {}), ...(resumeRoute?{resumeRoute:true}:{}) }, jobs);
       if (operation.error) throw new Error(operation.error);
       if (active.current) setRetryUnknown(false);
       await refresh();
@@ -88,12 +88,12 @@ function SessionEditor({ session, draftId, enabled, configured, audioTools, rout
     <details><summary>候选使用的样文</summary><p className="original-excerpt">{session?.text || sample}</p></details>
     {session?.state !== "abandoned" && <section className="task-panel-section">
       <p className="task-request-summary">每次生成 1 个候选 · 1 次音频请求 · 历史候选保留</p>
-      {actualProject ? <TaskAuthorization projectId={actualProject} chapterId={actualChapter} label={target?.label ? "为" + target.label + "创建声音候选" : "创建声音候选"} steps={["voice-create"]} model={model} onReady={setGrantId} disabled={pending || !!currentJob} /> : <p className="warning">请从当前项目的角色或台词进入声音选择，再描述创建声音，以确定授权范围。</p>}
+      {!actualProject && <p className="warning">请从当前项目的角色或台词进入声音选择，再描述创建声音，以确定制作范围。</p>}
       {unknown && <label className="check-label warning"><input type="checkbox" checked={retryUnknown} onChange={event => setRetryUnknown(event.target.checked)} />上次结果不明，可能已计费；本次明确再发送 1 次请求。</label>}
       {routeBlocked&&<label className="check-label warning"><input type="checkbox" checked={resumeRoute} disabled={pending||!!currentJob} onChange={event=>setResumeRoute(event.target.checked)}/>已核对接口权限与额度，恢复本次声音请求。</label>}
-      <button className="button primary" disabled={!enabled || !configured || !audioTools || !actualProject || pending || !!currentJob || draft.composing || !grantId || target?.needsReview || (!!unknown && !retryUnknown) || (routeBlocked&&!resumeRoute)} onClick={() => void generate()}>{currentJob ? labels[currentJob.status] + "…" : pending ? "正在保存与准备…" : "生成一个候选"}</button>
+      <button className="button primary" disabled={!enabled || !configured || !audioTools || !actualProject || pending || !!currentJob || draft.composing || target?.needsReview || (!!unknown && !retryUnknown) || (routeBlocked&&!resumeRoute)} onClick={() => void generate()}>{currentJob ? labels[currentJob.status] + "…" : pending ? "正在保存与准备…" : "生成一个候选"}</button>
       {currentJob && <button className="text-button" onClick={() => void (async () => { try { await action("job.stop", { id: currentJob.id }); await refresh(); } catch (failure) { setError((failure as Error).message); } })()}>停止后续请求</button>}
-      {!configured && <p className="warning">请先打开设置与连接，配置声音接口。</p>}{!audioTools && <p className="warning">音频处理不可用，请打开设置与连接检查。</p>}{routeBlocked && <p className="warning">声音接口已暂停。核对权限与额度后，勾选上方恢复选项，再点击生成；已有授权可继续使用。</p>}
+      {!configured && <p className="warning">请先打开设置与连接，配置声音接口。</p>}{!audioTools && <p className="warning">音频处理不可用，请打开设置与连接检查。</p>}{routeBlocked && <p className="warning">声音接口已暂停。核对权限与额度后，勾选上方恢复选项，再点击生成。</p>}
     </section>}
     <section className="task-panel-section"><h3>试听并选用</h3>
       {!session?.candidates.length && <p className="empty-inline">候选完成后出现在这里。关闭面板不会取消已发送请求，结果仍可找回。</p>}
@@ -141,7 +141,7 @@ function CandidateCard({ candidate, index, session, voices, playingId, play, ref
     {(savedVoice || existing) && <p className="hint">已保存：{(savedVoice || existing)?.name}。{applying ? "仅在应用成功后改变目标声音。" : "可从声音选择器复用。"}</p>}
     {!candidate.discarded && candidate.audioId && candidate.status === "success" && candidate.referenceEligible !== false && <>
       {!savedVoice && !existing && <Field label="声音名称"><input maxLength={100} value={name} onChange={event => setName(event.target.value)} /></Field>}
-      <p className="hint">{applying ? "用于" + (target?.label || (target?.segmentId ? "当前这句" : "当前角色")) + (target?.segmentId ? "，只改这句。" : target?.apply === false ? "，保存为角色默认声音；已有台词保持当前选择。" : "；只更新本章沿用角色声音的台词，单句指定保持不变。" + (target?.firstDefault ? "首次绑定也作为未来新片段的角色默认。" : "")) : "保存到我的声音，不产生模型费用。"}</p>
+      <p className="hint">{applying ? "用于" + (target?.label || (target?.segmentId ? "当前这句" : "当前角色")) + (target?.segmentId ? "，只改这句。" : target?.apply === false ? "，保存为角色默认声音；已有台词保持当前选择。" : "；更新本章沿用角色声音或尚未选声音的台词，保留已单独指定的声音。" + (target?.firstDefault ? "首次绑定也作为未来新片段的角色默认。" : "")) : "保存到我的声音，不产生模型费用。"}</p>
       {(applying || (!savedVoice && !existing)) && <button className="button primary" disabled={pending || target?.needsReview || (!name.trim() && !savedVoice && !existing)} onClick={() => void use()}>{pending ? "正在保存与应用…" : applying ? "用这个声音" : "保存到我的声音"}</button>}
       {!applying && (savedVoice || existing) && bind && <button className="text-button" onClick={bind}>返回角色声音选择</button>}
     </>}

@@ -26,7 +26,7 @@ export async function api<T = unknown>(
     const recovery:Record<number,[string,string]>={400:['invalid-request','edit-request'],401:['permission-denied','review-permission'],403:['permission-denied','review-permission'],404:['object-unavailable','review-target'],409:['state-conflict','refresh-and-review'],413:['request-too-large','edit-request'],416:['invalid-range','review-target'],503:['service-unavailable','wait-for-service']};
     const [code,retryClass]=recovery[response.status]||['operation-result-unconfirmed','check-existing-operation'],retry=String(data.retryClass||retryClass);
     const message=String(data.error||'请求未完成，请保留当前编辑')+(retry==='check-existing-operation'?'。请查看现有记录并核对原操作，再决定下一步。':'');
-    throw Object.assign(new Error(message),{status:response.status,code:data.code||code,scope:{...scope,...(data.scope&&typeof data.scope==='object'?data.scope:{})},retryClass:retry,...(data.notApplied===true?{outcome:data.outcome,notApplied:true,fieldErrors:data.fieldErrors}:{})});
+    throw Object.assign(new Error(message),{status:response.status,code:data.code||code,scope:{...scope,...(data.scope&&typeof data.scope==='object'?data.scope:{})},retryClass:retry,...(data.notApplied===true?{outcome:data.outcome,notApplied:true,fieldErrors:data.fieldErrors}:{}),...(data.conflict===true?{conflict:true,range:data.range}:{})});
   }
   if(data?.error || data?.outcome==='unknown')data.scope={...scope,...(data.scope&&typeof data.scope==='object'?data.scope:{})};
   if (body !== undefined || method) {

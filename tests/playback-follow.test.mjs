@@ -10,9 +10,11 @@ function project(node,env){const code=ts.transpileModule('const projected=('+nod
 const attribute=(node,name)=>node.attributes.properties.find(attr=>ts.isJsxAttribute(attr)&&attr.name.getText(file)===name);
 const audio=find(node=>ts.isJsxSelfClosingElement(node)&&node.tagName.getText(file)==='audio');
 const timeUpdate=attribute(audio,'onTimeUpdate').initializer.expression;
-const effect=dependencies=>find(node=>ts.isCallExpression(node)&&node.expression.getText(file)==='useEffect'&&ts.isArrayLiteralExpression(node.arguments[1])&&node.arguments[1].elements.map(x=>x.getText(file)).join(',')===dependencies).arguments[0];
+const effect=dependencies=>find(node=>ts.isCallExpression(node)&&node.expression.getText(file)==='useEffect'&&node.arguments[1]&&ts.isArrayLiteralExpression(node.arguments[1])&&node.arguments[1].elements.map(x=>x.getText(file)).join(',')===dependencies).arguments[0];
 const scrollEffect=effect('currentSegment,follow,filter,search'),mediaEffect=effect('player');
 const startPlay=find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file)==='startPlay').initializer;
+const beginPlayback=find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file)==='beginPlayback').initializer;
+const finishPlayback=find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file)==='finishPlayback').initializer;
 const readyPoint=find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file)==='point').initializer;
 const list=find(node=>ts.isJsxOpeningElement(node)&&node.tagName.getText(file)==='div'&&attribute(node,'className')?.initializer?.text==='script-list');
 const followButton=find(node=>ts.isJsxElement(node)&&node.openingElement.tagName.getText(file)==='button'&&attribute(node.openingElement,'aria-pressed')?.initializer?.expression?.getText(file)==='follow');
@@ -34,20 +36,21 @@ function fixture(){
     const row={offsetTop,offsetHeight:80,parentElement:scriptList,scrollIntoView:options=>calls.otherScroll.push(['scrollIntoView',options])};
     row.getBoundingClientRect=()=>({top:100+row.offsetTop-scriptList.scrollTop});rows.set('segment-'+id,row);
   }
-  const chapter={id:'chapter',title:'隔离播放夹具',revision:1,arrangement:1,playbackItems:[],units:[]};
+  const chapter={id:'chapter',title:'隔离播放夹具',revision:1,arrangement:1,playbackItems:[],units:[],masters:[master]};
   const state={jobs:[],chapters:[{id:chapter.id,revision:chapter.revision,arrangement:chapter.arrangement}]};
-  const env={React,Link2:'Link2',master,chapter,chapterId:chapter.id,chapterRef:{current:chapter.id},connectionReady:true,
+  const env={React,useCallback:fn=>fn,Link2:'Link2',master,chapter,chapterId:chapter.id,chapterRef:{current:chapter.id},connectionReady:true,playPreparing:false,playbackPreparation:{current:null},rangeResume:{current:null},
     player:{kind:'masters',id:master.id,title:chapter.title,master,chapterId:chapter.id,arrangement:chapter.arrangement,playbackItems:chapter.playbackItems,intent:1},playerRef:{current:null},playIntent:{current:1},
     follow:true,playing:true,currentSegment:'',currentMembers:[],currentHidden:false,filter:'all',search:'',bookmarks:{current:{}},chapterPlaybackSnapshots:{current:{}},
     pendingPlay:{current:null},pendingPlaySnapshot:{current:null},playbackIdentity:items=>JSON.stringify(items),active:()=>false,refresh:async()=>{},
     stateRef:{current:state},api:async path=>path==='/state'?state:chapter,
     document:{getElementById:id=>rows.get(id),body:frame,documentElement:frame},window:{scrollTo:options=>calls.otherScroll.push(['window',options])},listRef:{current:scriptList},
-    audio:{current:{currentTime:0,paused:true,load(){calls.loads++;},play(){calls.plays++;return Promise.resolve();},pause(){calls.pauses++;}}},
+    audio:{current:{src:'',currentTime:0,duration:10,readyState:4,paused:true,ended:false,getAttribute(name){return name==='src'?this.src||null:null;},load(){calls.loads++;this.currentTime=0;this.readyState=0;},play(){calls.plays++;this.paused=false;this.ended=false;this.readyState=4;return Promise.resolve();},pause(){calls.pauses++;this.paused=true;}}},
     setPlayer:value=>{calls.players.push(value);env.player=value;env.playerRef.current=value;},
     setError:value=>calls.errors.push(value),setNotice:value=>calls.notices.push(value),setDuration(){},
   };
   scriptList.scrollTo=options=>{calls.scroll.push({id:env.currentSegment,options});scriptList.scrollTop=Math.max(0,options.top);};
-  for(const [setter,key] of [['setFollow','follow'],['setPlaying','playing'],['setCurrentSegment','currentSegment'],['setCurrentMembers','currentMembers'],['setTransitioning','transitioning'],['setPosition','position'],['setFilter','filter'],['setSearch','search']])env[setter]=value=>{calls.writes.push([setter,value]);env[key]=value;};
+  for(const [setter,key] of [['setFollow','follow'],['setPlaying','playing'],['setPlayPreparing','playPreparing'],['setCurrentSegment','currentSegment'],['setCurrentMembers','currentMembers'],['setTransitioning','transitioning'],['setPosition','position'],['setFilter','filter'],['setSearch','search']])env[setter]=value=>{calls.writes.push([setter,value]);env[key]=value;};
+  env.beginPlayback=project(beginPlayback,env);env.finishPlayback=project(finishPlayback,env);
   env.playerRef.current=env.player;
   return {env,calls,rows,time:t=>{env.audio.current.currentTime=t;project(timeUpdate,env)();},scroll:()=>{project(scrollEffect,env)();assert.deepEqual(calls.otherScroll,[],'只能滚动剧本列表，不能滚动页面或祖先容器');assert.equal(frame.scrollTop,26);},mount:()=>project(mediaEffect,env)(),start:(...args)=>project(startPlay,env)(...args),button:()=>project(followButton,env),input:(name,event)=>project(attribute(list,name).initializer.expression,env)(event)};
 }
@@ -87,7 +90,20 @@ test('新母版及同母版重新播放恢复跟随并清旧定位，再由首�
     assert.equal(f.env.follow,true);assert.equal(f.env.currentSegment,'');assert.deepEqual(f.env.currentMembers,[]);f.scroll();assert.equal(f.calls.scroll.length,i);
     f.time(4);f.scroll();assert.equal(f.calls.scroll.length,i+1);assert.equal(f.calls.scroll.at(-1).id,'one');
   }
-  assert.equal(f.calls.loads,2);assert.equal(f.calls.plays,2);assert.deepEqual(f.calls.errors,[]);
+  assert.equal(f.calls.loads,1,'同母版复用现有媒体资源');assert.equal(f.calls.plays,2);assert.deepEqual(f.calls.errors,[]);
+});
+test('同src暂停续播不重load，自然结束后仍复用媒体并从0重新播放',async()=>{
+  const f=fixture();f.mount();await tick();assert.equal(f.calls.loads,1);
+  f.env.audio.current.pause();f.env.audio.current.currentTime=4.25;
+  await f.start('masters',master.id,'整章');f.mount();await tick();
+  assert.equal(f.calls.loads,1);assert.equal(f.calls.plays,2);assert.equal(f.env.audio.current.currentTime,4.25);assert.equal(f.env.player.master,master);
+  Object.assign(f.env.audio.current,{paused:true,ended:true,currentTime:10});
+  await f.start('masters',master.id,'整章');f.mount();await tick();
+  assert.equal(f.calls.loads,1);assert.equal(f.calls.plays,3);assert.equal(f.env.audio.current.currentTime,0);assert.equal(f.env.player.resumeAt,0);assert.deepEqual(f.calls.errors,[]);
+});
+test('裁剪后的自动母版续播保持用户浏览位置，只有主动播放恢复文字跟随',async()=>{
+  const f=fixture();f.env.follow=false;f.env.player={...f.env.player,preserveBrowse:true};f.env.playerRef.current=f.env.player;f.mount();await tick();
+  assert.equal(f.env.follow,false);f.time(4);f.scroll();assert.equal(f.calls.scroll.length,0);assert.equal(f.calls.plays,1);
 });
 
 test('只滚剧本列表：长段落对齐顶部、短段落居中；暂停恢复仍定位，关闭跟随或列表外不滚动',()=>{

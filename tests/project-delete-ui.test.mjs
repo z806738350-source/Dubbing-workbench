@@ -118,7 +118,7 @@ function appFixture(){
   const state={settings:{workspaceDirectory:'/fixture'},projects:[{id:'one',name:'第一项目'},{id:'two',name:'第二项目'}],chapters:[{id:'old',projectId:'one',revision:1,arrangement:1},{id:'next',projectId:'two',revision:1,arrangement:1}]};
   const env={React,Select:'Select',state,projectId:'one',busy:false,connectionReady:true,
     stateRef:{current:state},projectRef:{current:'one'},chapterRef:{current:'old'},refreshPending:{current:null},bookmarks:{current:{old:'line-old',next:'line-next'}},chapterPlaybackSnapshots:{current:{old:{id:'old'},next:{id:'next'}}},
-    playIntent:{current:0},segmentDeletionIntent:{current:0},setSegmentDeletion(){},pendingPlay:{current:'old'},pendingPlaySnapshot:{current:{arrangement:1}},recoveryTarget:{current:{chapterId:'old'}},
+    playIntent:{current:0},playbackPreparation:{current:null},setPlayPreparing:value=>{env.playPreparing=value;},segmentDeletionIntent:{current:0},setSegmentDeletion(){},pendingPlay:{current:'old'},pendingPlaySnapshot:{current:{arrangement:1}},recoveryTarget:{current:{chapterId:'old'}},
     bindDraftWorkspace(){},draftWorkspace:()=>'',playbackIdentity:items=>JSON.stringify(items),generationIntent:{current:0},generationPlan:{id:'old-plan'},audio:{current:{pause(){calls.paused++;}}},
     action:async(name,payload)=>calls.actions.push({name,payload}),refresh:async()=>{calls.refresh++;},
   };
@@ -126,6 +126,8 @@ function appFixture(){
   env.setGenerationPlan=value=>{env.generationPlan=value;calls.updates.push({name:'GenerationPlan',value});};
   env.setState=value=>{env.state=typeof value==='function'?value(env.state):value;calls.updates.push({name:'State',value:env.state});};
   env.setError=value=>calls.errors.push(value);
+  env.beginPlayback=project(declaration('beginPlayback'),env);
+  env.finishPlayback=project(declaration('finishPlayback'),env);
   env.closeGeneration=project(declaration('closeGeneration'),env);
   env.pickChapter=project(declaration('pickChapter'),env);
   env.pickProject=project(declaration('pickProject'),env);

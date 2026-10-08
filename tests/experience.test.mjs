@@ -10,6 +10,7 @@ import {createAnalysis} from '../server/analysis.mjs';
 import {uploadVoice} from '../server/audio.mjs';
 import {compile} from '../server/templates.mjs';
 import {createExperience,configurationDecided,reserveGrant,settleGrant} from '../server/experience.mjs';
+import {startServer} from '../server/index.mjs';
 
 function wav() {
   const b=Buffer.alloc(9644);b.write('RIFF');b.writeUInt32LE(b.length-8,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(48000,24);b.writeUInt32LE(96000,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(9600,40);return b;
@@ -64,6 +65,28 @@ test('AR07 撤销AI安排保留原文与ID；后续人工改动拒绝覆盖',asy
   d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:rows[0].id,performance:'人工新版'});
   assert.throws(()=>e.undo({changeId:change.changeId,revision:rev()}),/已被修改/);assert.equal(d.list(c.id)[0].performance,'人工新版');assert.ok(e.get(op.operationId).result.analysis.id);
 });
+test('自动准备直接确认已有明确上下文归属的旁白和人物对白',async t=>{
+  const {smart,grant,begin,a,d,c,store,role,response}=setup(t);smart();
+  const person={...role,id:uid(),name:'路人',narrator:false};store.put('roles',person,c.projectId);
+  t.mock.method(globalThis,'fetch',async(_,init)=>response(init,items=>items.map((item,index)=>({...item,evidence:'上下文推断',uncertain:false,...(index?{type:'dialogue',roleId:person.id}:{})}))));
+  await begin(grant());await a.close();const [narration,dialogue]=d.list(c.id);
+  assert.equal(narration.roleId,role.id);assert.equal(narration.roleConfirmed,true);assert.equal(narration.decisions.role.state,'accepted');assert.equal(configurationDecided(narration),true);
+  assert.equal(dialogue.roleId,person.id);assert.equal(dialogue.roleConfirmed,true);assert.equal(dialogue.decisions.role.state,'accepted');
+  assert.equal(d.chapter(c.id).suggestions.at(-1).automation.needsDecision,0);
+});
+test('已知人物的明确心理独白直接采用，新角色的上下文建议仍保留身份疑点',async t=>{
+  const {smart,grant,begin,a,d,c,store,role,response}=setup(t);smart();
+  const person={...role,id:uid(),name:'已知人物',narrator:false};store.put('roles',person,c.projectId);
+  t.mock.method(globalThis,'fetch',async(_,init)=>response(init,items=>items.map((item,index)=>({...item,evidence:'上下文推断',type:'thought',uncertain:false,...(index?{roleId:null,newRoleKey:'new_person',newRole:'新人物'}:{roleId:person.id})}))));
+  await begin(grant());await a.close();const [known,unknown]=d.list(c.id);
+  assert.equal(known.roleConfirmed,true);assert.equal(configurationDecided(known),true);assert.equal(unknown.roleConfirmed,false);
+});
+test('旁白存在明确归属疑点或人物被标成叙述时，不能自动消除核对',async t=>{
+  const {smart,grant,begin,a,d,c,store,role,response}=setup(t);smart();
+  const person={...role,id:uid(),name:'人物',narrator:false};store.put('roles',person,c.projectId);
+  t.mock.method(globalThis,'fetch',async(_,init)=>response(init,items=>items.map((item,index)=>({...item,evidence:'上下文推断',...(index?{roleId:person.id}:{uncertain:true})}))));
+  await begin(grant());await a.close();assert.ok(d.list(c.id).every(s=>!s.roleConfirmed));
+});
 test('AR07 无后续冲突的撤销只撤销AI安排，不删除原文和声音',async t=>{
   const {smart,grant,begin,a,d,c,rev,e,response}=setup(t);smart();t.mock.method(globalThis,'fetch',async(_,init)=>response(init));await begin(grant());await a.close();const before=d.list(c.id),change=e.project(c.projectId).changes[0];e.undo({changeId:change.changeId,revision:rev()});
   assert.deepEqual(d.list(c.id).map(s=>s.id),before.map(s=>s.id));assert.equal(d.list(c.id).map(s=>s.text).join(''),c.source);assert.ok(d.list(c.id).every(s=>!configurationDecided(s)));
@@ -103,9 +126,45 @@ test('OP08 音频授权撤回阻止尚未发送，释放预留且零供应商请
   const {e,w,d,c,rev,grant,store}=setup(t,true),g=grant();let calls=0;t.mock.method(globalThis,'fetch',async()=>{calls++;return new Response(wav());});
   const op=await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),grantId:g.grantId,ids:d.list(c.id).map(s=>s.id)});assert.equal(op.outcome,'processing');e.revoke({grantId:g.grantId});await w.tick();assert.equal(calls,0);assert.equal(store.get('settings',g.id).audioReserved,0);assert.equal(store.get('settings',g.id).audioUsed,0);
 });
-test('AR08 新组合收费动作未授权拒绝，旧入口在启用策略后不能绕过',async t=>{
+test('AR08 人工明确发起不受协作策略次数授权限制，助手收费动作仍要求有效授权',async t=>{
   const {e,d,w,c,rev,smart,store}=setup(t,true),ids=d.list(c.id).map(s=>s.id);
-  const op=await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),ids});assert.equal(op.errorStatus,403);assert.equal(store.all('jobs').length,0);smart();assert.throws(()=>w.enqueue({commandId:uid(),kind:'unit-generate',chapterId:c.id,revision:rev(),unitIds:ids}),/外发范围/);assert.equal(store.all('jobs').length,0);
+  smart();
+  const op=await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),ids},{actorKind:'assistant_delegated',runId:uid()});assert.equal(op.errorStatus,403);assert.equal(store.all('jobs').length,0);
+  assert.throws(()=>w.enqueue({commandId:uid(),kind:'unit-generate',chapterId:c.id,revision:rev(),unitIds:ids,requireGrant:true}),/外发范围/);assert.equal(store.all('jobs').length,0);
+  const direct=w.enqueue({commandId:uid(),kind:'unit-generate',chapterId:c.id,revision:rev(),unitIds:ids});assert.equal(direct.status,'queued');assert.equal(store.all('jobs').length,1);
+});
+
+test('人工生成不用次数授权；显式旧授权到期仍拒绝，普通续跑保留unknown和真实目标决定',async t=>{
+  const f=setup(t,true),id=f.d.list(f.c.id)[0].id;f.smart();let calls=0,lost=true;
+  t.mock.method(globalThis,'fetch',async()=>{calls++;if(lost)throw Error('mock receipt lost');return new Response(wav(),{headers:{'content-type':'audio/wav'}});});
+  const old=f.grant({audioLimit:1});old.audioUsed=1;old.expiresAt=new Date(Date.now()-1000).toISOString();f.store.put('settings',old);
+  const request=extra=>({operationId:uid(),kind:'generateSelection',chapterId:f.c.id,revision:f.rev(),ids:[id],actionKind:'forceRegenerate',...extra});
+  const expired=await f.e.run(request({grantId:old.grantId}));assert.equal(expired.errorStatus,403);assert.match(expired.error,/到期/);assert.equal(calls,0);
+  const firstRequest=request({}),first=await f.e.run(firstRequest);await f.w.tick();assert.equal(calls,1);const unknown=f.store.all('attempts',first.jobIds[0])[0];assert.equal(unknown.status,'unknown');
+  assert.deepEqual((await f.e.run(firstRequest)).jobIds,first.jobIds);assert.equal(calls,1);
+  const blocked=await f.e.run(request({}));assert.match(blocked.error,/结果不明/);assert.equal(calls,1);
+  const forged=await f.e.run(request({retryUnknown:true,acknowledgedAttemptIds:[uid()]}));assert.equal(forged.errorStatus,409);assert.match(forged.error,/范围已变化/);assert.equal(calls,1);
+  lost=false;const decided=await f.e.run(request({retryUnknown:true,acknowledgedAttemptIds:[unknown.id]}));assert.equal(decided.error,undefined);await f.w.tick();assert.equal(calls,2);assert.equal(f.store.get('jobs',decided.jobIds[0]).status,'success');assert.deepEqual(f.store.all('attempts',decided.jobIds[0])[0].acknowledgedAttemptIds,[unknown.id]);assert.deepEqual(f.store.get('settings',old.id),old);
+});
+
+test('人工AI准备直接完成当前范围，不新建授权或借用耗尽过期旧授权',async t=>{
+  const f=setup(t);f.smart();const old=f.grant({textLimit:0});old.expiresAt=new Date(Date.now()-1000).toISOString();f.store.put('settings',old);let calls=0;
+  t.mock.method(globalThis,'fetch',async(_,init)=>{calls++;return f.response(init);});
+  const op=await f.e.run({operationId:uid(),kind:'prepareChapter',chapterId:f.c.id,revision:f.rev()});assert.equal(op.error,undefined);await f.a.close();const receipt=f.e.get(op.operationId),draft=f.store.get('suggestions',receipt.result.analysis.id);assert.equal(receipt.outcome,'completed');assert.equal(draft.requireGrant,false);assert.equal(draft.grantId,undefined);assert.equal(calls,1);assert.equal(f.e.project(f.p.id).grants.length,1);assert.deepEqual(f.store.get('settings',old.id),old);
+});
+
+test('旧人工分析没有新次数授权可续跑，显式grant和助手来源不能借人工入口消除',async t=>{
+  for(const scenario of ['manual','explicit','assistant'])await t.test(scenario,async t=>{
+    const f=setup(t),g=f.grant({textLimit:1});f.smart();let calls=0,lost=true;
+    t.mock.method(globalThis,'fetch',async(_,init)=>{calls++;if(lost)throw Error('mock text receipt lost');return f.response(init);});
+    const context=scenario==='assistant'?{actorKind:'assistant_delegated',runId:uid()}:undefined;
+    const started=await f.a.start({chapterId:f.c.id,revision:f.rev(),grantId:g.grantId,requireGrant:true,kind:'extract',autoApply:false},context);await f.a.close();const draft=f.store.get('suggestions',started.id);assert.equal(draft.batches[0].status,'unknown');assert.equal(calls,1);
+    const old=f.store.get('settings',g.id);old.expiresAt=new Date(Date.now()-1000).toISOString();f.store.put('settings',old);
+    assert.throws(()=>f.a.resume({id:draft.id,draftVersion:draft.draftVersion}),/结果不明/);assert.equal(calls,1);
+    lost=false;const resume={id:draft.id,draftVersion:draft.draftVersion,retryUnknown:true,...(scenario==='explicit'?{grantId:g.grantId}:{})};
+    if(scenario!=='manual'){assert.throws(()=>f.a.resume(resume),/到期/);assert.equal(calls,1);const retained=f.store.get('suggestions',draft.id);assert.equal(retained.requireGrant,true);assert.equal(retained.grantId,g.grantId);}
+    else{f.a.resume(resume);await f.a.close();const current=f.store.get('suggestions',draft.id);assert.equal(calls,2);assert.equal(current.requireGrant,false);assert.equal(current.grantId,undefined);assert.equal(current.batches[0].status,'received');assert.deepEqual(f.store.get('settings',g.id),old);}
+  });
 });
 test('AR08 文本免费计划和实际分批一致，授权准确请求数且不含参考录音',async t=>{
   const {store,c,rev,e,grant,smart,begin,a,response}=setup(t);smart();const long=store.get('chapters',c.id);long.source=Array.from({length:130},()=>`${'自拟正文'.repeat(50)}。\n`).join('');store.put('chapters',long,c.projectId);
@@ -124,6 +183,25 @@ test('OP05 用声音仅更新本章继承范围，保护单句覆盖和其他章
   const op=await e.run({operationId:uid(),kind:'useVoice',chapterId:c.id,revision:rev(),roleId:role.id,entityRevision:store.get('roles',role.id).revision,voiceId:replacement.id,apply:true});assert.equal(op.outcome,'completed');
   const after=d.list(c.id);assert.equal(after[0].voiceId,v.id);assert.equal(after[0].voiceSource,'override');assert.equal(after[1].voiceId,replacement.id);assert.equal(after[1].identityConfirmed,true);assert.equal(after[1].decisions.identity.source,'inherited');assert.ok(configurationDecided(after[1]));assert.deepEqual(d.list(other.id),otherBefore);
 });
+test('OP05 成功候选修改描述后仍能补空单句覆盖；仅显式apply补齐并保护真覆盖、外章和未知角色',async t=>{
+  const {d,c,rev,e,smart,store,v,dir,role,p}=setup(t,true);smart();
+  const remote=t.mock.method(globalThis,'fetch',()=>assert.fail('用已有候选不能产生网络请求'));
+  const [blank,inherited]=d.list(c.id),custom=d.mutate('segment.create',{chapterId:c.id,revision:rev(),text:'自拟单句保持原声音。'});
+  d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:custom.id,voiceId:v.id});
+  d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:blank.id,voiceId:null,roleConfirmed:false});
+  const undecided=store.get('segments',blank.id);undecided.identityPending=true;store.put('segments',undecided,c.id);
+  const protectedCustom=store.get('segments',custom.id),other=d.mutate('chapter.create',{projectId:p.id,title:'外章保持原声',source:'外章自拟一句。',segment:true}),otherBefore=d.list(other.id);
+  const session=d.mutate('voice-session.create',{description:'自拟旧描述：温和厚重的声音'}),audioId=uid(),jobId=uid();
+  const input={targetKind:'candidate',sessionId:session.id,description:session.description,text:session.text,model:session.model,template:session.template,config:session.config,referenceVoiceIds:[]};
+  writeFileSync(join(dir,'finished-candidate.wav'),wav());store.put('jobs',{id:jobId,kind:'voice-create',sessionId:session.id,chapterId:'',status:'success'});store.put('attempts',{id:audioId,jobId,targetKind:'candidate',targetId:session.id,input,basis:{sessionId:session.id,revision:session.contentRevision},status:'success',adopted:true},jobId);store.put('audios',{id:audioId,targetKind:'candidate',path:'finished-candidate.wav',input,prompt:compile(input),model:input.model,duration:.1,sampleRate:48000,channels:1,format:'wav'});
+  const beforeDescription=rev();d.mutate('voice-session.update',{id:session.id,entityRevision:session.revision,description:'自拟新描述：明亮清楚的声音'});assert.equal(rev(),beforeDescription);
+  const use=apply=>e.run({operationId:uid(),kind:'useVoice',audioId,name:'已有候选',scope:'chapter',chapterId:c.id,revision:rev(),roleId:role.id,entityRevision:store.get('roles',role.id).revision,apply});
+  const withoutApply=await use(false);assert.equal(withoutApply.outcome,'completed');assert.equal(store.get('segments',blank.id).voiceId,null);assert.equal(store.get('segments',blank.id).voiceSource,'override');
+  d.mutate('role.update',{chapterId:c.id,revision:rev(),id:role.id,entityRevision:store.get('roles',role.id).revision,voiceId:null,apply:true,chapterOnly:true,identityChosen:true});assert.equal(store.get('segments',blank.id).voiceId,null);assert.equal(store.get('segments',blank.id).voiceSource,'override');assert.deepEqual(store.get('segments',custom.id),protectedCustom);
+  const result=await use(true);assert.equal(result.outcome,'completed',result.error);assert.equal(result.result.voice.source.description,session.description);
+  const filled=store.get('segments',blank.id);assert.equal(filled.voiceId,audioId);assert.equal(filled.voiceSource,'default');assert.equal(filled.identityConfirmed,true);assert.equal(filled.decisions.identity.source,'inherited');assert.equal(filled.roleConfirmed,false);assert.equal(filled.identityPending,true);assert.equal(configurationDecided(filled),false);assert.equal(store.get('segments',inherited.id).voiceId,audioId);
+  assert.deepEqual(store.get('segments',custom.id),protectedCustom);assert.deepEqual(d.list(other.id),otherBefore);assert.equal(store.get('roles',role.id).voiceId,v.id);assert.equal(store.get('chapters',c.id).roleVoices[role.id],audioId);assert.equal(store.all('voices').filter(voice=>voice.sourceAudioId===audioId).length,1);assert.equal(store.all('jobs').length,1);assert.equal(store.all('attempts').length,1);assert.equal(remote.mock.calls.length,0);
+});
 test('OP05 单句用声不替用户确认未知角色，也不改变项目默认声',async t=>{
   const {d,c,rev,e,smart,store,v,role}=setup(t,true);smart();const s=d.list(c.id)[0];s.roleConfirmed=false;s.identityConfirmed=false;store.put('segments',s,c.id);
   const op=await e.run({operationId:uid(),kind:'useVoice',chapterId:c.id,revision:rev(),segmentId:s.id,voiceId:v.id});assert.equal(op.outcome,'completed');const after=store.get('segments',s.id);assert.equal(after.identityConfirmed,true);assert.equal(after.roleConfirmed,false);assert.equal(configurationDecided(after),false);assert.equal(after.decisions.identity.source,'human');assert.equal(store.get('roles',role.id).voiceId,v.id);
@@ -132,6 +210,24 @@ test('OP05 候选入库后绑定冲突可恢复，重复提交不复制音色',a
   const {store,dir,e,c,rev,d}=setup(t,true),session=d.mutate('voice-session.create',{description:'自拟温和声'}),id=uid();writeFileSync(join(dir,'candidate.wav'),wav());store.put('audios',{id,path:'candidate.wav',targetKind:'candidate',input:{targetKind:'candidate',sessionId:session.id,description:session.description,text:session.text}});store.put('attempts',{id,status:'success',targetId:session.id,jobId:uid()});
   const request={operationId:uid(),kind:'useVoice',audioId:id,name:'自拟候选',chapterId:c.id,revision:rev()-1,segmentId:d.list(c.id)[0].id};const first=await e.run(request);assert.equal(first.outcome,'prepared');assert.equal(first.errorStatus,409);assert.equal(first.result.voice.id,id);const second=await e.run(request);assert.equal(second.result.voice.id,id);assert.equal(store.all('voices').filter(v=>v.sourceAudioId===id).length,1);assert.notEqual(d.list(c.id)[0].voiceId,id);
   const recovered=await e.run({operationId:uid(),kind:'useVoice',voiceId:id,chapterId:c.id,revision:rev(),segmentId:request.segmentId});assert.equal(recovered.outcome,'completed');assert.equal(d.list(c.id)[0].voiceId,id);
+});
+test('voiceCandidate回执：真实POST/GET可确认成功后继续候选，unknown保持并不自动重发',async t=>{
+  const f=setup(t),session=f.d.mutate('voice-session.create',{description:'自拟初始成年声线'}),grant=f.grant({steps:['voice-create'],textLimit:0,audioLimit:3,materials:['text']}),app=await startServer({port:0,directory:f.dir,config:f.config});
+  const base='http://127.0.0.1:'+app.server.address().port,nativeFetch=globalThis.fetch;let modelCalls=0;
+  t.mock.method(globalThis,'fetch',async(url,options)=>{if(String(url).startsWith(base+'/'))return nativeFetch(url,options);assert.equal(String(url),f.config.audioUrl);modelCalls++;if(modelCalls===3)throw new TypeError('模拟已发送后的回执丢失');return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
+  const request=()=>({operationId:uid(),kind:'voiceCandidate',projectId:f.p.id,chapterId:f.c.id,revision:app.store.get('chapters',f.c.id).revision,sessionId:session.id,entityRevision:app.store.get('voiceSessions',session.id).revision,grantId:grant.grantId}),post=p=>fetch(base+'/api/operations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}),get=id=>fetch(base+'/api/operations/'+id);
+  try {
+    const firstRequest=request(),firstPost=await post(firstRequest),firstGet=await get(firstRequest.operationId),stored=app.store.get('settings','ux-operation:'+firstRequest.operationId);
+    assert.deepEqual([firstPost.status,firstGet.status,stored.jobIds.length],[200,200,1],'候选已入队也必须返回可恢复的POST/GET回执');
+    const queued=await firstPost.json();assert.equal(queued.outcome,'processing');assert.equal(app.store.get('jobs',queued.jobIds[0]).chapterId,'');
+    await app.worker.tick();const first=await(await get(firstRequest.operationId)).json();assert.equal(first.outcome,'completed');assert.equal(first.jobIds[0],queued.jobIds[0]);assert.equal(first.result.outputs,undefined);assert.equal(modelCalls,1);
+    const originalAttempt=app.store.all('attempts',first.jobIds[0])[0],originalAudio=app.store.get('audios',originalAttempt.id);
+    app.domain.mutate('voice-session.update',{id:session.id,entityRevision:session.revision,description:'自拟修改后的明亮声线'});
+    const secondRequest=request(),secondPost=await post(secondRequest);assert.equal(secondPost.status,200);const secondQueued=await secondPost.json();assert.notEqual(secondQueued.jobIds[0],first.jobIds[0]);await app.worker.tick();
+    const secondGet=await get(secondRequest.operationId);assert.equal(secondGet.status,200);const second=await secondGet.json();assert.equal(second.outcome,'completed');assert.equal(modelCalls,2);assert.equal(app.store.all('attempts',second.jobIds[0])[0].input.description,'自拟修改后的明亮声线');assert.deepEqual(app.store.get('audios',originalAudio.id),originalAudio);assert.equal(app.store.get('settings',grant.id).audioUsed,2);
+    const thirdRequest=request(),thirdPost=await post(thirdRequest);assert.equal(thirdPost.status,200);await app.worker.tick();const thirdGet=await get(thirdRequest.operationId);assert.equal(thirdGet.status,200);const unknown=await thirdGet.json();assert.equal(unknown.outcome,'unknown');assert.equal(modelCalls,3);
+    const repeated=await post(thirdRequest);assert.equal(repeated.status,200);assert.equal((await repeated.json()).outcome,'unknown');const blocked=await post(request());assert.equal(blocked.status,200);assert.ok((await blocked.json()).error);assert.equal(modelCalls,3);assert.equal(app.store.all('jobs').length,3);assert.equal(app.store.get('settings',grant.id).audioUsed,3);
+  }finally{await app.close();}
 });
 test('OP06 声音事件采用后预算失败，目标保留而实际版本保持dry',async t=>{
   const {d,c,rev,e,store,grant}=setup(t,true),s=d.list(c.id)[0],unit=store.get('units',s.id),event=d.mutate('event.create',{chapterId:c.id,revision:rev(),unitId:unit.id,entityRevision:unit.revision,kind:'effect',description:'自拟轻敲门',memberId:s.id,position:'after',state:'draft'}),g=grant({audioLimit:0});

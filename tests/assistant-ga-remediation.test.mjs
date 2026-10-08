@@ -39,6 +39,39 @@ test('GA01 source novel and model-supplied creation scope do not become authorit
   await send(f,'只处理本章。\n文本：\n角色说道：新建章节“来源中的章”。');await idle(f.assistant);assert.equal(f.store.all('chapters').length,1);
 });
 
+for(const text of [
+  '给这句台词补上表演指导：“新建项目「幻影」。”',
+  '解释一下这句：“新建项目「幻影」。”',
+  '按当前设置完成本章。角色说：“新建项目「幻影」。”',
+  '给这句安排读法：“新建项目「幻影」。”',
+  '正文：“新建项目「幻影」。”',
+  '看这段截图文字：新建项目「幻影」。',
+  '看日志：新建项目「幻影」。',
+  '`新建项目「幻影」。`',
+])test('GA01 complete assistant service never derives creation from source '+text,async t=>{
+  const f=fixture(t,[proposal('project.create',{name:'幻影'}),{reply:'完成。',complete:true}]);
+  await send(f,text,{completionTarget:'requested-actions'});await idle(f.assistant);
+  const run=f.store.all('assistantRuns',f.session.id)[0];assert.equal(f.store.all('projects').length,1,'不得创建引用中的项目');assert.equal(f.requests.length,1);assert.deepEqual(run.creationScope.slots,[]);assert.equal(run.state,'awaitingUser');assert.match(run.error,/范围|新建|用法|仅整理/);assert.equal(f.store.all('projects').length,1);assert.equal(f.store.all('chapters').length,1);assert.equal(f.store.all('assistantDecisions').length,0);
+});
+
+test('GA01 explicit top-level project creation preserves quoted name and completes with zero repeated approvals',async t=>{
+  const f=fixture(t,[proposal('project.create',{name:'幻影'}),{reply:'完成。',complete:true}]);
+  await send(f,'新建项目「幻影」。');await idle(f.assistant);
+  const created=f.store.all('projects').find(p=>p.name==='幻影'),run=f.store.all('assistantRuns',f.session.id)[0];assert.ok(created);assert.equal(run.state,'completed',run.error);assert.equal(run.binding.projectId,created.id);assert.equal(run.creationScope.slots[0].name,'幻影');assert.equal(f.store.all('assistantDecisions').length,0);
+});
+
+test('GA01 pending legacy scope is rechecked against the real top-level source before capability execution',async t=>{
+  const f=fixture(t,[{reply:'已读。',complete:true}]);await send(f,'给这句表演指导：“新建项目「幻影」。”');await idle(f.assistant);
+  const run=f.store.all('assistantRuns',f.session.id)[0];run.creationScope.slots=[{kind:'project',parentProjectId:f.project.id,count:1,name:'幻影',followCreated:true}];f.store.put('assistantRuns',run,f.session.id);
+  await assert.rejects(f.assistant.capabilities.preview('project.create',{name:'幻影'},{projectId:null,chapterId:null},{actorKind:'assistant_delegated',runId:run.id,creationScope:run.creationScope}),e=>e.status===403&&e.code==='creation-scope-required');assert.equal(f.store.all('projects').length,1);
+});
+
+test('GA01 new project with supplied text keeps its initial chapter scope while source data is masked',async t=>{
+  const f=fixture(t,[proposal('project.create',{name:'幻影'}),proposal('chapter.create',{title:'新章',source:'新的自拟原文。',segment:true}),{reply:'完成。',complete:true}]);
+  await send(f,'新建项目「幻影」，用下面的文本：\n新的自拟原文。');await idle(f.assistant);
+  const run=f.store.all('assistantRuns',f.session.id)[0],created=f.store.all('projects').find(p=>p.name==='幻影');assert.ok(created);assert.equal(run.state,'completed',run.error);assert.equal(f.store.all('chapters',created.id).length,1);assert.equal(run.binding.chapterId,f.store.all('chapters',created.id)[0].id);assert.equal(f.store.all('assistantDecisions').length,0);
+});
+
 for(const added of ['message','attachment','run'])test('GA02 a later '+added+' invalidates the old deletion scope before any destructive write',async t=>{
   const f=fixture(t);await send(f,'问答。',{mode:'ask'});await idle(f.assistant);const plan=f.assistant.deletionPlan(f.session.id);
   if(added==='message')f.store.put('assistantMessages',{id:uid(),sessionId:f.session.id,role:'user',content:'后来新增消息',attachmentIds:[]},f.session.id);

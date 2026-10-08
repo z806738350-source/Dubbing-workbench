@@ -20,9 +20,9 @@ async function setup(api=async()=>[],operation=async()=>({outcome:'processing'})
     useObjectDraft:(kind,id,draft,revision=0,options={})=>{const key=kind+'/'+id;if(!drafts.has(key)){const controller={draft,base:revision,options,dirty:false,status:'saved',frozen:false,composing:false,saving:false,flush:async()=>{},edit(value){controller.draft={...controller.draft,...value};},compositionStart(){},compositionEnd(){},save:async persist=>{const saved=await persist(controller.draft,controller.base,{chapterRevision:controller.draft.chapterRevision,operationId:'fixture-default',replay:false});controller.base=saved.revision;controller.draft=saved.value;return {...saved,dirty:false};}};drafts.set(key,controller);}return drafts.get(key);},
     saveAction:(...args)=>runtime.persistSave(...args),persistSave:async()=>{},withSavedDrafts:async(_scope,_dependencies,fn)=>fn(),draftScopeRevision:(_scope,revision)=>revision,
     submitOperation:async(...args)=>{sent.push(args);return operation(...args);},
-    ChevronRight:'ChevronRight',CircleHelp:'CircleHelp',Dialog:'Dialog',Field:'Field',Select:'Select',Status:'Status',ObjectDraftTools:'ObjectDraftTools',TaskAuthorization:'TaskAuthorization',SceneSuggestions:'SceneSuggestions',AudioProvenance:'AudioProvenance'};
+    ChevronRight:'ChevronRight',CircleHelp:'CircleHelp',Dialog:'Dialog',Field:'Field',Select:'Select',Status:'Status',ObjectDraftTools:'ObjectDraftTools',SceneSuggestions:'SceneSuggestions',AudioProvenance:'AudioProvenance'};
   globalThis.unitPanelTest=runtime;
-  const header='const {React,useEffect,useRef,useState,api,action,hasDraft,objectDraftId,useObjectDraft,saveAction,withSavedDrafts,draftScopeRevision,submitOperation,ChevronRight,CircleHelp,Dialog,Field,Select,Status,ObjectDraftTools,TaskAuthorization,SceneSuggestions,AudioProvenance}=globalThis.unitPanelTest;\n';
+  const header='const {React,useEffect,useRef,useState,api,action,hasDraft,objectDraftId,useObjectDraft,saveAction,withSavedDrafts,draftScopeRevision,submitOperation,ChevronRight,CircleHelp,Dialog,Field,Select,Status,ObjectDraftTools,SceneSuggestions,AudioProvenance}=globalThis.unitPanelTest;\n';
   const {UnitDetails,CreateGroup}=await import('data:text/javascript;base64,'+Buffer.from(header+compiled+'\n// test '+sequence++).toString('base64'));
   const status=()=>({validity:'matched',review:'passed',prompt:'',promptIssues:[],basis:{}});
   const variant=(current,latest)=>({current,previous:'previous',approved:null,latest,revision:1,guidance:'保留要求',backgroundPresence:'unspecified',status:status(),history:[]});
@@ -32,7 +32,7 @@ async function setup(api=async()=>[],operation=async()=>({outcome:'processing'})
   return {props,groupProps,groups,sent,played,tasks,actions,reads,runtime,render:()=>{index=0;return UnitDetails(props);},renderGroup:()=>{index=0;return CreateGroup(groupProps);}};
 }
 
-test('SVG说明只开关嵌套弹窗；原面板、编辑与授权保留，零读取、变更或生成',async()=>{
+test('SVG说明只开关嵌套弹窗；原面板、编辑与生成范围保留，零读取、变更或生成',async()=>{
   for(const mode of ['scene','dry']){
     const f=await setup();f.props.mode=mode;f.props.unit.variants.scene.latest='success';let closed=0;
     f.props.close=()=>closed++;
@@ -49,7 +49,7 @@ test('SVG说明只开关嵌套弹窗；原面板、编辑与授权保留，零�
     assert.match(text(help),/显示“正在使用…”时，已选用，无需再次点击/);assert.match(text(help),/检查通过只记录人工听评/);assert.match(text(help),/旧设置先核对差异/);
     assert.equal(nodes(help).filter(node=>node.type==='section').length,mode==='scene'?5:4);
     if(mode==='scene'){assert.match(text(help),/核对与启用免费/);assert.match(text(help),/位置是创作意图/);assert.match(text(help),/AI 建议只分析，不改台词或自动制作/);assert.match(text(help),/音乐转折需使用存在感模板/);}
-    assert.equal(nodes(tree).find(node=>node.type==='ObjectDraftTools').props.controller,controller);assert.ok(nodes(tree).some(node=>node.type==='TaskAuthorization'));assert.ok(nodes(tree).some(node=>node.props.className?.includes('unit-current-result')));
+    assert.equal(nodes(tree).find(node=>node.type==='ObjectDraftTools').props.controller,controller);assert.ok(!nodes(tree).some(node=>node.type==='TaskAuthorization'));assert.ok(nodes(tree).some(node=>node.props.className?.includes('unit-current-result')));
     help.props.onClose();tree=f.render();assert.equal(tree.props.headerActions.props['aria-expanded'],false);assert.ok(!nodes(tree).some(node=>node.type==='Dialog'&&node.props.title.includes('操作说明')));
     assert.equal(controller.draft.guidance,'尚未完成的表演稿');assert.equal(controller.dirty,true);assert.equal(controller.composing,true);assert.equal(flushed,0);assert.equal(closed,0);assert.equal(JSON.stringify(f.props.unit),before);
     assert.equal(f.reads.length,0);assert.equal(f.actions.length,0);assert.equal(f.sent.length,0);assert.equal(f.played.length,0);assert.equal(f.tasks.length,0);
@@ -58,7 +58,7 @@ test('SVG说明只开关嵌套弹窗；原面板、编辑与授权保留，零�
 
 test('说明收起后未知计费与存在感未生效仍就地可见，启用仅一个主按钮且不提交声音',async()=>{
   const f=await setup();Object.assign(f.props.unit.variants.scene,{template:'scene-v2',backgroundPresence:'clear'});
-  nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+
   let tree=f.render(),footer=tree.props.footer;
   assert.match(text(tree),/新结果尚未确认，可能已计费/);assert.ok(button(tree,'查看这次记录'));
   assert.match(text(footer),/明确再次提交 1 次请求，可能再次计费/);assert.match(text(footer),/当前旧模板不支持“清楚”/);
@@ -102,7 +102,7 @@ test('旧v2及表面v4但历史编译仍旧时，存在感禁生成；免费核�
   for(const [presence,label,template,resolvedCompilerId] of [['subtle','轻','scene-v2'],['natural','自然','scene-v2'],['clear','清楚','scene-v2'],['clear','清楚','scene-v4-presence-1','native3-paragraph-k']]){
     const reads=[],f=await setup(async(path,payload)=>{reads.push([path,payload]);return {before:'旧要求',after:'存在感要求',to:'scene-v4-presence-1'};});
     Object.assign(f.props.unit.variants.scene,{template,resolvedCompilerId,latest:'success',backgroundPresence:presence});
-    nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+
     let tree=f.render(),submit=button(tree.props.footer,'再做一版');
     assert.equal(submit.props.disabled,true);assert.match(text(tree.props.footer),new RegExp('当前旧模板不支持“'+label+'”'));
     submit.props.onClick();await tick();assert.equal(f.sent.length,0,'回调保护也不能发送付费请求');
@@ -135,7 +135,7 @@ test('选择仍在保存时可核对；预览等flush并使用新章与单元版
 test('v4存在感和旧模板未指定仍走正常明确生成，旧模板免费入口保持可发现',async()=>{
   for(const [template,presence] of [['scene-v4-presence-1','clear'],['scene-v4-presence-1','natural'],['scene-v2','unspecified']]){
     const f=await setup();Object.assign(f.props.unit.variants.scene,{template,latest:'success',backgroundPresence:presence});
-    nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+
     const tree=f.render(),submit=button(tree.props.footer,'再做一版');assert.equal(submit.props.disabled,false);
     assert.doesNotMatch(text(tree.props.footer),/尚未生效/);submit.props.onClick();await tick();assert.equal(f.sent.length,1);assert.equal(f.sent[0][1].kind,'sceneAndGenerate');
     if(template==='scene-v2')assert.ok(button(tree,'查看并切换到 v4'));
@@ -178,18 +178,18 @@ test('旧单句记录按segmentId与默认纯人声定位；读取失败不猜�
 });
 
 test('unknown 勾选只表达重试意图，明确点击后才提交一次并重置意图',async()=>{
-  const f=await setup();nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+  const f=await setup();
   button(f.render().props.footer,'再次提交 1 次请求').props.onClick();await tick();assert.equal(f.sent.length,0);
   nodes(f.render().props.footer).find(node=>node.type==='input'&&node.props.type==='checkbox').props.onChange({target:{checked:true}});assert.equal(f.sent.length,0);
   const submit=button(f.render().props.footer,'再次提交 1 次请求');assert.equal(submit.props.disabled,false);submit.props.onClick();await tick();
-  assert.equal(f.sent.length,1);assert.equal(f.sent[0][1].retryUnknown,true);assert.equal(f.sent[0][1].kind,'sceneAndGenerate');assert.equal(f.sent[0][1].unitId,'group');assert.equal(f.sent[0][1].grantId,'grant');
+  assert.equal(f.sent.length,1);assert.equal(f.sent[0][1].retryUnknown,true);assert.equal(f.sent[0][1].kind,'sceneAndGenerate');assert.equal(f.sent[0][1].unitId,'group');assert.ok(!Object.hasOwn(f.sent[0][1],'grantId'));
   assert.equal(nodes(f.render().props.footer).find(node=>node.type==='input'&&node.props.type==='checkbox').props.checked,false);
 });
 
 test('切换声音版本撤回此前重试意图，新版本仍需明确重新勾选',async()=>{
   const f=await setup();f.props.unit.variants.dry.latest='unknown';
   f.props.setMode=mode=>{f.props.mode=mode;};
-  nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+
   nodes(f.render().props.footer).find(node=>node.type==='input'&&node.props.type==='checkbox').props.onChange({target:{checked:true}});
   assert.equal(button(f.render().props.footer,'再次提交 1 次请求').props.disabled,false);
   button(f.render(),'纯人声').props.onClick();
@@ -213,26 +213,26 @@ test('正常状态先展示试听与历史，全文按需展开，编辑仍展�
   assert.equal(f.actions[0][0],'unit.restore');assert.equal(f.actions[0][1].audioId,'previous');assert.equal(f.sent.length,0);
 });
 
-test('已授权的暂停组任务仍默认不可提交；明确恢复后仅点击发送一次并清除确认',async()=>{
+test('暂停组任务仍默认不可提交；明确恢复后仅点击发送一次并清除确认',async()=>{
   const f=await setup();f.props.mode='dry';f.props.state.settings.routeBlocked=true;
-  nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+
   let tree=f.render();assert.equal(check(tree.props.footer,'恢复本次声音请求').props.checked,false);assert.equal(button(tree.props.footer,'再做一版').props.disabled,true);
   button(tree.props.footer,'再做一版').props.onClick();await tick();assert.equal(f.sent.length,0);
   check(f.render().props.footer,'恢复本次声音请求').props.onChange({target:{checked:true}});assert.equal(f.sent.length,0);
   const submit=button(f.render().props.footer,'再做一版');assert.equal(submit.props.disabled,false);submit.props.onClick();await tick();
-  assert.equal(f.sent.length,1);assert.equal(f.sent[0][1].kind,'generateSelection');assert.equal(f.sent[0][1].unitId,'group');assert.equal(f.sent[0][1].resumeRoute,true);assert.equal(f.sent[0][1].grantId,'grant');assert.equal(f.sent[0][1].retryUnknown,undefined);
+  assert.equal(f.sent.length,1);assert.equal(f.sent[0][1].kind,'generateSelection');assert.equal(f.sent[0][1].unitId,'group');assert.equal(f.sent[0][1].resumeRoute,true);assert.ok(!Object.hasOwn(f.sent[0][1],'grantId'));assert.equal(f.sent[0][1].retryUnknown,undefined);
   tree=f.render();assert.equal(check(tree.props.footer,'恢复本次声音请求').props.checked,false);assert.equal(button(tree.props.footer,'再做一版').props.disabled,true);
   button(tree.props.footer,'再做一版').props.onClick();await tick();assert.equal(f.sent.length,1);
 });
 
 test('暂停且结果不明的场景分别确认；失败后两项清除，模式切换不移交恢复确认',async()=>{
   const f=await setup(undefined,async()=>({error:'测试接口再次暂停'}));f.props.state.settings.routeBlocked=true;f.props.unit.variants.dry.latest='unknown';f.props.setMode=mode=>{f.props.mode=mode;};
-  nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+
   check(f.render().props.footer,'恢复本次声音请求').props.onChange({target:{checked:true}});
   assert.equal(button(f.render().props.footer,'再次提交 1 次请求').props.disabled,true);button(f.render().props.footer,'再次提交 1 次请求').props.onClick();await tick();assert.equal(f.sent.length,0);
   check(f.render().props.footer,'恢复本次声音请求').props.onChange({target:{checked:true}});check(f.render().props.footer,'再次提交 1 次请求').props.onChange({target:{checked:true}});
   button(f.render().props.footer,'再次提交 1 次请求').props.onClick();await tick();
-  assert.equal(f.sent.length,1);assert.equal(f.sent[0][1].kind,'sceneAndGenerate');assert.equal(f.sent[0][1].resumeRoute,true);assert.equal(f.sent[0][1].retryUnknown,true);assert.equal(f.sent[0][1].grantId,'grant');
+  assert.equal(f.sent.length,1);assert.equal(f.sent[0][1].kind,'sceneAndGenerate');assert.equal(f.sent[0][1].resumeRoute,true);assert.equal(f.sent[0][1].retryUnknown,true);assert.ok(!Object.hasOwn(f.sent[0][1],'grantId'));
   assert.equal(check(f.render().props.footer,'恢复本次声音请求').props.checked,false);assert.equal(check(f.render().props.footer,'再次提交 1 次请求').props.checked,false);assert.match(text(f.render()),/测试接口再次暂停/);
   check(f.render().props.footer,'恢复本次声音请求').props.onChange({target:{checked:true}});check(f.render().props.footer,'再次提交 1 次请求').props.onChange({target:{checked:true}});button(f.render(),'纯人声').props.onClick();
   assert.equal(f.props.mode,'dry');assert.equal(check(f.render().props.footer,'恢复本次声音请求').props.checked,false);assert.equal(check(f.render().props.footer,'再次提交 1 次请求').props.checked,false);assert.equal(button(f.render().props.footer,'再次提交 1 次请求').props.disabled,true);assert.equal(f.sent.length,1);
@@ -240,11 +240,11 @@ test('暂停且结果不明的场景分别确认；失败后两项清除，模�
 
 test('新建对戏只在明确恢复后创建一次，已保存组不因重复点击再创建',async()=>{
   const f=await setup(undefined,async()=>({outcome:'processing',result:{unit:{id:'created-group',members:['one','two'],revision:1,chapterRevision:2,variants:{dry:{guidance:''}}}}}));f.props.state.settings.routeBlocked=true;
-  nodes(f.renderGroup()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+
   let tree=f.renderGroup();assert.equal(button(tree.props.footer,'生成这段对话').props.disabled,true);button(tree.props.footer,'生成这段对话').props.onClick();await tick();assert.equal(f.sent.length,0);
   check(f.renderGroup().props.footer,'恢复本次声音请求').props.onChange({target:{checked:true}});assert.equal(f.sent.length,0);
   button(f.renderGroup().props.footer,'生成这段对话').props.onClick();await tick();
-  assert.equal(f.sent.length,1);assert.equal(f.sent[0][1].kind,'groupAndGenerate');assert.equal(f.sent[0][1].resumeRoute,true);assert.equal(f.sent[0][1].grantId,'grant');assert.equal(f.groups.length,1);assert.equal(f.groups[0][0].id,'created-group');
+  assert.equal(f.sent.length,1);assert.equal(f.sent[0][1].kind,'groupAndGenerate');assert.equal(f.sent[0][1].resumeRoute,true);assert.ok(!Object.hasOwn(f.sent[0][1],'grantId'));assert.equal(f.groups.length,1);assert.equal(f.groups[0][0].id,'created-group');
   tree=f.renderGroup();assert.equal(check(tree.props.footer,'恢复本次声音请求').props.checked,false);assert.equal(button(tree.props.footer,'生成这段对话').props.disabled,true);check(tree.props.footer,'恢复本次声音请求').props.onChange({target:{checked:true}});
   assert.equal(button(f.renderGroup().props.footer,'生成这段对话').props.disabled,true,'A saved group cannot be created again through its visible primary action');assert.equal(f.sent.length,1);assert.equal(f.groups.length,1);
 });
@@ -254,7 +254,7 @@ test('未添加的新声音草稿保留且不阻已配置场景；现有相关�
   const f=await setup(undefined,undefined,draftIds);
   f.props.unit.variants.scene.latest='success';f.props.unit.variants.scene.status.validity='stale';
   f.props.chapter.events=[{id:'removed',state:'removed',revision:2},{id:'ambient',state:'adopted',revision:1},{id:'unused',state:'draft',revision:1}].map(event=>({...event,unitId:'group',kind:'environment',memberId:'one',position:'during',description:'山洞水滴声',evidence:{kind:'用户创作选择'}}));
-  nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+
   assert.match(text(f.render().props.footer),/未添加的声音草稿已保留，不加入本次生成/);
   button(f.render().props.footer,'应用并生成带背景声').props.onClick();await tick();
   assert.equal(f.sent.length,1);assert.deepEqual(f.sent[0][1].eventIds,['ambient']);
@@ -325,7 +325,8 @@ test('声音面板先试听再历史与下一版编辑，请求记录不冒充�
   const tree=f.render(),all=nodes(tree),position=cls=>all.findIndex(node=>node.props.className?.split(' ').includes(cls));
   assert.ok(position('unit-current-result')<position('unit-history'));
   assert.ok(position('unit-history')<position('unit-edit-settings'));
-  assert.ok(position('unit-edit-settings')<position('unit-submit-authorization'));
+  assert.ok(position('unit-edit-settings')<position('unit-advanced'));
+  assert.equal(position('unit-submit-authorization'),-1);
   assert.ok(!all.some(node=>node.props.className==='task-outcome'));assert.equal(button(tree,'试听这次结果'),undefined);
   for(const label of ['人工听评已通过','标记需要重做','恢复上一版','恢复最近通过版'])assert.match(button(tree,label).props.className,/button secondary/);
   assert.doesNotMatch(text(tree),/修改背景设置不会改变已生成的音频/);
@@ -433,4 +434,19 @@ test('已收到原件的未登记结果优先免费恢复，不提供再次计�
   assert.doesNotMatch(text(tree.props.footer), /明确再次提交/);
   button(tree.props.footer,'查看并免费恢复').props.onClick(); await tick();
   assert.deepEqual(f.tasks,[['job','pending']]); assert.equal(f.sent.length,0);
+});
+
+test('普通单句、对戏组和场景点击生成即提交当前范围，不需要次数或有效期授权',async()=>{
+  for(const [kind,mode,id,members] of [['single','dry','one',['one']],['group','dry','group',['one','two']],['group','scene','group',['one','two']]]){
+    const f=await setup();Object.assign(f.props.unit,{kind,id,members});f.props.mode=mode;f.props.unit.variants[mode].latest='success';
+    const tree=f.render(),submit=button(tree.props.footer,'再做一版');assert.equal(submit.props.disabled,false);assert.ok(!nodes(tree).some(node=>node.type==='TaskAuthorization'));assert.doesNotMatch(text(tree),/生成权限与剩余次数|24\s*小时|先.*允许本次制作范围/);
+    submit.props.onClick();await tick();assert.equal(f.sent.length,1);const payload=f.sent[0][1];assert.ok(!Object.hasOwn(payload,'grantId'));assert.equal(payload.chapterId,'chapter');assert.equal(payload.unitId,id);assert.equal(payload.kind,mode==='scene'?'sceneAndGenerate':'generateSelection');
+    if(mode==='dry')assert.deepEqual(payload.ids,members);else assert.deepEqual(payload.eventIds,[]);
+  }
+});
+
+test('新建对戏点击一次直接创建并生成所选成员，保留保存与已有组去重',async()=>{
+  const f=await setup(undefined,async()=>({outcome:'processing',result:{unit:{id:'created-group',members:['one','two'],revision:1,chapterRevision:2,variants:{dry:{guidance:''}}}}}));
+  const tree=f.renderGroup(),submit=button(tree.props.footer,'生成这段对话');assert.equal(submit.props.disabled,false);assert.ok(!nodes(tree).some(node=>node.type==='TaskAuthorization'));
+  submit.props.onClick();await tick();assert.equal(f.sent.length,1);assert.deepEqual(f.sent[0][1].ids,['one','two']);assert.equal(f.sent[0][1].kind,'groupAndGenerate');assert.ok(!Object.hasOwn(f.sent[0][1],'grantId'));assert.equal(f.groups.length,1);assert.equal(button(f.renderGroup().props.footer,'生成这段对话').props.disabled,true);
 });

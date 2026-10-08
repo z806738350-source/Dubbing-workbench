@@ -17,6 +17,7 @@ import {
   checkEntityRevision,
 } from "./domain.mjs";
 import { buildMaster, exportMaster, inspect, validateStoredAudio } from "./audio.mjs";
+import { savedAudioRange, renderIdentity } from './audio-range.mjs';
 import { sealAudioDelivery, prepareAudioDelivery, hasAudioDelivery, saveAudioAttempt } from './audio-delivery.mjs';
 import { fail, same, uid } from "./store.mjs";
 import { templateCatalog, templateOf } from "./templates.mjs";
@@ -156,6 +157,12 @@ export function createWorker(store, domain, config) {
     }
     return prepared;
   }
+  function renderChapter(p) {
+    const c=store.get('chapters',p.chapterId);
+    if(p.revision!==c.revision)fail('本章已在其他页面更新，请按当前版本准备',409);
+    if(store.all('jobs',c.id).some(j=>active(j)&&j.kind!=='master'))fail('本章正在处理任务，请等待完成后准备成品',409);
+    return c;
+  }
   function enqueue(p, checked) {
     return store.transaction(() => {
       const existing = existingCommand(p);
@@ -238,7 +245,7 @@ export function createWorker(store, domain, config) {
         saveAudioAttempt(store, attempt, job.id);
         return job;
       }
-      const c = domain.editable(p.chapterId, p.revision);
+      const c = ['master','export'].includes(p.kind) ? renderChapter(p) : domain.editable(p.chapterId, p.revision);
       const kind = p.kind || "generate";
       if (!["generate", "master", "export"].includes(kind))
         fail("任务类型无效");
@@ -321,6 +328,16 @@ export function createWorker(store, domain, config) {
         createdAt: new Date().toISOString(),
         ...(kind === "export" ? { confirmation: preparedRender?.confirmation || { arrangement: c.arrangement, reviewItems: p.reviewItems, at: new Date().toISOString() } } : {}),
       };
+      if (kind !== 'generate') {
+        const rows = preparedRender?.rows || all.map(s => ({ s, a: store.get('audios', s.current) }));
+        const identity = renderIdentity(store, c.id, rows);
+        if (p.renderSignature !== undefined && p.renderSignature !== identity.renderSignature) fail('声音范围已变化，请按当前范围继续', 409);
+        Object.assign(job, identity, { renderGap: c.gap, renderRows: rows.map(({s,a}) => ({s,a,range:savedAudioRange(store,s.unitId || s.id,s.mode || 'dry',a.id)})) });
+        for (const queued of store.all('jobs', c.id).filter(j => kind === 'master' && j.kind === 'master' && j.status === 'queued')) {
+          if (queued.arrangement === c.arrangement && (queued.renderSignature ?? null) === identity.renderSignature && (queued.renderRevision || 0) === identity.renderRevision) return queued;
+          setJob({ ...queued, status:'stopped', stop:true, error:'已合并到更新的试听范围' });
+        }
+      }
       setJob(job);
       if (kind === "generate") {
         const attempts = [];
@@ -659,7 +676,7 @@ export function createWorker(store, domain, config) {
     job.outputRecords={...job.outputRecords,[kind]:record};
     job.masterId=kind==='master'?record.id:record.masterId;
     if(kind==='export')job.exportId=record.id;
-    job.result={chapterId:job.chapterId,arrangement:job.arrangement,masterId:job.masterId,...(job.exportId?{exportId:job.exportId,format:job.format}:{})};
+    job.result={chapterId:job.chapterId,arrangement:job.arrangement,renderRevision:job.renderRevision || 0,renderSignature:job.renderSignature ?? null,masterId:job.masterId,...(job.exportId?{exportId:job.exportId,format:job.format}:{})};
     job.localOutputPending=true;
     setJob({...current,outputRecords:job.outputRecords,masterId:job.masterId,...(job.exportId?{exportId:job.exportId}:{}),result:job.result,localOutputPending:true});return true;
   }
@@ -668,7 +685,7 @@ export function createWorker(store, domain, config) {
     const before=JSON.stringify(job);
     for(const [kind,record]of Object.entries(job.outputRecords || {})) {
       const table=kind==='master'?'masters':kind==='export'?'exports':null;
-      if(!table || record.chapterId!==job.chapterId || record.arrangement!==job.arrangement || !record.id || !record.path || !existsSync(join(store.directory,record.path)))continue;
+      if(!table || record.chapterId!==job.chapterId || record.arrangement!==job.arrangement || (record.renderSignature ?? null)!==(job.renderSignature ?? null) || !record.id || !record.path || !existsSync(join(store.directory,record.path)))continue;
       if(!store.maybe(table,record.id)) {
         try {const meta=await inspect(join(store.directory,record.path));if(kind==='master'&&Math.abs(meta.duration*48000-record.frames)>1)continue;}
         catch {continue;}
@@ -677,19 +694,26 @@ export function createWorker(store, domain, config) {
     }
     let masters=store.all('masters',job.chapterId).filter(m=>m.id===(job.masterId||job.result?.masterId||job.outputRecords?.master?.id)||m.jobId===job.id);
     const exports=store.all('exports',job.chapterId).filter(e=>e.id===(job.exportId||job.result?.exportId)||e.jobId===job.id);
-    if(!masters.length&&job.kind==='master'&&job.status==='success')masters=store.all('masters',job.chapterId).filter(m=>m.arrangement===job.arrangement&&!m.invalid&&!m.superseded&&existsSync(join(store.directory,m.path)));
+    if(!masters.length&&job.kind==='master'&&job.status==='success')masters=store.all('masters',job.chapterId).filter(m=>m.arrangement===job.arrangement&&(m.renderSignature ?? null)===(job.renderSignature ?? null)&&!m.invalid&&!m.superseded&&existsSync(join(store.directory,m.path)));
     const exported=exports.length===1&&exports[0].format===job.format?exports[0]:null;
     const master=exported?store.maybe('masters',exported.masterId):masters.length===1?masters[0]:null;
-    if(!master || master.arrangement!==job.arrangement || master.invalid || !existsSync(join(store.directory,master.path)) || job.kind==='export'&&(!exported || !existsSync(join(store.directory,exported.path))))return false;
+    if(!master || master.arrangement!==job.arrangement || (master.renderSignature ?? null)!==(job.renderSignature ?? null) || master.invalid || !existsSync(join(store.directory,master.path)) || job.kind==='export'&&(!exported || (exported.renderSignature ?? null)!==(job.renderSignature ?? null) || !existsSync(join(store.directory,exported.path))))return false;
     job.masterId=master.id;if(exported)job.exportId=exported.id;
-    job.result={chapterId:job.chapterId,arrangement:job.arrangement,masterId:master.id,...(exported?{exportId:exported.id,format:exported.format}:{})};
-    if((active(job)||job.localOutputPending)&&!job.stop&&!master.superseded&&!exported?.superseded) {job.status='success';job.done=job.total;job.finishedAt=new Date().toISOString();delete job.error;}
+    job.result={chapterId:job.chapterId,arrangement:job.arrangement,renderRevision:job.renderRevision || 0,renderSignature:job.renderSignature ?? null,masterId:master.id,...(exported?{exportId:exported.id,format:exported.format}:{})};
+    if((active(job)||job.localOutputPending)&&!job.stop&&!master.superseded&&!exported?.superseded) {
+      const current=renderIdentity(store,job.chapterId,domain.enhancement?.resolve(job.chapterId));
+      if(store.get('chapters',job.chapterId).arrangement!==job.arrangement || !same([current.renderRevision,current.renderSignature],[job.renderRevision || 0,job.renderSignature ?? null])) {
+        for(const [table,record]of [['masters',master],['exports',exported]])if(record)store.put(table,{...record,superseded:true},job.chapterId);
+        job.status='stopped';job.error='旧范围的本地成品已恢复为历史，请使用当前范围';
+      }else{job.status='success';job.done=job.total;delete job.error;}
+      job.finishedAt=new Date().toISOString();
+    }
     job.localOutputPending=false;if(JSON.stringify(job)!==before)setJob(job);return true;
   }
   async function render(job) {
     const c = store.get("chapters", job.chapterId);
-    const isCurrent = () => {const current=store.get('jobs',job.id);return active(current)&&!current.stop&&store.get("chapters", c.id).arrangement === job.arrangement;};
-    const rows = domain.enhancement?.resolve(c.id) || domain.list(c.id).filter(s => !s.excluded).map(s => ({s,a:s.current && store.maybe("audios",s.current)}));
+    const isCurrent = () => {const current=store.get('jobs',job.id), identity=renderIdentity(store,c.id,domain.enhancement?.resolve(c.id));return active(current)&&!current.stop&&store.get("chapters", c.id).arrangement === job.arrangement&&(identity.renderSignature ?? null)===(job.renderSignature ?? null)&&(identity.renderRevision || 0)===(job.renderRevision || 0);};
+    const rows = job.renderRows || domain.enhancement?.resolve(c.id) || domain.list(c.id).filter(s => !s.excluded).map(s => ({s,a:s.current && store.maybe("audios",s.current)}));
     for (const [index,{s,a}] of rows.entries()) {
       if (!a || !await validateStoredAudio(store, a)) fail(`第 ${(s.order ?? index) + 1} 条音频损坏或缺失，请先恢复文件`);
     }
@@ -698,7 +722,7 @@ export function createWorker(store, domain, config) {
       .find(
         (m) =>
           !m.invalid && !m.superseded &&
-          m.arrangement === c.arrangement &&
+          m.arrangement === job.arrangement && (m.renderSignature ?? null) === (job.renderSignature ?? null) &&
           existsSync(join(store.directory, m.path)),
       );
     if (master) {
@@ -716,13 +740,15 @@ export function createWorker(store, domain, config) {
       if (!isCurrent()) fail('构建任务或编排已失效，请按当前版本重新准备');
       const id = job.masterId || uid();
       job.masterId=id;setJob({...store.get('jobs',job.id),masterId:id});
-      const info = await buildMaster(store, rows, c.gap, id);
+      const info = await buildMaster(store, rows, job.renderGap ?? c.gap, id);
       master = {
         id,
         jobId: job.id,
         superseded: !isCurrent(),
         chapterId: c.id,
-        arrangement: c.arrangement,
+        arrangement: job.arrangement,
+        renderRevision: job.renderRevision || 0,
+        renderSignature: job.renderSignature ?? null,
         ...info,
         createdAt: new Date().toISOString(),
       };
@@ -736,7 +762,7 @@ export function createWorker(store, domain, config) {
       const id = job.exportId || uid();job.exportId=id;setJob({...store.get('jobs',job.id),exportId:id});
       const path = await exportMaster(store, master, id, job.format);
       const superseded = !isCurrent();
-      const output={id,jobId:job.id,superseded,path,format:job.format,chapterId:c.id,arrangement:c.arrangement,masterId:master.id,confirmation:job.confirmation,createdAt:new Date().toISOString()};
+      const output={id,jobId:job.id,superseded,path,format:job.format,chapterId:c.id,arrangement:job.arrangement,renderRevision:job.renderRevision || 0,renderSignature:job.renderSignature ?? null,masterId:master.id,confirmation:job.confirmation,createdAt:new Date().toISOString()};
       rememberOutput(job,'export',output);
       store.put(
         "exports",
@@ -745,6 +771,7 @@ export function createWorker(store, domain, config) {
       );
       if (superseded) {job.localOutputPending=false;fail("旧导出已保留，未替换当前结果");}
     }
+    if(!isCurrent()) {job.localOutputPending=false;fail('播放范围已变化，旧结果已保留为历史');}
     job.done = job.total;
     job.status = "success";
     job.localOutputPending=false;
@@ -903,7 +930,7 @@ export function createWorker(store, domain, config) {
           catch { fail(`参考声音「${v.name || id}」损坏或缺失，或不符合 30 秒/10 MB 规格；本批尚未入队`); }
         }
       } else if (["master", "export"].includes(p.kind)) {
-        const c = domain.editable(p.chapterId, p.revision);
+        const c = renderChapter(p);
         const rows = domain.enhancement?.resolve(c.id) || domain.list(c.id).filter(s => !s.excluded).map(s => ({s,a:segmentStatus(store,s).audio}));
         for (const [index,{s,a}] of rows.entries()) {
           if (!a) fail(`第 ${(s.order ?? index) + 1} 条没有音频`);

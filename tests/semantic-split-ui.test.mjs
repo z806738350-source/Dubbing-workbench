@@ -11,7 +11,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const draft=()=>({id:'analysis',kind:'director',splitOnly:true,revision:4,contextRevision:2,draftVersion:3,status:'ready',model:'text-model',items:[{id:'item',segmentId:'segment',splitParts:['前段🙂。','后段。'],splitRequiresPerformanceConfirmation:true}],batches:[{id:'batch',status:'received'}]});
 function fixture(){
   const calls={api:[],operations:[],drafts:[],applied:[],appliedGuards:[],closed:0,errors:[]};const waiting=new Map();
-  const env={chapter:{id:'chapter',projectId:'project',revision:4},segment:{id:'segment',performance:'前半克制，后半哽咽'},scope:'chapter:chapter',plan:{kind:'director',memberIds:['segment'],textRequests:1},draft:null,item:null,parts:[],grantId:'grant',pending:false,running:false,unknown:false,retryUnknown:false,currentDraft:true,needsPerformanceConfirmation:false,inheritPerformanceConfirmed:false,applyUncertain:false,defaultModel:'text-model',stateJobs:[],alive:{current:true},intent:{current:0},
+  const env={chapter:{id:'chapter',projectId:'project',revision:4},segment:{id:'segment',performance:'前半克制，后半哽咽'},scope:'chapter:chapter',plan:{kind:'director',memberIds:['segment'],textRequests:1},draft:null,item:null,parts:[],pending:false,running:false,unknown:false,retryUnknown:false,currentDraft:true,needsPerformanceConfirmation:false,inheritPerformanceConfirmed:false,applyUncertain:false,defaultModel:'text-model',stateJobs:[],alive:{current:true},intent:{current:0},
     draftScopeRevision:(_scope,revision)=>revision,withSavedDrafts:async(_scope,deps,next)=>{assert.deepEqual(deps,['segment:segment']);return next();},
     api:async(path,payload)=>{calls.api.push({path,payload});const deferred=waiting.get(path);if(deferred)return deferred.promise;if(path==='/operations/plan')return env.plan;if(path==='/analysis/apply')return {...env.draft,status:'applied',splitResults:[{segmentId:'segment',itemId:'item',childIds:['child-one','child-two']}]};if(path.startsWith('/chapters/'))return {suggestions:[env.draft]};return {};},
     submitOperation:async(key,payload,jobs)=>{calls.operations.push({key,payload,jobs});const deferred=waiting.get('submit');return deferred?deferred.promise:{result:{analysis:draft()}};},
@@ -26,13 +26,20 @@ function fixture(){
 
 test('AI拆短只准备独立语义预览，unknown未明确决定不会重新发送',async()=>{
   const f=fixture();await f.render().prepare();assert.equal(f.calls.operations.length,1);
-  assert.deepEqual(f.calls.operations[0].payload,{kind:'prepareChapter',analysisKind:'director',chapterId:'chapter',revision:4,ids:['segment'],splitOnly:true,autoApply:false,model:'text-model',grantId:'grant',requireGrant:true});
+  assert.deepEqual(f.calls.operations[0].payload,{kind:'prepareChapter',analysisKind:'director',chapterId:'chapter',revision:4,ids:['segment'],splitOnly:true,autoApply:false,model:'text-model'});
   assert.equal(f.calls.api.filter(call=>call.path==='/analysis/apply').length,0);assert.deepEqual(f.calls.applied,[]);
   const numericInputs=nodes(node=>ts.isJsxSelfClosingElement(node)&&node.tagName.getText(file)==='input'&&node.attributes.properties.some(attr=>ts.isJsxAttribute(attr)&&attr.name.getText(file)==='type'&&attr.initializer?.getText(file)==='"number"'));
   assert.equal(numericInputs.length,0,'The user chooses a semantic preview, never a numeric offset');
+  assert.equal(nodes(node=>ts.isJsxSelfClosingElement(node)&&node.tagName.getText(file)==='TaskAuthorization').length,0,'明确拆短不添加额度授权页');
   f.env.unknown=true;f.env.draft={...draft(),status:'partial',batches:[{id:'batch',status:'unknown'}]};f.env.pending=false;
   await f.render().prepare();await f.render().prepare(true);
   assert.equal(f.calls.operations.length,1);assert.equal(f.calls.api.filter(call=>call.path==='/analysis/resume').length,0);
+});
+
+test('拆短明确重发只继续原draft；保存后范围改变不自动发送新范围',async()=>{
+  const retry=fixture();retry.env.draft={...draft(),status:'partial',batches:[{id:'batch',status:'unknown'}]};retry.env.unknown=true;retry.env.retryUnknown=true;await retry.render().prepare(true);
+  assert.deepEqual(retry.calls.api[0],{path:'/analysis/resume',payload:{id:'analysis',draftVersion:3,retryUnknown:true}});assert.equal(retry.calls.operations.length,0);assert.equal(retry.env.retryUnknown,false);
+  const changed=fixture(),read=changed.defer('/operations/plan'),pending=changed.render().prepare();await tick();read.resolve({...changed.env.plan,memberIds:['segment','other'],textRequests:2});await pending;assert.equal(changed.calls.operations.length,0);assert.deepEqual(changed.env.plan.memberIds,['segment','other']);assert.match(changed.calls.errors.at(-1),/范围已更新.*再次安排/);
 });
 
 test('位置性表演需明确沿用，应用一次真实预览且直接定位第一个子条',async()=>{

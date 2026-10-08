@@ -69,7 +69,7 @@ test('过期、部分失败、运行中和已加入均不冒充当前完成空�
     assert.match(text(tree),message,name);assert.doesNotMatch(text(tree),/分析完成，本次没有新增声音建议|请选择想加入|加入选中的/,name);
     assert.ok(checks(tree).every(check=>check.props.disabled===true),name);
     if(change.error)assert.match(text(tree),/本批连接中断，可能已计费/);if(change.issues)assert.match(text(tree),/建议需核对/);
-    if(change.status==='running'){assert.equal(button(tree,'正在分析…').props.disabled,true);assert.equal(nodes(tree).find(node=>node.type==='TaskAuthorization').props.disabled,true);}
+    if(change.status==='running'){assert.equal(button(tree,'正在分析…').props.disabled,true);assert.equal(nodes(tree).some(node=>node.type==='TaskAuthorization'),false);}
     assert.equal(f.calls.api.length,0);assert.equal(f.calls.operations.length,0);assert.equal(f.calls.refresh,0);
   }
 });
@@ -77,12 +77,12 @@ test('过期、部分失败、运行中和已加入均不冒充当前完成空�
 test('从旧历史明确新分析后按回执ID显示新建议，清空旧选择，不猜列表末项',async()=>{
   const old=record('old',[item('old-item')]),later=record('later',[item('later-item')]),fresh=record('new',[item('new-item')]);
   const f=await setup([old,later]);let tree=await openHistory(f);history(tree).props.onChange('old');checks(f.render())[0].props.onChange({target:{checked:true}});
-  nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+
   f.props.refresh=async()=>{f.calls.refresh++;f.props.chapter.suggestions=[old,later,fresh,record('different-last',[item('wrong-item')])];};
   button(f.render(),'分析声音建议').props.onClick();await tick();tree=f.render();
   assert.equal(button(tree,'本次结果').props['aria-pressed'],true);assert.equal(history(tree),undefined);assert.equal(cards(tree).length,1);assert.match(text(tree),/new-item · 门声/);assert.doesNotMatch(text(tree),/old-item · 门声|wrong-item · 门声/);assert.equal(checks(tree)[0].props.checked,false);
   const shown=await openHistory(f);assert.equal(history(shown).props.value,'new');assert.match(text(historyArea(shown)),/new-item · 门声/);assert.equal(cards(shown).length,1);assert.equal(f.calls.operations.length,1,'切历史不会重发分析或换到列表末项');
-  assert.equal(f.calls.operations.length,1);assert.deepEqual(f.calls.operations[0],['scene-analysis:unit',{kind:'prepareChapter',analysisKind:'scene',sceneEnabled:true,chapterId:'chapter',revision:3,unitId:'unit',unitRevision:2,model:'fixture',grantId:'grant'}]);assert.equal(f.calls.api.length,0);assert.equal(f.calls.refresh,1);
+  assert.equal(f.calls.operations.length,1);assert.deepEqual(f.calls.operations[0],['scene-analysis:unit',{kind:'prepareChapter',analysisKind:'scene',sceneEnabled:true,chapterId:'chapter',revision:3,unitId:'unit',unitRevision:2,model:'fixture'}]);assert.equal(f.calls.api.length,0);assert.equal(f.calls.refresh,1);
 });
 
 test('普通刷新增加新记录仍保留明确查看的旧历史与选择，零分析或采用',async()=>{
@@ -95,9 +95,9 @@ test('普通刷新增加新记录仍保留明确查看的旧历史与选择，�
 
 test('缺分析回执不猜最新记录；关闭后迟到回执不修改组件状态',async()=>{
   const f=await setup([record('old'),record('last')]);history(await openHistory(f)).props.onChange('old');
-  nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');f.runtime.receipt=async()=>({result:{},outcome:'processing'});
+  f.runtime.receipt=async()=>({result:{},outcome:'processing'});
   button(f.render(),'分析声音建议').props.onClick();await tick();const tree=f.render();assert.equal(history(tree).props.value,'old');assert.match(text(nodes(tree).find(node=>node.props.role==='alert')),/未取得这次分析的记录/);assert.equal(f.calls.operations.length,1);assert.equal(f.calls.api.length,0);assert.equal(f.calls.refresh,0);
-  const closed=await setup([record('old')]);nodes(closed.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');let finish;
+  const closed=await setup([record('old')]);let finish;
   closed.runtime.receipt=()=>new Promise(resolve=>{finish=resolve;});button(closed.render(),'分析声音建议').props.onClick();await tick();closed.unmount();const writes=closed.calls.stateWrites.length;
   finish({result:{analysis:{id:'new'}},outcome:'processing'});await tick();assert.equal(closed.calls.stateWrites.length,writes);assert.equal(closed.calls.operations.length,1);assert.equal(closed.calls.api.length,0);
 });
@@ -176,16 +176,14 @@ test('历史重新加入有准确进度与就地失败，保留选中且不触�
   fail(new Error('成员已改变，请重新核对'));await tick();tree=f.render();const area=nodes(tree).find(node=>node.props.className==='scene-analysis-apply'),alert=nodes(tree).find(node=>node.props.role==='alert');assert.ok(nodes(area).includes(alert));assert.match(text(alert),/成员已改变/);assert.equal(checks(tree)[0].props.checked,true);assert.equal(checks(tree)[0].props.disabled,false);assert.equal(button(tree,'重新加入选中的 1 个声音').props.disabled,false);assert.equal(f.calls.api.length,1);assert.equal(f.calls.api[0][0],'/analysis/reuse');assert.equal(f.calls.operations.length,0);assert.equal(f.calls.refresh,0);
 });
 
-test('分析权限独立折叠但持续挂载，旁边保留一次文本请求与实际授权状态',async()=>{
-  const f=await setup(),tree=f.render(),permissions=nodes(tree).find(node=>node.type==='details'&&nodes(node).some(child=>child.type==='summary'&&text(child)==='分析权限与模型'));
-  assert.ok(permissions);assert.equal(!!permissions.props.open,false);assert.match(text(tree),/先允许 · 本次 1 次文本请求/);assert.equal(button(tree,'分析声音建议').props.disabled,true);
-  const authorization=nodes(permissions).find(node=>node.type==='TaskAuthorization');assert.ok(authorization);assert.equal(authorization.props.model,'fixture');assert.deepEqual(authorization.props.steps,['scene']);
-  authorization.props.onReady('grant');const allowed=f.render();assert.match(text(allowed),/已允许 · 本次 1 次文本请求/);assert.equal(button(allowed,'分析声音建议').props.disabled,false);assert.equal(f.calls.api.length,0);assert.equal(f.calls.operations.length,0);assert.equal(f.calls.refresh,0);
+test('声音建议明确点击直接分析当前单元，无次数或24小时授权页',async()=>{
+  const f=await setup(),tree=f.render();assert.equal(nodes(tree).some(node=>node.type==='TaskAuthorization'||node.type==='input'&&node.props.type==='number'),false);assert.doesNotMatch(text(tree),/先允许|24小时|生成权限与剩余次数/);assert.match(text(tree),/本次 1 次文本请求 · fixture/);assert.equal(button(tree,'分析声音建议').props.disabled,false);
+  assert.equal(f.calls.operations.length,0);button(tree,'分析声音建议').props.onClick();await tick();assert.equal(f.calls.operations.length,1);assert.deepEqual(f.calls.operations[0],['scene-analysis:unit',{kind:'prepareChapter',analysisKind:'scene',sceneEnabled:true,chapterId:'chapter',revision:3,unitId:'unit',unitRevision:2,model:'fixture'}]);
 });
 
 test('加入期间明确显示正在加入并锁住勾选；失败留在加入行，保留原选择且不发分析',async()=>{
   const f=await setup([record('other',[item('other-item')]),record('ready',[item('chosen'),item('later')])]);let fail;
-  f.runtime.apply=()=>new Promise((_resolve,reject)=>{fail=reject;});nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');
+  f.runtime.apply=()=>new Promise((_resolve,reject)=>{fail=reject;});
   assert.equal(button(f.render(),'分析声音建议').props.disabled,false);checks(f.render())[0].props.onChange({target:{checked:true}});
   button(f.render(),'加入选中的 1 个声音').props.onClick();let tree=f.render();
   const applying=button(tree,'正在加入…'),analyze=button(tree,'分析声音建议');assert.equal(applying.props.disabled,true);assert.equal(applying.props['aria-busy'],true);assert.equal(analyze.props.disabled,true);assert.equal(analyze.props['aria-busy'],false);assert.equal(button(tree,'正在分析…'),undefined);
@@ -198,7 +196,7 @@ test('加入期间明确显示正在加入并锁住勾选；失败留在加入�
 
 test('重复点击当前本次视图保持勾选与精确回执；历史入口不自动改到列表末项',async()=>{
   const old=record('old'),fresh=record('new',[item('receipt-item')]),f=await setup([old]);
-  nodes(f.render()).find(node=>node.type==='TaskAuthorization').props.onReady('grant');f.props.refresh=async()=>{f.calls.refresh++;f.props.chapter.suggestions=[old,fresh,record('different-last',[item('wrong-item')])];};
+  f.props.refresh=async()=>{f.calls.refresh++;f.props.chapter.suggestions=[old,fresh,record('different-last',[item('wrong-item')])];};
   button(f.render(),'分析声音建议').props.onClick();await tick();checks(f.render())[0].props.onChange({target:{checked:true}});
   let tree=f.render();assert.equal(button(tree,'本次结果').props['aria-pressed'],true);assert.match(text(tree),/receipt-item · 门声/);const writes=f.calls.stateWrites.length;
   button(tree,'本次结果').props.onClick();tree=f.render();assert.equal(f.calls.stateWrites.length,writes);assert.equal(checks(tree)[0].props.checked,true);assert.match(text(tree),/receipt-item · 门声/);assert.doesNotMatch(text(tree),/wrong-item · 门声/);
@@ -218,7 +216,7 @@ test('H01当前冲突和不确定提醒消费后端结果，仅无效项禁选�
   const f=await setup([{...record('old',[item('invalid'),item('valid')]),revision:1,status:'partial'}]);let finish;
   f.runtime.preview=()=>new Promise(resolve=>{finish=resolve;});views(f.render())[1].props.onClick();let tree=f.render();
   assert.ok(checks(tree).every(i=>i.props.disabled));assert.match(text(tree),/正在免费核对当前场景/);assert.ok(views(tree).every(i=>!i.props.disabled));assert.equal(history(tree).props.disabled,false);
-  nodes(tree).find(node=>node.type==='TaskAuthorization').props.onReady('grant');assert.equal(button(f.render(),'分析声音建议').props.disabled,false,'免费预检pending不冒充付费分析pending');
+  assert.equal(button(f.render(),'分析声音建议').props.disabled,false,'免费预检pending不冒充付费分析pending');
   finish({id:'old',draftVersion:1,target:{chapterRevision:3,unitRevision:2,contextRevision:4},items:[{itemId:'invalid',historicalIssues:[],currentIssues:['当前clear与背景全程不可闻冲突'],warnings:[],canReuse:false,alreadyIncluded:false},{itemId:'valid',historicalIssues:[],currentIssues:[],warnings:['对象尚不明确，请核对'],canReuse:true,alreadyIncluded:false}]});await tick();tree=f.render();
   assert.equal(checks(tree)[0].props.disabled,true);assert.equal(checks(tree)[1].props.disabled,false);assert.match(text(cards(tree)[0]),/当前clear与背景全程不可闻冲突.*核对/);assert.match(text(cards(tree)[1]),/对象尚不明确/);assert.equal(f.calls.previews.length,1);assert.equal(f.calls.api.length,0);assert.equal(f.calls.operations.length,0);
 });

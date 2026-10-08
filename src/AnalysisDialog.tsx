@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { AlertTriangle } from "lucide-react";
 import { api } from "./api";
 import { Field, Form, Select } from "./components";
-import TaskAuthorization, { ensureTaskGrant } from "./TaskAuthorization";
 import { submitOperation } from "./taskOperations";
 import { draftScopeRevision, withSavedDrafts } from "./autosave";
 import type { ChapterDetail, ExperiencePolicy, ExperienceState, Job, PerformanceCoverage, PerformanceReceipt, Role } from "./types";
@@ -109,13 +108,13 @@ export default function AnalysisDialog({
   const [plan, setPlan] = useState<TextPlan | null>(null), [advancedPlan, setAdvancedPlan] = useState<TextPlan | null>(null);
   const [preparing, setPreparing] = useState(false), [policySaving, setPolicySaving] = useState(false), [prepareError, setPrepareError] = useState("");
   const [performanceMode,setPerformanceMode]=useState<"initial"|"fillMissing"|"replaceAi"|"selectedRewrite">(chapter.segments.length||chapter.deletedSegments?.length?"fillMissing":"initial");
-  const [includeHumanPerformance,setIncludeHumanPerformance]=useState(false),[grantNeeded,setGrantNeeded]=useState(false);
+  const [includeHumanPerformance,setIncludeHumanPerformance]=useState(false);
   const alive=useRef(true);useEffect(()=>()=>{alive.current=false;},[]);
   const mainPayload={kind:"prepareChapter",chapterId:chapter.id,revision:chapter.revision,ids:performanceMode==="fillMissing"?[]:selected,includePerformance:true,performanceMode,...(performanceMode!=="initial"?{analysisKind:"director"}:{}),...(includeHumanPerformance?{includeHumanPerformance:true}:{})};
   const selectedKey = [...selected].sort().join(",");
   useEffect(()=>{
     if(performanceMode==="initial"&&(chapter.segments.length||chapter.deletedSegments?.length)){
-      setPerformanceMode("fillMissing");setIncludeHumanPerformance(false);setGrantNeeded(false);
+      setPerformanceMode("fillMissing");setIncludeHumanPerformance(false);
     }
   },[performanceMode,chapter.segments.length,chapter.deletedSegments?.length]);
   useEffect(() => {
@@ -153,7 +152,7 @@ export default function AnalysisDialog({
     } catch(error){setPrepareError((error as Error).message);}
     finally{setPolicySaving(false);}
   }
-  async function prepare(authorizedGrant?:string) {
+  async function prepare() {
     if(!plan || preparing || working)return;
     setPreparing(true);setPrepareError("");
     try {
@@ -164,15 +163,13 @@ export default function AnalysisDialog({
         if(!alive.current)return;
         setPlan(currentPlan);
         if(!currentPlan.textRequests){setPrepareError("当前范围没有需要补齐的指导，已有内容保留。");return;}
-        const allowed=authorizedGrant||await ensureTaskGrant({projectId:chapter.projectId,chapterId:chapter.id,step:"text",steps:[currentPlan.kind],model:defaultModel,requests:currentPlan.maxTextRequests??currentPlan.textRequests,minimumRequests:currentPlan.textRequests});
-        if(!alive.current)return;
-        const result=await submitOperation<{analysis:Suggestion}>("prepare:"+chapter.id,{...payload,grantId:allowed},stateJobs);
+        const result=await submitOperation<{analysis:Suggestion}>("prepare:"+chapter.id,payload,stateJobs);
         if(result.error)throw new Error(result.error);
         if(!alive.current)return;
-        setGrantNeeded(false);setViewId(result.result.analysis.id);setEditing(null);setChecked([]);setAck(false);
+        setViewId(result.result.analysis.id);setEditing(null);setChecked([]);setAck(false);
       });
       await refresh();
-    } catch(error){if(alive.current){setPrepareError((error as Error).message);setGrantNeeded((error as {code?:string}).code==="task-grant-needed");}}
+    } catch(error){if(alive.current)setPrepareError((error as Error).message);}
     finally{if(alive.current)setPreparing(false);}
   }
   const editable =
@@ -180,8 +177,8 @@ export default function AnalysisDialog({
   async function updateDraft(path: string, data: object) {
     if (!draft) return;
     await withSavedDrafts("chapter:"+chapter.id,undefined,async()=>{
-      const grant=path==="/analysis/resume"?await ensureTaskGrant({projectId:chapter.projectId,chapterId:chapter.id,step:"text",steps:[draft.kind],model:draft.model,requests:Math.max(1,draft.batches?.filter(batch=>batch.status!=="received").length||0)}):undefined;
-      await api(path, {id:draft.id,draftVersion:draft.draftVersion,...data,...(grant?{grantId:grant}:{})});
+      if(!alive.current)return;
+      await api(path, {id:draft.id,draftVersion:draft.draftVersion,...data});
     });
     await refresh();
   }
@@ -208,10 +205,9 @@ export default function AnalysisDialog({
         <p className="hint">{performanceMode==="replaceAi"||performanceMode==="selectedRewrite"?"按本次所选范围直接重写并自动保存，原值可查看与撤销。":experience?.policy.mode==="review"?"先生成完整候选，一屏统一采用；采用后自动保存。":"合法指导自动安排，真正的角色疑点集中处理。AI 安排不会标记为试听通过。"}</p>
         {!!chapter.segments.length&&<div className="button-row">{performanceMode!=="fillMissing"&&<button type="button" className="text-button" disabled={preparing||working} onClick={()=>{setPerformanceMode("fillMissing");setIncludeHumanPerformance(false);}}>返回补齐缺失指导</button>}{!!selected.length&&<Select label="所选指导操作" value={performanceMode==="selectedRewrite"?"human":performanceMode==="replaceAi"?"ai":""} options={[{value:"",label:`已选 ${selected.length} 条`},{value:"ai",label:"重新安排所选 AI 指导"},{value:"human",label:"重写所选指导，包含人工内容"}]} onChange={value=>{setPerformanceMode(value==="human"?"selectedRewrite":value==="ai"?"replaceAi":"fillMissing");setIncludeHumanPerformance(value==="human");}}/>}</div>}
         {plan && <>
-          <p className="hint">{plan.kind==="extract" ? "整章原文" : `本次 ${plan.memberIds.length} 条台词`} · {plan.textRequests} 次文本请求 · 不生成音频</p><details><summary className="hint">查看请求范围</summary><p className="hint">发送本章所需正文至 {defaultModel}。基础 {plan.textRequests} 次，局部补齐最多 {plan.repairRequests||0} 次；已有显式上限优先，合法结果自动保存。</p></details>
-          {grantNeeded&&<TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="本次准备需要新增的文本范围" step="text" steps={[plan.kind]} model={defaultModel} requests={plan.maxTextRequests??plan.textRequests} onReady={()=>{}} onAuthorized={prepare} disabled={preparing || working}/>}
+          <p className="hint">{plan.kind==="extract" ? "整章原文" : `本次 ${plan.memberIds.length} 条台词`} · {plan.textRequests} 次文本请求 · 不生成音频</p><details><summary className="hint">查看请求范围</summary><p className="hint">发送本章所需正文至 {defaultModel}。基础 {plan.textRequests} 次，缺失指导按当前范围局部补齐，合法结果自动保存。</p></details>
         </>}
-        {!grantNeeded&&<button type="button" className="button primary" disabled={!plan || !experience || preparing || working||!plan.textRequests} onClick={()=>void prepare()}>{working ? "正在准备…" : preparing ? "正在保存并准备…" : performanceMode==="initial"?"准备这一章":performanceMode==="fillMissing"?"补齐缺失指导":includeHumanPerformance?"重写所选指导，包含人工内容":"重新安排所选指导"}</button>}
+        <button type="button" className="button primary" disabled={!plan || !experience || preparing || working||!plan.textRequests} onClick={()=>void prepare()}>{working ? "正在准备…" : preparing ? "正在保存并准备…" : performanceMode==="initial"?"准备这一章":performanceMode==="fillMissing"?"补齐缺失指导":includeHumanPerformance?"重写所选指导，包含人工内容":"重新安排所选指导"}</button>
         {plan?.textRequests===0&&performanceMode==="fillMissing"&&<p className="hint">当前没有可自动补齐的缺失项。已有指导保留{coverage?.missingIds.length?`；${coverage.missingIds.length} 段人工内容需核对，未自动覆盖`:""}。</p>}
         {prepareError && <p className="error-inline" role="alert">{prepareError}</p>}
       </div>
@@ -302,7 +298,7 @@ export default function AnalysisDialog({
                     })
                   }
                 >
-                  <p className="hint">替换本批候选，后续依赖批次需重新分析；本次会使用文本请求额度。</p>
+                  <p className="hint">替换本批候选，后续依赖批次需重新分析；本次会发送文本请求。</p>
                 </Form>
               )}
             </details>
@@ -502,7 +498,7 @@ export default function AnalysisDialog({
             {selected.length>3 && <span>另 {selected.length-3} 条</span>}
           </> : <span>{kind === "extract" ? "整章原文" : "本章全部片段"}</span>}
         </div>
-        {advancedPlan && <p className="hint">点击生成将向 {model} 发送本范围文字；本次最多 {advancedPlan.maxTextRequests??advancedPlan.textRequests} 次文本请求，不生成音频。</p>}
+        {advancedPlan && <p className="hint">点击生成将向 {model} 发送本范围文字；预计 {advancedPlan.textRequests} 次文本请求，不生成音频。</p>}
       <Form
         label={draft?.status === "running" ? "分析中…" : "生成校对草稿"}
         busy={working || !advancedPlan}
@@ -512,10 +508,11 @@ export default function AnalysisDialog({
             const revision=draftScopeRevision("chapter:"+chapter.id,chapter.revision);
             const payload={kind:"prepareChapter",analysisKind:kind,autoApply:false,includePerformance:kind==="director"||!basicAnalysis,performanceMode:kind==="extract"?"initial":"replaceAi",chapterId:chapter.id,revision,model,ids:selected,...(kind==="extract" && replaceSource?{source:source.replace(/\r\n?/g,"\n")}: {})};
             const currentPlan=await api<TextPlan>("/operations/plan",payload);
+            if(!alive.current)return;
             setAdvancedPlan(currentPlan);
-            const grant=await ensureTaskGrant({projectId:chapter.projectId,chapterId:chapter.id,step:"text",steps:[kind],model,requests:currentPlan.maxTextRequests??currentPlan.textRequests,minimumRequests:currentPlan.textRequests});
-            const operation=await submitOperation<{analysis:Suggestion}>("advanced-analysis:"+chapter.id,{...payload,grantId:grant},stateJobs);
+            const operation=await submitOperation<{analysis:Suggestion}>("advanced-analysis:"+chapter.id,payload,stateJobs);
             if(operation.error)throw new Error(operation.error);
+            if(!alive.current)return;
             setViewId(operation.result.analysis.id);
           });
           setEditing(null);

@@ -9,6 +9,7 @@ const recordId = (kind, id) => `ux-${kind}:${id}`;
 export const policyOf = (store, projectId) => store.maybe('settings', recordId('policy', projectId)) || {projectId, mode:'smart', revision:0};
 const valuesOf = (s, field) => field === 'role' ? [s.roleId,s.type] : [s.roleId,s.voiceId,s.voiceSource];
 const fieldDecided = (s, field) => s[field === 'role' ? 'roleConfirmed' : 'identityConfirmed'] && (!s.decisions?.[field] || s.decisions[field].state === 'accepted' && same(s.decisions[field].values,valuesOf(s,field)));
+export const inferredKnownRole = (item,role) => typeof item?.roleId==='string' && item.roleId===role?.id && !role.identityPending && (role.narrator===true ? item.type==='narration' : ['dialogue','thought'].includes(item.type)) && item.evidence==='上下文推断' && item.uncertain===false && !item.roleIssues?.length;
 export function configurationDecided(s) {
   return !s.identityPending && ['role','identity'].every(field => fieldDecided(s,field));
 }
@@ -188,8 +189,7 @@ export function assistantChanges(before, after, action, payload, context, store)
 function grantFor(store, config, request, kind) {
   const c = request.chapterId ? store.get('chapters',request.chapterId) : null;
   const projectId = c?.projectId || request.projectId;
-  const required = request.requireGrant || projectId && policyOf(store,projectId).revision > 0;
-  if (!request.grantId && !required) return null;
+  if (!request.grantId && !request.requireGrant) return null;
   if (!request.grantId) fail('请先明确本次素材外发范围和请求额度',403);
   const g = store.get('settings',recordId('grant',request.grantId));
   if (g.revoked || g.expiresAt && Date.parse(g.expiresAt) <= Date.now()) fail('本次授权已撤回或到期，未发送的请求已停止',403);
@@ -316,8 +316,8 @@ export function createExperience(store, domain, worker, analysis, config) {
     }
     if (op.jobIds.length) {
       const jobs = op.jobIds.map(id => store.get('jobs',id));
-      const outputs=jobs.flatMap(j=>domain.outputs({chapterId:j.chapterId,jobId:j.id,limit:100}).items);
-      if (outputs.length) result.result={...result.result,outputs,...Object.fromEntries(jobs.flatMap(j=>Object.entries(j.result || {}).filter(([key])=>['masterId','exportId','format','chapterId','arrangement'].includes(key))))};
+      const outputs=jobs.filter(j=>['master','export'].includes(j.kind)&&j.chapterId).flatMap(j=>domain.outputs({chapterId:j.chapterId,jobId:j.id,limit:100}).items);
+      if (outputs.length) result.result={...result.result,outputs,...Object.fromEntries(jobs.flatMap(j=>Object.entries(j.result || {}).filter(([key])=>['masterId','exportId','format','chapterId','arrangement','renderRevision','renderSignature'].includes(key))))};
       result.outcome = jobs.some(j => ['queued','running'].includes(j.status)) ? 'processing' : jobs.some(j => j.status === 'unknown') ? 'unknown' : jobs.every(j => j.status === 'success') ? 'completed' : 'needsInput';
     }
     return result;
@@ -361,7 +361,7 @@ export function createExperience(store, domain, worker, analysis, config) {
         const performanceRewrite=!actor && p.ids?.length && (performanceMode==='replaceAi' || performanceMode==='selectedRewrite' && p.includeHumanPerformance===true) ? {segmentIds:p.ids,includeHuman:p.includeHumanPerformance===true,source:{kind:'ui',id:p.operationId}} : executionContext?.performanceRewrite;
         const performanceBasic=!actor && p.includePerformance===false ? {segmentIds:p.ids,source:{kind:'ui',id:p.operationId}} : executionContext?.performanceBasic;
         const analysisContext=actor ? executionContext : performanceRewrite || performanceBasic ? {actorKind:'human_direct',...(performanceRewrite?{performanceRewrite}:{}),...(performanceBasic?{performanceBasic}:{})} : executionContext;
-        const a = existing || await analysis.start({...p,performanceMode,kind:p.analysisKind || (domain.list(p.chapterId).length ? 'director' : 'extract'),...(p.analysisKind === 'scene' ? {sceneEnabled:true} : {}),autoApply:p.autoApply !== false,requireGrant:true},analysisContext);
+        const a = existing || await analysis.start({...p,performanceMode,kind:p.analysisKind || (domain.list(p.chapterId).length ? 'director' : 'extract'),...(p.analysisKind === 'scene' ? {sceneEnabled:true} : {}),autoApply:p.autoApply !== false,requireGrant:!!actor},analysisContext);
         op.result = {analysis:a}; op.createdObjectIds = [a.id]; op.steps.analysis = a.id;
       } else if (p.kind === 'useVoice') {
         let voice = op.steps.voice ? store.get('voices',op.steps.voice) : p.audioId ? await saveCandidateVoice(store,{audioId:p.audioId,name:p.name || '新声音'}) : store.get('voices',p.voiceId);
@@ -374,7 +374,7 @@ export function createExperience(store, domain, worker, analysis, config) {
         });
         op.steps.completed = true; op.outcome = 'completed';
       } else {
-        let payload = {chapterId:p.chapterId,projectId:p.projectId,revision:p.revision,grantId:p.grantId,requireGrant:true,commandId:p.operationId,...(p.retryUnknown === true ? {retryUnknown:true} : {}),...(p.acknowledgedAttemptIds ? {acknowledgedAttemptIds:p.acknowledgedAttemptIds} : {}),...(p.resumeRoute === true ? {resumeRoute:true} : {})};
+        let payload = {chapterId:p.chapterId,projectId:p.projectId,revision:p.revision,grantId:p.grantId,requireGrant:!!actor,commandId:p.operationId,...(p.retryUnknown === true ? {retryUnknown:true} : {}),...(p.acknowledgedAttemptIds ? {acknowledgedAttemptIds:p.acknowledgedAttemptIds} : {}),...(p.resumeRoute === true ? {resumeRoute:true} : {})};
         if (p.kind === 'groupAndGenerate') {
           const unit = step('unit',() => domain.mutate('unit.create',{chapterId:p.chapterId,revision:p.revision,ids:p.ids,guidance:p.guidance || ''},mutationContext));
           op.createdObjectIds = [unit.id]; op.result = {unit};
@@ -397,7 +397,7 @@ export function createExperience(store, domain, worker, analysis, config) {
           if (!selected.audioRequests) { op.steps.completed = true; op.outcome = 'completed'; save(op); return view(op); }
           payload = {...payload,kind:'unit-generate',revision:selected.revision,arrangement:selected.arrangement,unitIds:selected.unitIds,...(p.mode ? {mode:p.mode} : {})};
         } else if (p.kind === 'voiceCandidate') payload = {...payload,kind:'voice-create',sessionId:p.sessionId,entityRevision:p.entityRevision};
-        else if (p.kind === 'export') payload = {...payload,requireGrant:false,kind:'export',arrangement:p.arrangement,reviewItems:p.reviewItems,confirm:actor ? false : p.confirm === true,format:p.format};
+        else if (p.kind === 'export') payload = {...payload,requireGrant:false,kind:'export',arrangement:p.arrangement,renderSignature:p.renderSignature,reviewItems:p.reviewItems,confirm:actor ? false : p.confirm === true,format:p.format};
         else fail('组合操作类型无效');
         const job = await worker.submit(payload);
         op.jobIds = [job.id]; op.steps.enqueued = job.id; op.result = {...op.result,job}; op.outcome = 'processing';

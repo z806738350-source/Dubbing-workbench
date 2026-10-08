@@ -74,6 +74,9 @@ export interface Project {
   contextRevision: number;
 }
 export interface Chapter {
+  renderRevision?: number;
+  renderSignature?: string | null;
+  renderContentKey?: string | null;
   roleVoices?: Record<string,string | null>;
   productionStatus?: string;
   id: string;
@@ -121,6 +124,7 @@ export interface Segment {
   latest: string;
   validity: string;
   review: string;
+  rangeContentKey?: string | null;
   prompt: string;
   promptIssues?: string[];
   audio: AudioRecord | null;
@@ -203,6 +207,9 @@ export interface AudioRecord extends AudioProvenanceMetadata {
   >;
 }
 export interface Master {
+  renderRevision?: number;
+  renderSignature?: string | null;
+  renderContentKey?: string | null;
   id: string;
   arrangement: number;
   duration: number;
@@ -215,9 +222,19 @@ export interface Master {
     audioId: string;
     startFrame: number;
     endFrame: number;
+    clipStartFrame?: number;
+    clipEndFrame?: number;
+    sourceHash?: string;
+    rangeRevision?: number;
+    decodeProfile?: string;
+    edgePolicy?: string;
+    rangeContentKey?: string | null;
   }[];
 }
 export interface ExportRecord {
+  renderRevision?: number;
+  renderSignature?: string | null;
+  renderContentKey?: string | null;
   path: string;
   fileExists: boolean;
   current: boolean;
@@ -287,7 +304,7 @@ export interface UnitVariant {
   latest: string;
   revision: number;
   template?: string;
-  status: {validity: string; review: string; audio: AudioRecord | null; prompt: string; promptIssues: string[]; basis: Record<string, unknown>;input?:{template:string}|null};
+  status: {validity: string; review: string; audio: AudioRecord | null; prompt: string; promptIssues: string[]; basis: Record<string, unknown>;input?:{template:string}|null;rangeContentKey?:string|null};
 }
 export interface SceneReusePreview {
   id:string;draftVersion:number;chapterId:string;unitId:string;
@@ -316,8 +333,8 @@ export interface ChapterDetail extends Chapter {
   performanceCoverage?:PerformanceCoverage;
   outputDirectory: string;
   arrangementIssues?: string[];
-  reviewItems?: {id:string;audioId:string|null;basis:Record<string,unknown>}[];
-  playbackItems: {id: string; unitId?: string; members?: string[]; mode?: "dry" | "scene"; audioId: string | null; basis: Record<string, unknown>; validity: string; review?: string}[];
+  reviewItems?: {id:string;audioId:string|null;basis:Record<string,unknown>;rangeContentKey?:string|null}[];
+  playbackItems: {id: string; unitId?: string; members?: string[]; mode?: "dry" | "scene"; audioId: string | null; basis: Record<string, unknown>; validity: string; review?: string; clipStartFrame?:number;clipEndFrame?:number;sourceFrames?:number;sourceHash?:string;decodeProfile?:string;rangeRevision?:number;edgePolicy?:string;rangeContentKey?:string|null}[];
   units?: GenerationUnit[];
   events?: SoundEvent[];
   knownRoles: Role[];
@@ -352,4 +369,26 @@ export interface State {
     defaultGap: number;
     features?: {voiceCreation?: boolean; groups?: boolean; scenes?: boolean};
   };
+}
+
+export interface AudioRangeRecord {
+  id: string;
+  projectId: string;
+  chapterId: string;
+  unitId: string;
+  mode: "dry" | "scene";
+  audioId: string;
+  sourceHash: string;
+  decodeProfile: string;
+  sampleRate: 48000;
+  channels: number;
+  sourceFrames: number;
+  startFrame: number;
+  endFrame: number;
+  edgePolicy: "short-fade-v1";
+  fadeInFrames: number;
+  fadeOutFrames: number;
+  revision: number;
+  lastOperationId: string;
+  updatedAt: string;
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync} from 'node:fs';
+import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {startServer} from '../server/index.mjs';
@@ -41,4 +41,22 @@ test('删除项目只等待本项目在途操作；删除后的迟到保存不�
   const lateId=uid(),late=await post('/operations',{operationId:lateId,kind:'save',action:'segment.update',data:{chapterId:chapter.id,revision:chapter.revision,id:segment.id,text:'迟到内容'}});
   assert.equal(late.status,404);assert.equal(app.store.maybe('settings',`ux-operation:${lateId}`),null);
   const nested=await post('/operations',{operationId:uid(),kind:'save',action:'project.delete',data:{id:project.id}});assert.equal(nested.status,400);
+});
+
+test('人工HTTP生成直接发送当前一次请求，耗尽或过期旧授权不影响，回执重放不重复发送',async t=>{
+  const directory=mkdtempSync(join(tmpdir(),'dubbing-direct-generation-http-')),config={key:'fixture-only',model:'seed-audio-1.0',baseUrl:'https://example.invalid/v1',audioUrl:'https://example.invalid/audio'},app=await startServer({port:0,directory,config}),base=`http://127.0.0.1:${app.server.address().port}`;
+  t.after(async()=>{await app.close();rmSync(directory,{recursive:true,force:true});});
+  const bytes=Buffer.alloc(9644);bytes.write('RIFF');bytes.writeUInt32LE(bytes.length-8,4);bytes.write('WAVEfmt ',8);bytes.writeUInt32LE(16,16);bytes.writeUInt16LE(1,20);bytes.writeUInt16LE(1,22);bytes.writeUInt32LE(48000,24);bytes.writeUInt32LE(96000,28);bytes.writeUInt16LE(2,32);bytes.writeUInt16LE(16,34);bytes.write('data',36);bytes.writeUInt32LE(9600,40);
+  let calls=0;const native=globalThis.fetch;
+  t.mock.method(globalThis,'fetch',(url,init)=>{if(String(url).startsWith(base+'/'))return native(url,init);assert.equal(String(url),config.audioUrl,'本测试仅允许Mock音频响应');calls++;return Promise.resolve(new Response(bytes,{headers:{'content-type':'audio/wav'}}));});
+  const api=async(path,p)=>{const response=await fetch(base+'/api'+path,p?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(p)}:{});const body=await response.json();assert.equal(response.status,200,JSON.stringify(body));return body;};
+  const d=app.domain,store=app.store,project=d.mutate('project.create',{name:'人工点击夹具'}),chapter=d.mutate('chapter.create',{projectId:project.id,title:'无次数填写',source:'自拟一句。',segment:true}),voice={id:uid(),name:'合成参考',path:'reference.wav',state:'active',revision:1};writeFileSync(join(directory,voice.path),bytes);store.put('voices',voice);
+  const role=store.all('roles',project.id)[0];d.mutate('role.update',{id:role.id,entityRevision:role.revision??1,chapterId:chapter.id,revision:store.get('chapters',chapter.id).revision,voiceId:voice.id});const segment=d.list(chapter.id)[0];d.mutate('segment.confirm',{chapterId:chapter.id,revision:store.get('chapters',chapter.id).revision,ids:[segment.id]});
+  await api('/experience/policy',{projectId:project.id,revision:0,mode:'smart'});
+  const grant=await api('/experience/grant',{grantId:uid(),projectId:project.id,chapterId:chapter.id,steps:['unit-generate'],materials:['text','reference'],voiceIds:[voice.id],textLimit:0,audioLimit:1}),expired={...store.get('settings',grant.id),audioUsed:1,expiresAt:new Date(Date.now()-1000).toISOString()};store.put('settings',expired);
+  const request=()=>({operationId:uid(),kind:'generateSelection',chapterId:chapter.id,revision:store.get('chapters',chapter.id).revision,ids:[segment.id],actionKind:'forceRegenerate'});
+  const explicit=await api('/operations',{...request(),grantId:grant.grantId});assert.equal(explicit.errorStatus,403);assert.match(explicit.error,/到期/);assert.equal(calls,0);
+  const firstRequest=request(),first=await api('/operations',firstRequest);assert.equal(first.error,undefined);assert.equal(first.jobIds.length,1);await app.worker.tick();const receipt=await api('/operations/'+firstRequest.operationId);assert.equal(receipt.outcome,'completed');assert.equal(calls,1);assert.equal(store.get('jobs',first.jobIds[0]).request.requireGrant,false);
+  assert.deepEqual((await api('/operations',firstRequest)).jobIds,first.jobIds);await app.worker.tick();assert.equal(calls,1);
+  const second=await api('/operations',request());assert.equal(second.error,undefined);await app.worker.tick();assert.equal(calls,2);assert.equal(store.get('jobs',second.jobIds[0]).status,'success');assert.deepEqual(store.get('settings',grant.id),expired);assert.equal((await api('/projects/'+project.id+'/experience')).grants.length,1);
 });

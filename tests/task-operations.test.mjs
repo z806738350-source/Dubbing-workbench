@@ -56,6 +56,22 @@ test('unresolved response and reload reuse the durable operation ID; no automati
   await assert.rejects(submitOperation('voice', { ...payload, grantId: 'new-grant' }), /回执尚未确认/); assert.equal(sent.length, 2);
 });
 
+test('restored successful candidate receipt allows the next explicit candidate without resending the old request', async () => {
+  const sent=[];let saved,unavailable=true;
+  const {submitOperation}=await setup(async(path,body)=>{
+    if(body){sent.push(body);saved=receipt(body);if(unavailable)throw Object.assign(new Error('missing receipt'),{status:404});return saved;}
+    assert.equal(path,'/operations/'+saved.operationId);
+    if(unavailable)throw Object.assign(new Error('missing receipt'),{status:404});
+    return {...saved,outcome:'completed'};
+  });
+  const payload={kind:'voiceCandidate',sessionId:'voice',entityRevision:1,grantId:'grant'};
+  await assert.rejects(submitOperation('voice',payload),/missing receipt/);
+  await assert.rejects(submitOperation('voice',{...payload,entityRevision:2}),/回执尚未确认/);assert.equal(sent.length,1);
+  unavailable=false;
+  const next=await submitOperation('voice',{...payload,entityRevision:2},[{id:'job-one',status:'success'}]);
+  assert.equal(sent.length,2);assert.notEqual(next.operationId,sent[0].operationId);assert.equal(sent[1].entityRevision,2);
+});
+
 test('finished text analysis may be explicitly submitted again, while running and unknown analysis cannot repeat', async () => {
   const ids = []; let status = 'running';
   const { submitOperation } = await setup(async (path, body) => {

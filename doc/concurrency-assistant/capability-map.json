@@ -2973,6 +2973,103 @@
       "help": "original-audio"
     },
     {
+      "id": "read.audioRange",
+      "version": 1,
+      "description": "免费读取指定声音单元和版本的播放范围",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "unitId",
+          "mode"
+        ]
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "audio-range"
+      ],
+      "handler": "resolveAudioRange",
+      "help": "audio-range"
+    },
+    {
+      "id": "audio.range.update",
+      "version": 1,
+      "description": "按真实用户明确起止范围免费调整本段，原音频不变",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "mode": {
+            "enum": [
+              "dry",
+              "scene"
+            ]
+          },
+          "audioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "startFrame": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "endFrame": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "unitId",
+          "mode",
+          "audioId",
+          "expectedRevision",
+          "startFrame",
+          "endFrame"
+        ]
+      },
+      "access": "local-write",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "audio-range"
+      ],
+      "handler": "updateAudioRange",
+      "help": "audio-range"
+    },
+    {
       "id": "ui.navigate",
       "version": 1,
       "description": "提供已注册功能入口的定位按钮",

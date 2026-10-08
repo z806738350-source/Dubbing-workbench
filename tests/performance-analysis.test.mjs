@@ -33,6 +33,17 @@ test('PG指导合同：UTF16硬上限、占位与真实锚点、明确越界操�
   assert.deepEqual(inspectPerformance('从“等等”开始压低声音。','等等，先别走。',{performanceAnchors:['等等']}),[]);
 });
 
+test('合法否定与原文重音不会制造表演缺口，肯定越权及后半冲突仍阻断',t=>{
+  for(const value of ['带一点笑意，不要添加笑声。','保持平静，不要删除台词。','强调“3秒”，语气干脆。','重音落在“3秒”，随后自然收句。'])assert.deepEqual(inspectPerformance(value,'3秒后出发。'),[],value);
+  for(const value of ['加入笑声。','删掉台词。','播放背景音乐。','停顿3秒。','在3秒内读完。','不要添加笑声，但最后加入笑声。','不要添加笑声但最后加入笑声。'])assert.ok(inspectPerformance(value,'3秒后出发。').length,value);
+  assert.ok(inspectPerformance('强调“4秒”。','3秒后出发。').length);
+  assert.ok(inspectPerformance('平静。','3秒后出发。',{performanceAnchors:['4秒']}).length);
+  const f=fixture(t,{source:'3秒后出发。\n3秒后出发。',segmented:true}),rows=f.rows();
+  f.edit(rows[0].id,{performance:'带一点笑意，不要添加笑声。'});
+  const ai=f.store.get('segments',rows[1].id);ai.performance='保持平静，不要删除台词。';ai.decisions={performance:{source:'policy_ai'}};f.store.put('segments',ai,f.c.id);
+  const coverage=performanceCoverage(f.store,f.c.id);assert.equal(coverage.coveredCount,2);assert.deepEqual(coverage.missingIds,[]);assert.deepEqual(coverage.reviewRequiredIds,[]);
+});
+
 test('联合提取丰富指导一次请求自动保存，角色与表演证据独立，原文逐字完整',async t=>{
   const f=fixture(t);f.mock(input=>f.base(input).map((i,index)=>({...i,performance:index?'压低声音，第一句制止，第二句放慢并带指令感。':i.performance,performanceEvidence:{kind:'上下文推断',refs:[i.from]},uncertain:index===1})));
   const r=await f.run();assert.equal(f.calls.length,1);assert.equal(r.status,'applied');

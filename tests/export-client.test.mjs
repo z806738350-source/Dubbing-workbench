@@ -21,9 +21,9 @@ function setup({ submit = async () => ({ jobIds: ['export-job'] }), reveal = asy
     Dialog: 'Dialog', Form: 'Form', Field: 'Field', Select: 'Select', Headphones: 'Headphones', Download: 'Download', FolderOpen: 'FolderOpen', Check: 'Check',
     useState: value => { const i = index++; if (!(i in hooks)) hooks[i] = value; return [hooks[i], next => { stateUpdates++; hooks[i] = typeof next === 'function' ? next(hooks[i]) : next; }]; },
     useRef: value => hooks[index++] ||= { current: value }, useEffect: next => effects.push(next),
-    withSavedDrafts: async (_scope, _deps, next) => next(),
+    withSavedDrafts: async (_scope, _deps, next) => next(), flushAudioRanges:async()=>{},
     submitOperation: async (...args) => { sent.push(args); return submit(...args); },
-    api: async (...args) => { requests.push(args); return reveal(...args); },
+    api: async (...args) => { if(args[0].startsWith("/chapters/"))return props.chapter; requests.push(args); return reveal(...args); },
     basis: () => ({}), action: async () => {}, active: status => ['queued', 'running'].includes(status),
   };
   const ExportDialog = new Function(...Object.keys(env), code + ';return ExportDialog;')(...Object.values(env));
@@ -37,14 +37,17 @@ function setup({ submit = async () => ({ jobIds: ['export-job'] }), reveal = asy
   return { props, render, submit: () => exportForm(render()).props.onSubmit(), sent, requests, cleanup, close: () => close, refresh: () => refresh, stateUpdates: () => stateUpdates };
 }
 
-test('导出使用核对时的版本和审核快照，提交后保留面板并刷新成品', async () => {
+test('导出前重读版本和范围，旧听评快照不能导出后来内容', async () => {
   const f = setup(), confirmed = f.props.chapter;
   f.props.chapter = { ...confirmed, revision: 4, arrangement: 5, reviewItems: [{ id: 'unit', audioId: 'new-audio' }] };
-  await f.submit();
-  assert.equal(f.close(), 0); assert.equal(f.refresh(), 1); assert.equal(f.sent.length, 1);
-  assert.equal(f.sent[0][1].revision, 2); assert.equal(f.sent[0][1].arrangement, 3);
-  assert.equal(f.sent[0][1].confirm, true); assert.deepEqual(f.sent[0][1].reviewItems, confirmed.reviewItems);
-  assert.equal(f.sent[0][2], f.props.jobs);
+  await assert.rejects(f.submit(),/内容或播放范围已变化/);
+  assert.equal(f.sent.length,0);assert.equal(f.close(),0);
+});
+
+test('范围保存屏障完成后导出已核对的当前签名，提交后保留面板并刷新成品',async()=>{
+  const f=setup({chapter:{renderSignature:'range-one'}});await f.submit();
+  assert.equal(f.sent.length,1);assert.equal(f.refresh(),1);assert.equal(f.close(),0);
+  assert.equal(f.sent[0][1].renderSignature,'range-one');assert.deepEqual(f.sent[0][1].reviewItems,f.props.chapter.reviewItems);
 });
 
 test('导出回执迟到时只刷新资料，不关闭新页面或更新已卸载面板状态', async () => {

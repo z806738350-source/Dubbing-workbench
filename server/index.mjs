@@ -19,6 +19,7 @@ import { createExperience } from './experience.mjs';
 import { createActionExecutor } from './actions.mjs';
 import { createAssistant } from './assistant/service.mjs';
 import { previewTailRepair, applyTailRepair } from './tail-maintenance.mjs';
+import { resolveAudioRange, updateAudioRange, undoAudioRange, getRangeOperation, audioWaveform, rangeResource } from './audio-range.mjs';
 import { workspaceDirectory, workspaceIdentity, workspaceConfig as defaultWorkspaceConfig, copyWorkspace, saveWorkspaceLocation, recoverProjectFolders, chooseWorkspaceDirectory, readRuntime, workspaceDiagnostics, revealExport, revealOutput } from './workspace.mjs';
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -179,6 +180,7 @@ export async function startServer({
     let counted = false;
     try {
       const host = req.headers.host || "";
+      const listeningPort = server.address()?.port ?? port;
       if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host))
         fail("仅允许本机访问", 403);
       if (
@@ -186,8 +188,8 @@ export async function startServer({
         ![
           "http://127.0.0.1:5173",
           "http://localhost:5173",
-          `http://127.0.0.1:${port}`,
-          `http://localhost:${port}`,
+          `http://127.0.0.1:${listeningPort}`,
+          `http://localhost:${listeningPort}`,
         ].includes(req.headers.origin)
       )
         fail("跨站请求已拒绝", 403);
@@ -196,6 +198,27 @@ export async function startServer({
       if (audioMaintenance && req.method !== 'GET' && !/\/assistant\/runs\/[^/]+\/control$/.test(path)) fail('音频维护正在保存，请稍后操作；已有编辑请保留', 409);
       activeRequests++;
       counted = true;
+      if (req.method === 'GET' && /^\/api\/units\/[^/]+\/audio-range$/.test(path)) {
+        const q=new URL(req.url,`http://${host}`).searchParams;
+        return send(res,200,await resolveAudioRange(store,decodeURIComponent(path.split('/')[3]),q.get('mode') || 'dry',q.get('audioId') || undefined));
+      }
+      if (req.method === 'GET' && /^\/api\/audios\/[^/]+\/waveform$/.test(path)) {
+        const q=new URL(req.url,`http://${host}`).searchParams,options={};
+        for(const key of ['level','startFrame','endFrame'])if(q.has(key))options[key]=Number(q.get(key));
+        return send(res,200,await audioWaveform(store,decodeURIComponent(path.split('/')[3]),options));
+      }
+      if(req.method==='POST'&&path==='/api/audio-ranges/update')return send(res,200,await updateAudioRange(store,await body(req)));
+      if(req.method==='POST'&&path==='/api/audio-ranges/undo')return send(res,200,await undoAudioRange(store,await body(req)));
+      if(req.method==='GET'&&/^\/api\/audio-ranges\/operations\/[^/]+$/.test(path))return send(res,200,getRangeOperation(store,decodeURIComponent(path.split('/').at(-1))));
+      if(req.method==='GET'&&path==='/api/audio-ranges/preview'){
+        const q=new URL(req.url,`http://${host}`).searchParams,options={unitId:q.get('unitId'),mode:q.get('mode') || 'dry',audioId:q.get('audioId')};
+        for(const key of ['startFrame','endFrame'])if(q.has(key))options[key]=Number(q.get(key));
+        // URL identity is validation only; recipes come from the canonical source.
+        const resolved=await resolveAudioRange(store,options.unitId,options.mode,options.audioId);
+        if(q.has('sourceHash')&&q.get('sourceHash')!==resolved.range.sourceHash||q.has('decodeProfile')&&q.get('decodeProfile')!==resolved.range.decodeProfile)fail('试听源声音版本已变化',409);
+        const resource=await rangeResource(store,options);
+        return await serveFile(req,res,resource.path,'audio/wav');
+      }
       if (req.method === 'POST' && ['/api/audio-tail/preview', '/api/audio-tail/apply'].includes(path)) {
         const p = await body(req);
         if (Object.keys(p).some(k => !['projectId','chapterId','unitIds','scopeId'].includes(k))) fail('尾部维护参数无效');
@@ -446,6 +469,7 @@ export async function startServer({
               ? "音频文件缺失，请重新准备或恢复备份"
               : "本地服务处理失败，请保留当前编辑",
           ...(e.status && e.retryClass ? { code: e.code, scope: e.scope, retryClass: e.retryClass, ...(e.notApplied === true ? {outcome:e.outcome,notApplied:true,fieldErrors:e.fieldErrors} : {}) } : {}),
+          ...(e.conflict ? {conflict:true,range:e.range} : {}),
         });
       else res.destroy();
     } finally { if (counted) activeRequests--; }

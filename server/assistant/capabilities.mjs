@@ -1,10 +1,11 @@
-import { assertCreationScope } from './scope.mjs';
+import { assertCreationScope, assertAudioRangeScope } from './scope.mjs';
 import { fail, same } from '../store.mjs';
 import { createActionExecutor } from '../actions.mjs';
 import { saveCandidateVoice } from '../audio.mjs';
 import { revealExport } from '../workspace.mjs';
 import { getHelp, pick, scopedChapter, pageRecords } from './context.mjs';
 import { assistantMutation } from '../experience.mjs';
+import { resolveAudioRange, updateAudioRange, savedAudioRange, rangeContentKey } from '../audio-range.mjs';
 
 const string = (maxLength = 100) => ({ type: 'string', minLength: 1, maxLength });
 const text = (maxLength) => ({ type: 'string', maxLength });
@@ -106,6 +107,8 @@ define('read.outputs','发现本章真实母版与成品，按任务、操作、
 define('export.reveal', '在本机访达中定位已保存成品', { id }, ['id'], { target: 'exports', handler: 'revealExport', access: 'ui-only', help: 'export' });
 define('audio.tail.repair','免费预览并清理所选纯人声的尾部异常，保留原件',{unitIds:ids},['unitIds'],{handler:'repairAudio',help:'original-audio'});
 define('audio.original.restore', '免费恢复所选处理版对应的真实供应商原件', { id, mode, audioId: id, restoreSettings: bool }, ['id', 'mode', 'audioId'], { target: 'units', handler: 'unit.select-result / unit.restore', help: 'original-audio' });
+define('read.audioRange','免费读取指定声音单元和版本的播放范围',{unitId:id,mode,audioId:id},['unitId','mode'],{access:'read',handler:'resolveAudioRange',help:'audio-range'});
+define('audio.range.update','按真实用户明确起止范围免费调整本段，原音频不变',{unitId:id,mode,audioId:id,expectedRevision:number(0,Number.MAX_SAFE_INTEGER,true),startFrame:number(0,Number.MAX_SAFE_INTEGER,true),endFrame:number(1,Number.MAX_SAFE_INTEGER,true)},['unitId','mode','audioId','expectedRevision','startFrame','endFrame'],{handler:'updateAudioRange',help:'audio-range'});
 define('ui.navigate', '提供已注册功能入口的定位按钮', { target: values('voices','tasks','export','history','scene','assistant-settings','project-overview','segment'), segmentId: id, unitId: id }, ['target'], { chapter: false, access: 'ui-only', handler: 'UI action requiring user click', help: 'workflow' });
 define('ui.play', '提供当前任务授权音频的试听按钮', { kind: values('voices','audios','masters','exports'), id }, ['kind','id'], { chapter: false, access: 'ui-only', handler: 'playIntent via UI action requiring user click', help: 'playback' });
 for (const [name, target, description] of [['chapter', null, '分页读取当前任务章节的台词与声音单元；deleted=true发现已删除台词及原先不朗读设置；full仅指声明字段，事件与历史另读'], ['segment', 'segments', '读取一条完整台词与表演'], ['voice', 'voices', '读取一个参考声音'], ['audio', 'audios', '读取一个音频的来源与听评'], ['attempts', 'jobs', '读取指定任务的请求记录'], ['operation', null, '读取原持久操作回执'], ['project-deletion-plan', 'projects', '预览指定项目删除范围']]) define('read.' + name, description, target || name === 'operation' ? { id } : name === 'chapter' ? { ...pageFields, deleted: bool } : {}, target || name === 'operation' ? ['id'] : [], { target, handler: 'bounded projection', access: 'read', chapter: name === 'chapter' || name === 'segment', help: name === 'attempts' || name === 'operation' ? 'tasks' : 'workflow' });
@@ -176,6 +179,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     const own = (table, targetId) => {
       const row = store.get(table, targetId);
       let projectId = row.projectId, chapterId = row.chapterId;
+      if(table==='audios')chapterId ||= store.db.prepare('SELECT parent FROM audios WHERE id=?').get(targetId)?.parent;
       if (table === 'projects') projectId = row.id;
       if (table === 'events') chapterId = store.get('units', row.unitId).chapterId;
       if (table === 'attempts' || table === 'audios' && !chapterId) {
@@ -208,6 +212,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     if (id==='operation.useVoice' && input.roleId && bound.chapter) for(const s of domain.list(bound.chapter.id).filter(s=>s.roleId===input.roleId))own('segments',s.id);
     for (const eventId of input.eventIds || []) { const event = own('events', eventId); if (event.unitId !== input.unitId) fail('事件不属于指定声音单元', 403); }
     const unit = input.unitId ? own('units', input.unitId) : def.target === 'units' ? target : null;
+    if(['segment.review','unit.review'].includes(id)){const reviewUnit=unit||store.maybe('units',input.id);if(reviewUnit)dependencies['rangeReview/'+reviewUnit.id]=rangeContentKey(savedAudioRange(store,reviewUnit.id,input.mode||reviewUnit.mode||'dry',input.audioId));}
     if (unit) for (const memberId of unit.members || []) own('segments',memberId);
     if (bound.chapter && ['analysis.apply','operation.prepareChapter','job.master','operation.export'].includes(id)) {
       dependencies['arrangement/' + bound.chapter.id] = {gap:bound.chapter.gap, members:domain.list(bound.chapter.id).map(s=>s.id)};
@@ -242,11 +247,14 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     if (id === 'help.search') return getHelp(input);
     if (id==='read.performanceCoverage') return analysis.coverage(bound.chapter.id,input);
     if (id==='read.outputs') return outputs(input,scope);
+    if (id==='read.audioRange') return resolveAudioRange(store,input.unitId,input.mode,input.audioId);
     if (id === 'generation.plan') return experience.plan({ ...p, kind: 'generateSelection' });
     if (id === 'analysis.plan') return analysis.plan({ ...p, kind: input.analysisKind });
     if (id === 'analysis.previewReuse') return analysis.previewReuse(p);
     if (id === 'read.project-deletion-plan') { const result = domain.deletionPlan({ id: input.id }); return pick(result, ['projectId', 'name', 'counts', 'sharedVoiceIds', 'blockers']); }
     if (id === 'read.operation') {
+      const range=store.maybe('settings','audio-range-operation:'+input.id);
+      if(range){if(range.projectId!==scope.projectId||range.chapterId!==scope.chapterId)fail('操作不属于本次任务范围',403);return {...range.result,state:'completed'};}
       const operation = experience.get(input.id), request = store.get('settings', 'ux-operation:' + input.id).request || {};
       const projectId = request.projectId || request.data?.projectId || (request.chapterId || request.data?.chapterId) && store.get('chapters', request.chapterId || request.data.chapterId).projectId;
       if (projectId !== scope.projectId || scope.chapterId && (request.chapterId || request.data?.chapterId) !== scope.chapterId) fail('操作不属于本次任务范围', 403);
@@ -318,9 +326,12 @@ export function createCapabilities({ store, domain, worker, analysis, experience
   async function preview(id, input = {}, scope = {}, executionContext = {}) {
     const { def, bound, target, unit, p, versions, dependencies, requiredWorkflows } = prepare(id, input, scope);
     if (['project.create','chapter.create'].includes(id)) assertCreationScope(store,id,p,executionContext);
+    if (id==='audio.range.update') assertAudioRangeScope(store,input,executionContext);
     if (def.delegation === 'human-only') return { capabilityId: id, delegation: def.delegation, description: def.description, helpRefs: def.helpRefs };
     let detail;
-    if(id==='segment.update'||id==='role.update'||id==='chapter.update'){const before=target||bound.chapter;detail={id:before.id,changes:Object.entries(input).filter(([key])=>key!=='id').map(([field,after])=>({field,before:before[field]??null,after}))};}
+    if(['segment.review','unit.review'].includes(id)){detail={rangeContentKey:dependencies['rangeReview/'+(unit?.id||input.id)]??null};}
+    else if(id==='audio.range.update'){detail=await resolveAudioRange(store,input.unitId,input.mode,input.audioId);if(!detail.editable)fail(detail.reason,409);dependencies['audioRange/'+input.unitId]={revision:detail.range.revision,audioId:input.audioId};}
+    else if(id==='segment.update'||id==='role.update'||id==='chapter.update'){const before=target||bound.chapter;detail={id:before.id,changes:Object.entries(input).filter(([key])=>key!=='id').map(([field,after])=>({field,before:before[field]??null,after}))};}
     else if (['segment.delete', 'segment.restore-deleted'].includes(id)) detail = { segments: input.ids.map(segmentId => pick(store.get('segments', segmentId), ['id', 'text', 'excluded', 'deletion'])) };
     else if (id==='audio.tail.repair') {if(!repairAudio)fail('尾部维护接口尚未就绪');detail=await repairAudio({phase:'preview',projectId:scope.projectId,chapterId:scope.chapterId,unitIds:input.unitIds});}
     else if (id === 'operation.generateSelection') detail = experience.plan({ ...p, kind: 'generateSelection' });
@@ -332,7 +343,10 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     else if (id === 'chapter.repair-structural-decisions') detail = domain.structuralRepairPlan(p);
     else if (id === 'operation.export') { const c = domain.chapter(bound.chapter.id); detail = { arrangement: c.arrangement, reviewItems: c.reviewItems, blockers: c.units.filter(u => u.state === 'active').flatMap(u => u.readiness?.export?.blockers || []) }; }
     else if (id === 'analysis.reuse') detail = analysis.previewReuse(p);
-    else if (id === 'operation.useVoice' && bound.chapter) detail={roleId:input.roleId,updateDefault:input.updateDefault===true,affectedSegments:domain.list(bound.chapter.id).filter(s=>input.segmentId?s.id===input.segmentId:s.roleId===input.roleId).map(s=>({id:s.id,text:s.text,oldVoiceId:s.voiceId,newVoiceId:input.voiceId}))};
+    else if (id === 'operation.useVoice' && bound.chapter) {
+      const role=input.roleId&&store.get('roles',input.roleId),voiceId=input.voiceId||input.audioId,apply=input.apply!==false;
+      detail={roleId:input.roleId,updateDefault:input.updateDefault===true,affectedSegments:domain.list(bound.chapter.id).filter(s=>input.scope==='library'?false:input.segmentId?s.id===input.segmentId:s.roleId===input.roleId&&(apply||!role?.voiceId&&!!voiceId)&&(s.voiceSource!=='override'?(apply||!s.voiceId):apply&&!!voiceId&&!s.voiceId)).map(s=>({id:s.id,text:s.text,oldVoiceId:s.voiceId,newVoiceId:voiceId}))};
+    }
     else if(id==='operation.sceneAndGenerate')detail={unitId:unit.id,members:unit.members,guidance:unit.variants.scene.guidance,backgroundPresence:unit.variants.scene.backgroundPresence,events:store.all('events',unit.id).filter(e=>e.state==='adopted'||input.eventIds.includes(e.id)).map(e=>pick(e,['id','kind','description','state','memberId','position','startMemberId','endMemberId','source']))};
     else if (id === 'voice.delete') detail = domain.voiceUsage(input.id);
     else if (id === 'audio.original.restore') detail = domain.enhancement.preview({...p,kind:'restore'});
@@ -343,6 +357,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
   async function execute(id, input = {}, scope = {}, executionContext = {}) {
     const { def, bound, target, p, versions, requiredWorkflows } = prepare(id, input, scope);
     if (['project.create','chapter.create'].includes(id)) assertCreationScope(store,id,p,executionContext);
+    if (id==='audio.range.update') assertAudioRangeScope(store,input,executionContext);
     if (def.access === 'read') return read(id, input, scope);
     if (def.delegation === 'human-only') fail('此项必须由用户通过安全界面操作', 403);
     if (!['human_approved_proposal', 'assistant_delegated'].includes(executionContext.actorKind) || !executionContext.operationId) fail('缺少可信助手执行上下文', 403);
@@ -367,6 +382,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
       if (!u) fail('试听单元已变化', 409);
       if (input.state === 'passed' && !executionContext.humanReview?.audioIds?.includes(input.audioId)) fail('人工听评需要用户对这份声音作出决定', 403);
       payload.basis = u.variants[input.mode || u.mode].status.basis;
+      payload.rangeContentKey=executionContext.preview?.rangeContentKey ?? null;
     }
     if (id === 'project.delete') {
       const plan=domain.deletionPlan({id:input.id});
@@ -379,6 +395,10 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     if (id === 'unit.restore') payload.baseRevisions = executionContext.preview?.baseRevisions;
     if (id === 'unit.dissolve') payload.arrangement = bound.chapter.arrangement;
     executionContext = {...executionContext,capabilityId:id,capabilityInput:input};
+    if(id==='audio.range.update'){
+      const authorized=assertAudioRangeScope(store,input,executionContext),result=await updateAudioRange(store,{...input,operationId:executionContext.operationId,sourceHash:authorized.sourceHash,decodeProfile:authorized.decodeProfile},{kind:'explicit-assistant',intentId:executionContext.runId});
+      return assistantMutation(store,id,{...input,projectId:scope.projectId,chapterId:scope.chapterId,operationId:executionContext.operationId},executionContext,()=>({...result,chapterId:scope.chapterId,state:'completed'}));
+    }
     if(id==='operation.useVoice' && usesCurrentVoice(input,bound))return assistantMutation(store,id,payload,executionContext,()=>({id:input.voiceId,state:'completed',outcome:'completed',chapterId:bound.chapter.id,unchanged:true}));
     if(id==='audio.tail.repair'){if(!repairAudio)fail('尾部维护接口尚未就绪');return repairAudio({phase:'apply',projectId:scope.projectId,chapterId:scope.chapterId,scope:executionContext.maintenanceScope||executionContext.preview?.scope});}
     if (id === 'ui.navigate') return {uiAction:{type:'navigate',...input,...(scope.chapterId ? {chapterId:scope.chapterId} : {}),requiresUserClick:true}};

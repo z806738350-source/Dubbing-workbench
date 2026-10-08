@@ -7,7 +7,7 @@ const compile = source => ts.transpileModule(source, { compilerOptions: { target
 const url = source => 'data:text/javascript;base64,' + Buffer.from(source + '\n//' + crypto.randomUUID()).toString('base64');
 const storage = () => { const map = new Map(); return { getItem: key => map.get(key) ?? null, setItem: (key, value) => map.set(key, value), removeItem: key => map.delete(key), entries: () => [...map] }; };
 const fixture = () => ({
-  chapter: { id: 'chapter', projectId: 'project', revision: 1, roleVoices: { role: 'chapter-voice' }, segments: [{ id: 'one', order: 0, text: '当前台词', roleId: 'role', voiceSource: 'default' }, { id: 'two', order: 1, text: '单句选择', roleId: 'role', voiceSource: 'override' }] },
+  chapter: { id: 'chapter', projectId: 'project', revision: 1, roleVoices: { role: 'chapter-voice' }, segments: [{ id: 'one', order: 0, text: '当前台词', roleId: 'role', voiceSource: 'default' }, { id: 'two', order: 1, text: '单句选择', roleId: 'role', voiceSource: 'override', voiceId: 'single-voice' }] },
   roles: [{ id: 'role', revision: 1, name: '角色', voiceId: 'project-voice' }],
   state: { voices: [{ id: 'chapter-voice', state: 'active', name: '本章声音', duration: 3 }], jobs: [], voiceSessions: [], settings: { features: {}, configured: true, audioTools: true, routeBlocked: false, model: 'audio' } },
   initialTarget: { roleId: 'role' }, onClose() {}, onRefresh: async () => {}, play() {}, onUsed() {},
@@ -44,6 +44,15 @@ test('voice choice captures scope and chapter voice; polling changes require an 
   assert.ok(nodes(tree).some(node => node.type === 'p' && node.props.children.join('') === '第 1 条 · 当前台词'));
   const review = nodes(tree).find(node => node.type === 'button' && node.props.children.includes('重新核对当前范围')); review.props.onClick();
   creator = nodes(render(changed)).find(node => node.type === 'VoiceCreation'); assert.equal(creator.props.target.revision, 4); assert.equal(creator.props.target.needsReview, false);
+});
+
+test('角色选声范围补齐空的单句覆盖，并保留已有单句声音', async () => {
+  globalThis.localStorage = storage(); globalThis.sessionStorage = storage();
+  const {render}=await setup(),props=fixture();props.initialTarget.tab='create';
+  props.chapter.segments.push({id:'missing',order:2,text:'尚未选声',roleId:'role',voiceSource:'override',voiceId:null});
+  const tree=render(props),creator=nodes(tree).find(node=>node.type==='VoiceCreation');
+  assert.deepEqual(creator.props.target.dependencies,['segment:one','segment:missing','role:role']);
+  assert.match(nodes(tree).filter(node=>node.type==='p').map(node=>node.props.children.join('')).join('\n'),/2 条将使用所选声音/);
 });
 
 test('same-page save receipts advance the binding; a foreign change during that barrier sends nothing', async () => {

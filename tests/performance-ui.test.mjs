@@ -19,7 +19,7 @@ async function fixture({rows=[],drafts=[],mode='smart',persistent=coverage(rows.
     useState:initial=>{const index=cursor++;if(!(index in hooks))hooks[index]=typeof initial==='function'?initial():initial;return[hooks[index],next=>hooks[index]=typeof next==='function'?next(hooks[index]):next];},
     useRef:initial=>hooks[cursor++]||={current:initial},
     useEffect:(fn,deps)=>{const index=effectCursor++;if(!effects[index]||deps.some((value,i)=>value!==effects[index].deps[i]))pending.push(()=>{effects[index]?.cleanup?.();effects[index]={deps,cleanup:fn()};});},
-    api:async(path,payload)=>{calls.api.push({path,payload});if(path.endsWith('/experience'))return{policy:{mode,revision:0},grants:[],changes:[]};if(path==='/operations/plan')return{chapterId:'chapter',revision:payload.revision,kind:payload.analysisKind||'extract',memberIds:payload.ids?.length?payload.ids:rows.map(row=>row.id),textRequests:1,repairRequests:1,maxTextRequests:2};return{};},
+    api:async(path,payload)=>{calls.api.push({path,payload});return runtime.read(path,payload);},read:async(path,payload)=>{if(path.endsWith('/experience'))return{policy:{mode,revision:0},grants:[],changes:[]};if(path==='/operations/plan')return{chapterId:'chapter',revision:payload.revision,kind:payload.analysisKind||'extract',memberIds:payload.ids?.length?payload.ids:rows.map(row=>row.id),textRequests:1,repairRequests:1,maxTextRequests:2};return{};},
     ensureTaskGrant:async intent=>{calls.grant.push(intent);return runtime.authorize(intent);},authorize:async()=> 'grant',
     withSavedDrafts:async(scope,ids,fn)=>{calls.saves.push({scope,ids});return fn();},draftScopeRevision:(_scope,revision)=>runtime.savedRevision??revision,
     submitOperation:async(key,payload)=>{calls.operations.push({key,payload});return{result:{analysis:{id:'started'}}};}};
@@ -34,15 +34,14 @@ async function fixture({rows=[],drafts=[],mode='smart',persistent=coverage(rows.
 test('新章默认smart：一次准备发起联合分析，无policy选择或独立授权前置',async()=>{
   const f=await fixture(),tree=f.render(),start=button(tree,'准备这一章');assert.ok(start);assert.equal(start.props.disabled,false);
   assert.equal(nodes(tree).filter(node=>node.type==='TaskAuthorization').length,0);
-  start.props.onClick();await tick();assert.equal(f.calls.operations.length,1);assert.equal(f.calls.grant.length,1);
+  start.props.onClick();await tick();assert.equal(f.calls.operations.length,1);assert.equal(f.calls.grant.length,0);
   assert.equal(f.calls.api.filter(call=>call.path==='/experience/policy').length,0);
-  assert.equal(f.calls.operations[0].payload.includePerformance,true);assert.equal(f.calls.operations[0].payload.performanceMode,'initial');assert.equal(f.calls.operations[0].payload.grantId,'grant');
-  assert.equal(f.calls.grant[0].requests,2);assert.equal(f.calls.grant[0].minimumRequests,1);
+  assert.equal(f.calls.operations[0].payload.includePerformance,true);assert.equal(f.calls.operations[0].payload.performanceMode,'initial');assert.equal(f.calls.operations[0].payload.grantId,undefined);assert.doesNotMatch(words(tree),/24小时|已有显式上限|允许文本请求次数/);
 });
 
 test('保存后版本或免费计划改变自动重读后继续，不要求再点准备',async()=>{
   const f=await fixture();f.runtime.savedRevision=7;button(f.render(),'准备这一章').props.onClick();await tick();
-  assert.equal(f.calls.operations.length,1);assert.equal(f.calls.operations[0].payload.revision,7);assert.equal(f.calls.grant.length,1);
+  assert.equal(f.calls.operations.length,1);assert.equal(f.calls.operations[0].payload.revision,7);assert.equal(f.calls.grant.length,0);
   assert.doesNotMatch(words(f.render()),/请核对.*再次准备/);
 });
 
@@ -82,26 +81,19 @@ test('部分持久结果不冒称整章完成，删除项单列；撤销仅perfo
 });
 
 test('准备期间切章卸载不继续提交旧章付费操作',async()=>{
-  const f=await fixture();let resolve;f.runtime.authorize=()=>new Promise(done=>resolve=done);button(f.render(),'准备这一章').props.onClick();await tick();assert.equal(f.calls.grant.length,1);f.unmount();resolve('grant');await tick();assert.equal(f.calls.operations.length,0);
+  const f=await fixture();let resolve;const read=f.runtime.read;f.runtime.read=(path,payload)=>path==='/operations/plan'?new Promise(done=>resolve=()=>done({chapterId:'chapter',revision:4,kind:'extract',memberIds:[],textRequests:1})):read(path,payload);button(f.render(),'准备这一章').props.onClick();await tick();f.unmount();resolve();await tick();assert.equal(f.calls.operations.length,0);assert.equal(f.calls.grant.length,0);
 });
 
-const authorizationSource=readFileSync(new URL('../src/TaskAuthorization.tsx',import.meta.url),'utf8');
-const authorizationFile=ts.createSourceFile('TaskAuthorization.tsx',authorizationSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
-const ensureNode=authorizationFile.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='ensureTaskGrant');
-function grantFixture(grants=[]){
-  const calls=[],storage=new Map(),intent={projectId:'project',chapterId:'chapter',step:'text',steps:['extract'],model:'fixture',requests:2,minimumRequests:1};
-  const env={crypto,sessionStorage:{getItem:()=> 'fixture-workspace'},localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},api:async(path,payload)=>{calls.push({path,payload});if(path.endsWith('/experience'))return{grants};const grant={...payload,id:payload.grantId,models:{text:'fixture',audio:'audio'},textUsed:0,textReserved:0,audioUsed:0,audioReserved:0};grants.push(grant);return grant;}};
-  const code=ts.transpileModule(ensureNode.getText(authorizationFile).replace('export ',''),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
-  const ensure=new Function(...Object.keys(env),code+'\nreturn ensureTaskGrant;')(...Object.values(env));return{calls,storage,intent,ensure};
-}
-
-test('同一次明确动作首次建立具体grant，后续复用；基础额度足够时不逼追加修补额度',async()=>{
-  const f=grantFixture(),first=await f.ensure(f.intent),second=await f.ensure(f.intent);assert.equal(first,second);assert.equal(f.calls.filter(call=>call.path==='/experience/grant').length,1);assert.equal(f.storage.size,0);
-  const basic=grantFixture([{id:'existing',projectId:'project',chapterId:'chapter',steps:['extract'],materials:['text'],voiceIds:[],models:{text:'fixture'},textLimit:1,textUsed:0,textReserved:0,revoked:false}]);assert.equal(await basic.ensure(basic.intent),'existing');assert.equal(basic.calls.filter(call=>call.path==='/experience/grant').length,0);
+test('高级整理明确当前所选与用途，一次提交不创建额度授权或改动人工字段',async()=>{
+  const f=await fixture({rows:[{id:'one',text:'第一句',performance:'人工克制'},{id:'two',text:'第二句',performance:'人工停顿'}]});nodes(f.render()).find(node=>node.props.className==='analysis-composer-toggle').props.onClick();
+  const form=nodes(f.render()).find(node=>node.type==='Form'&&node.props.label==='生成校对草稿');assert.ok(form);await form.props.onSubmit();assert.equal(f.calls.operations.length,1);assert.equal(f.calls.grant.length,0);assert.equal(f.calls.api.some(call=>call.path==='/experience/grant'),false);
+  const {key,payload}=f.calls.operations[0];assert.equal(key,'advanced-analysis:chapter');assert.deepEqual(payload.ids,['one','two']);assert.equal(payload.analysisKind,'director');assert.equal(payload.autoApply,false);assert.equal(payload.model,'fixture-text');assert.equal(payload.grantId,undefined);assert.equal(payload.includeHumanPerformance,undefined);assert.equal(payload.text,undefined);assert.equal(payload.voiceId,undefined);
 });
 
-test('已有显式0上限不被普通点击偷偷扩大，只返回一项具体范围决定',async()=>{
-  const f=grantFixture([{id:'zero',projectId:'project',chapterId:'chapter',steps:['extract'],materials:['text'],voiceIds:[],models:{text:'fixture'},textLimit:0,textUsed:0,textReserved:0,revoked:false}]);await assert.rejects(f.ensure(f.intent),error=>error.code==='task-grant-needed'&&error.available===0);assert.equal(f.calls.filter(call=>call.path==='/experience/grant').length,0);
+test('结果不明分析只在明确重发按钮后继续原draft，保留retryUnknown且不创建额度授权',async()=>{
+  const draft={id:'unknown-analysis',kind:'director',status:'unknown',revision:4,contextRevision:1,draftVersion:3,model:'fixture-text',items:[],batches:[{id:'waiting',status:'unknown'}]},f=await fixture({drafts:[draft]});
+  const form=nodes(f.render()).find(node=>node.type==='Form'&&node.props.label==='重新发送并继续（可能重复计费）');assert.ok(form);assert.equal(f.calls.api.some(call=>call.path==='/analysis/resume'),false);assert.equal(f.calls.operations.length,0);await form.props.onSubmit(new Map(),form.props.revision);
+  const call=f.calls.api.find(call=>call.path==='/analysis/resume');assert.equal(call.payload.id,draft.id);assert.equal(call.payload.draftVersion,3);assert.equal(call.payload.retryUnknown,true);assert.equal(call.payload.grantId,undefined);assert.equal(f.calls.grant.length,0);assert.equal(f.calls.operations.length,0);
 });
 
 const appSource=readFileSync(new URL('../src/App.tsx',import.meta.url),'utf8'),appFile=ts.createSourceFile('App.tsx',appSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
@@ -116,8 +108,8 @@ function importFixture(existing){
 }
 
 test('导入一次创建后自动准备；导航/回执恢复仍使用原prepare operation，0重复分析授权',async()=>{
-  const f=importFixture();await f.callback('created',true,'import-command');assert.equal(f.calls.grant.length,1);assert.equal(f.calls.api.filter(call=>call.path==='/operations').length,1);assert.equal(f.calls.api.find(call=>call.path==='/operations').payload.operationId,'import-command:prepare');
-  await f.callback('created',true,'import-command');assert.equal(f.calls.grant.length,1);assert.equal(f.calls.api.filter(call=>call.path==='/operations').length,1);
+  const f=importFixture();await f.callback('created',true,'import-command');assert.equal(f.calls.grant.length,0);assert.equal(f.calls.api.filter(call=>call.path==='/operations').length,1);assert.equal(f.calls.api.find(call=>call.path==='/operations').payload.operationId,'import-command:prepare');
+  await f.callback('created',true,'import-command');assert.equal(f.calls.grant.length,0);assert.equal(f.calls.api.filter(call=>call.path==='/operations').length,1);
 });
 
 test('导入恢复已有unknown分析只展示原结果，不重发、换ID或扩大费用',async()=>{

@@ -12,6 +12,7 @@ const seekNode=find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file
 const keyEffect=find(node=>ts.isCallExpression(node)&&node.expression.getText(file)==='useEffect'&&node.arguments[1]?.getText(file)==='[seekPlayback]').arguments[0];
 const button=label=>find(node=>ts.isJsxOpeningElement(node)&&node.tagName.getText(file)==='button'&&attr(node,'aria-label')?.initializer?.text===label);
 const progress=find(node=>ts.isJsxSelfClosingElement(node)&&node.tagName.getText(file)==='input'&&attr(node,'aria-label')?.initializer?.text==='播放进度');
+const playButton=find(node=>ts.isJsxOpeningElement(node)&&node.tagName.getText(file)==='button'&&attr(node,'className')?.initializer?.text==='play-button');
 
 // Supply selector membership and ancestor traversal at the DOM boundary;
 // execute the production listener itself, including its actual selector list.
@@ -23,10 +24,11 @@ class Target {
 function fixture(){
   const writes=[],listeners=new Map(),player={kind:'masters',id:'chapter-audio',intent:4},intent={current:5};
   const media={currentTime:12.5,duration:30,readyState:4,paused:true,ended:false,play(){assert.fail('快进退不应开始播放');},pause(){assert.fail('快进退不应暂停');},load(){assert.fail('快进退不应重载音频');}};
-  const env={useCallback:callback=>callback,audio:{current:media},playerRef:{current:player},playIntent:intent,setPosition:value=>writes.push(value),Element:Target,
+  const playbackButton={disabled:false,clicks:0,click(){this.clicks++;}};
+  const env={useCallback:callback=>callback,audio:{current:media},playbackButton:{current:playbackButton},playerRef:{current:player},playIntent:intent,setPosition:value=>writes.push(value),Element:Target,
     window:{addEventListener(name,handler){assert.equal(name,'keydown');assert.equal(listeners.has(name),false);listeners.set(name,handler);},removeEventListener(name,handler){assert.equal(listeners.get(name),handler);listeners.delete(name);}}};
   env.seekPlayback=project(seekNode,env);
-  return {env,media,writes,player,intent,listeners,seek:env.seekPlayback,mount:()=>project(keyEffect,env)(),key(key,extra={}){const event={key,target:new Target(),defaultPrevented:false,isComposing:false,altKey:false,ctrlKey:false,metaKey:false,shiftKey:false,preventDefault(){this.defaultPrevented=true;},...extra};listeners.get('keydown')?.(event);return event;}};
+  return {env,media,writes,player,intent,listeners,playbackButton,seek:env.seekPlayback,mount:()=>project(keyEffect,env)(),key(key,extra={}){const event={key,target:new Target(),defaultPrevented:false,isComposing:false,altKey:false,ctrlKey:false,metaKey:false,shiftKey:false,preventDefault(){this.defaultPrevented=true;},...extra};listeners.get('keydown')?.(event);return event;}};
 }
 
 test('左右键各移动五秒，单段和整章在播放或暂停时都保留原状态和播放意图',()=>{
@@ -80,7 +82,28 @@ test('组合键、输入法、已经消费的事件及其他按键不触发跳�
   for(const extra of [{altKey:true},{ctrlKey:true},{metaKey:true},{shiftKey:true},{isComposing:true},{defaultPrevented:true}]){
     const f=fixture();f.mount();f.key('ArrowLeft',extra);assert.deepEqual(f.writes,[]);assert.equal(f.media.currentTime,12.5);
   }
-  const f=fixture();f.mount();for(const key of ['ArrowUp','ArrowDown',' ','Enter','Home','End'])assert.equal(f.key(key).defaultPrevented,false);assert.deepEqual(f.writes,[]);
+  const f=fixture();f.mount();for(const key of ['ArrowUp','ArrowDown','Enter','Home','End'])assert.equal(f.key(key).defaultPrevented,false);assert.deepEqual(f.writes,[]);
+});
+
+test('空格复用当前播放按钮，长按只触发一次且不滚动页面',()=>{
+  assert.equal(attr(playButton,'ref').initializer.expression.getText(file),'playbackButton');
+  assert.equal(attr(playButton,'aria-keyshortcuts').initializer.text,'Space');
+  const f=fixture();f.mount();assert.equal(f.key(' ').defaultPrevented,true);assert.equal(f.playbackButton.clicks,1);
+  assert.equal(f.key(' ',{repeat:true}).defaultPrevented,true);assert.equal(f.playbackButton.clicks,1);
+  const next={disabled:false,clicks:0,click(){this.clicks++;}};f.env.playbackButton.current=next;
+  f.key(' ',{target:new Target(['input','input[data-playback-progress]'])});assert.equal(next.clicks,1);assert.equal(f.playbackButton.clicks,1);
+});
+
+test('空格不抢输入、控件、组合键，也不绕过播放按钮禁用状态',()=>{
+  for(const selector of ['input','textarea','select','.select','button','[role="button"]','a[href]','summary','[contenteditable]:not([contenteditable="false"])',...['textbox','combobox','slider','spinbutton','listbox','tablist','menu'].map(role=>'[role="'+role+'"]')]){
+    const f=fixture();f.mount();assert.equal(f.key(' ',{target:new Target([],new Target([selector]))}).defaultPrevented,false,selector);assert.equal(f.playbackButton.clicks,0,selector);
+  }
+  for(const extra of [{altKey:true},{ctrlKey:true},{metaKey:true},{shiftKey:true},{isComposing:true},{defaultPrevented:true}]){
+    const f=fixture();f.mount();f.key(' ',extra);assert.equal(f.playbackButton.clicks,0);
+  }
+  for(const button of [null,{disabled:true,click(){assert.fail('禁用时不能播放');}}]){
+    const f=fixture();f.mount();f.env.playbackButton.current=button;assert.equal(f.key(' ').defaultPrevented,false);
+  }
 });
 
 test('非输入区域和没有Element目标的事件可定位，卸载后不留下监听器',()=>{
@@ -96,4 +119,10 @@ test('前进后退按钮使用与键盘同一个定位动作并标注快捷键',
     project(attr(node,'onClick').initializer.expression,f.env)();assert.equal(f.media.currentTime,expected);
   }
   assert.deepEqual(f.writes,[7.5,12.5]);assert.equal(f.media.paused,true);assert.equal(f.intent.current,5);
+});
+
+test('正在准备播放时实际按钮禁用，空格不会重建或清掉该次续播意图',()=>{
+  const env={connectionReady:true,busy:false,locked:false,playPreparing:true,player:{kind:'masters',id:'master'},total:3,ready:3};
+  assert.equal(project(attr(playButton,'disabled').initializer.expression,env),true);
+  const f=fixture();f.mount();f.playbackButton.disabled=true;assert.equal(f.key(' ').defaultPrevented,false);assert.equal(f.playbackButton.clicks,0);assert.equal(f.intent.current,5);
 });

@@ -6,10 +6,11 @@ import { compile, templateOf, templateCatalog, listTemplates, listUnitTemplates 
 import { createProjectFolder, renameProjectFolder, stageProjectDeletion, recoverProjectDeletions, projectFile, recordFiles, deletionPath } from './workspace.mjs';
 export { compile } from "./templates.mjs";
 import { createEnhancement, defaultFeatures } from "./enhancement.mjs";
-import { configurationDecided, decide, humanChanges, assistantActor, assistantChanges, assistantOverride, assistantMutation, inheritStructure, outstandingAttempts, policyOf, assistantEffectState, assistantEffects, assertAssistantEffects } from './experience.mjs';
+import { configurationDecided, decide, humanChanges, assistantActor, assistantChanges, assistantOverride, assistantMutation, inheritStructure, outstandingAttempts, policyOf, assistantEffectState, assistantEffects, assertAssistantEffects, inferredKnownRole } from './experience.mjs';
 import { shortRanges } from './semantic.mjs';
 import { importProblems } from './import-validation.mjs';
 import { performanceCoverage, eligiblePerformanceSegment, hasReadableText, performanceDependency } from './performance.mjs';
+import { savedAudioRange, presentationReview, savePresentationReview, assertPresentationReview, rangeContentKey, renderIdentity, renderMatches } from './audio-range.mjs';
 
 export const defaultConfig = templateOf("dry-v1").defaults;
 export const active = (j) => ["queued", "running"].includes(j.status);
@@ -114,7 +115,8 @@ export function segmentStatus(store, s) {
       : "pending";
   let prompt = "", templateError = "";
   try { prompt = compile(s); } catch (e) { templateError = e.message; }
-  return { validity, review, audio, prompt, promptIssues: [...performanceIssues(s), ...(templateError ? [templateError] : [])] };
+  const rangeKey=rangeContentKey(savedAudioRange(store,s.id,'dry',s.current));
+  return { validity, ...(rangeKey?{rangeContentKey:rangeKey}:{}), review:validity==='matched'?presentationReview(store,s.id,'dry',s.current,basisOf(s),review):'pending', audio, prompt, promptIssues: [...performanceIssues(s), ...(templateError ? [templateError] : [])] };
 }
 export function pieces(source) {
   // Offsets are Unicode code points, matching source coverage even with emoji.
@@ -181,6 +183,27 @@ export function createDomain(store) {
       const p = store.get("projects", id);
       p.contextRevision++;
       store.put("projects", p);
+    }
+    const chapters = new Set();
+    for(const s of store.all('segments')) {
+      const decision=s?.decisions?.role,origin=s?.analysisOrigin;
+      if(s?.roleConfirmed!==false || decision?.source!=='policy_ai' || decision.state!=='needsDecision' || [s.chapterId,s.roleId,origin?.draftId,origin?.itemId].some(id=>typeof id!=='string'||!id) || s.identityPending || s.retired || s.deletion || s.excluded || s.protectedFields!==undefined&&!Array.isArray(s.protectedFields) || s.protectedFields?.some(field=>['role','roleId','type','roleConfirmed'].includes(field)) || !same(decision.values,[s.roleId,s.type]) || decision.draftId!==origin.draftId)continue;
+      const draft=store.maybe('suggestions',origin.draftId),c=store.maybe('chapters',s.chapterId),role=store.maybe('roles',s.roleId);
+      if(draft?.kind!=='extract' || draft.status!=='applied' || draft.chapterId!==s.chapterId || !c || role?.projectId!==c.projectId || typeof draft.source!=='string' || typeof s.text!=='string' || draft.source!==c.source || (draft.sourceVersion || 1)!==(c.sourceVersion || 1) || !Array.isArray(draft.items) || !Array.isArray(draft.roles))continue;
+      const item=draft.items.find(item=>item.id===origin.itemId),span=item?.span;
+      if(!inferredKnownRole(item,role) || !draft.roles.some(known=>inferredKnownRole(item,known)) || item.userEdited || item.roleId!==s.roleId || item.type!==s.type || item.text!==s.text || item.issues?.length || origin.roleIssues?.length || origin.evidence!==item.evidence || decision.inputRevision!==draft.revision || !Number.isSafeInteger(span?.start) || !Number.isSafeInteger(span.end) || span.start<0 || span.end<=span.start || !same(decision.sourceSpan,span) || !same(s.source,{kind:'original',version:c.sourceVersion || 1,spans:[span]}))continue;
+      const change=store.maybe('settings','ux-change:'+draft.id);
+      if(change?.undoneAt)continue;
+      s.roleConfirmed=true;s.decisions={...s.decisions,role:{...decision,state:'accepted'}};
+      store.put('segments',s,s.chapterId);chapters.add(s.chapterId);
+      const entry=Array.isArray(change?.items)?change.items.find(item=>item.id===s.id):null;
+      if(entry?.after?.roleConfirmed===false && same(entry.after.decisions?.role,decision)) {
+        entry.after={...entry.after,roleConfirmed:true,decisions:{...entry.after.decisions,role:s.decisions.role}};
+        store.put('settings',change,change.chapterId);
+      }
+    }
+    for(const id of chapters) {
+      const c=store.get('chapters',id);c.revision=(c.revision ?? 1)+1;c.updatedAt=new Date().toISOString();store.put('chapters',c,c.projectId);
     }
   });
   const list = (chapterId) =>
@@ -249,7 +272,7 @@ export function createDomain(store) {
         assistantSessions, assistantRuns, assistantMessages:assistantSessions.flatMap(s=>store.all('assistantMessages',s.id)), assistantAttachments:assistantSessions.flatMap(s=>store.all('assistantAttachments',s.id)), assistantSteps:assistantRuns.flatMap(r=>store.all('assistantSteps',r.id)), assistantDecisions:assistantRuns.flatMap(r=>store.all('assistantDecisions',r.id)),
         projects:[project],chapters,roles,segments:related('segments'),units,events,suggestions,jobs,attempts,
         audios:related('audios'),masters:related('masters'),exports:related('exports'),
-        settings:store.all('settings').filter(s => (s.id.startsWith('ux-') || s.id.startsWith('assistant-operation:') || s.id.startsWith('assistant-call:') || s.id.startsWith('tail-maintenance:') || s.id.startsWith('audio-file-check:')) && (owns(s) || owns(s.request) || owns(s.request?.data) || chapterIds.has(s.dependencies?.chapterId) ||
+        settings:store.all('settings').filter(s => (s.id.startsWith('ux-') || s.id.startsWith('assistant-operation:') || s.id.startsWith('assistant-call:') || s.id.startsWith('tail-maintenance:') || s.id.startsWith('audio-file-check:') || s.id.startsWith('audio-range')) && (owns(s) || owns(s.request) || owns(s.request?.data) || chapterIds.has(s.dependencies?.chapterId) ||
           s.dependencies?.roleIds?.some(id => roleIds.has(id)) || typeof s.request?.action === 'string' && (s.request.action.startsWith('role.') && roleIds.has(s.request.data?.id) ||
           s.request.action.startsWith('project.') && s.request.data?.id === project.id))),
       };
@@ -727,9 +750,10 @@ export function createDomain(store) {
               for (const s of list(c.id))
                 if (
                   s.roleId === r.id &&
-                  s.voiceSource !== "override" &&
+                  (s.voiceSource !== "override" || p.apply === true && !!voiceId && !s.voiceId) &&
                   (p.apply || !s.voiceId)
                 ) {
+                  if (s.voiceSource === "override") s.voiceSource = "default";
                   s.voiceId = voiceId;
                   if (p.identityChosen === true || policyOf(store,r.projectId).revision) s.identityConfirmed = true;
                   store.put("segments", s, c.id);
@@ -1081,6 +1105,8 @@ export function createDomain(store) {
             !same(p.basis, basisOf(s))
           )
             fail("试听版本已变化，请重新检查当前音频", 409);
+          assertPresentationReview(store,s.id,'dry',s.current,p.rangeContentKey);
+          if (savePresentationReview(store,s.id,'dry',s.current,basisOf(s),p.state)) return s;
           s.review = {
             audioId: s.current,
             basis: basisOf(s),
@@ -1273,16 +1299,16 @@ export function createDomain(store) {
   };
   api.chapter = id => {
     enhancement.syncLegacy();
-    const result = originalChapter(id), { rows, issues: arrangementIssues } = enhancement.inspectArrangement(id,result), reviewItems = rows.map(r => ({ id: r.s.id, audioId: r.a?.id || null, basis: r.basis }));
+    const result = originalChapter(id), { rows, issues: arrangementIssues } = enhancement.inspectArrangement(id,result), identity=renderIdentity(store,id,rows), reviewItems = rows.map(r => {const rangeKey=rangeContentKey(savedAudioRange(store,r.s.id,r.s.mode,r.a?.id));return {id:r.s.id,audioId:r.a?.id || null,basis:r.basis,...(rangeKey?{rangeContentKey:rangeKey}:{})};});
     const exportReady = !arrangementIssues.length && rows.length > 0 && result.coverage.valid && result.segments.filter(s => !s.excluded).every(configurationDecided) && rows.every(r => r.validity === 'matched' && r.review === 'passed');
     const history=store.all('attempts');
     const units = store.all('units', id).filter(u => u.state !== 'retired').map(u=>{
       const v=enhancement.view(u,result), readiness=api.actionReadiness(u,u.mode,v.status,history);
       return {...v,outstandingAttemptIds:readiness.outstandingAttemptIds,readiness,variants:Object.fromEntries(Object.entries(v.variants).map(([mode,variant])=>[mode,{...variant,outstandingAttemptIds:outstandingAttempts(store,[{targetKind:'unit',targetId:u.id,mode}],history).map(a=>a.id)}]))};
     });
-    const playbackItems=rows.map(r=>{const u=units.find(u=>u.id===r.s.id);return {id:r.s.id,unitId:r.s.id,members:r.s.members,mode:r.s.mode,audioId:r.a?.id || null,basis:r.basis,validity:r.validity,review:r.review,latest:u?.outstandingAttemptIds.length?'unknown':u?.variants[r.s.mode].latest,outstandingAttemptIds:u?.outstandingAttemptIds || [],readiness:u?.readiness};});
+    const playbackItems=rows.map(r=>{const u=units.find(u=>u.id===r.s.id),range=savedAudioRange(store,r.s.id,r.s.mode,r.a?.id);return {id:r.s.id,unitId:r.s.id,members:r.s.members,mode:r.s.mode,audioId:r.a?.id || null,basis:r.basis,validity:r.validity,review:r.review,latest:u?.outstandingAttemptIds.length?'unknown':u?.variants[r.s.mode].latest,outstandingAttemptIds:u?.outstandingAttemptIds || [],readiness:u?.readiness,...(range?{sourceHash:range.sourceHash,decodeProfile:range.decodeProfile,sourceFrames:range.sourceFrames,clipStartFrame:range.startFrame,clipEndFrame:range.endFrame,rangeRevision:range.revision,edgePolicy:range.edgePolicy,rangeContentKey:rangeContentKey(range)}:{rangeRevision:0})};});
     const segments=result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, configurationDecided:configurationDecided(s), ...(group ? {groupId:group.id} : {}) }; });
-    return { ...result, performanceCoverage:performanceCoverage(store,id), arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems, segments:segments.filter(s=>!s.deletion), deletedSegments:segments.filter(s=>s.deletion), exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && same(e.confirmation?.reviewItems, reviewItems) })) };
+    return { ...result,renderRevision:identity.renderRevision,renderSignature:identity.renderSignature,renderContentKey:identity.renderContentKey, performanceCoverage:performanceCoverage(store,id), arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems, segments:segments.filter(s=>!s.deletion), deletedSegments:segments.filter(s=>s.deletion), masters:result.masters.map(m=>({...m,current:!m.superseded&&m.arrangement===result.arrangement&&renderMatches(m,identity)})),exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && renderMatches(e,identity) && same(e.confirmation?.reviewItems, reviewItems) })) };
   };
   api.outputs = (p) => {
     const chapter=api.chapter(p.chapterId);
@@ -1297,8 +1323,8 @@ export function createDomain(store) {
       const job=selected.find(j=>j.id===row.jobId || j.masterId===row.id || j.exportId===row.id || j.result?.masterId===row.id || j.result?.exportId===row.id);
       let available=false;try {available=!!row.path&&!row.invalid&&statSync(deletionPath(store,row.path)).isFile();}catch{}
       const kind=table==='masters'?'master':'export',format=kind==='master'?'wav':row.format;
-      const current=available&&!row.superseded&&row.arrangement===chapter.arrangement&&(kind==='master'?chapter.playbackItems.length>0&&chapter.playbackItems.every(item=>item.validity==='matched'):chapter.exports.find(e=>e.id===row.id)?.current===true);
-      return {id:row.id,kind,...(kind==='master'?{masterId:row.id}:{exportId:row.id,masterId:row.masterId}),projectId:chapter.projectId,chapterId:chapter.id,jobId:job?.id || row.jobId,operationId:job?.commandId || null,format,arrangement:row.arrangement,current,available,filename:basename(row.path || ''),createdAt:row.createdAt,...((p.jobId||p.operationId)&&!job?{outsideQuery:true}:{})};
+      const current=available&&!row.superseded&&row.arrangement===chapter.arrangement&&renderMatches(row,chapter)&&(kind==='master'?chapter.playbackItems.length>0&&chapter.playbackItems.every(item=>item.validity==='matched'):chapter.exports.find(e=>e.id===row.id)?.current===true);
+      return {id:row.id,kind,...(kind==='master'?{masterId:row.id}:{exportId:row.id,masterId:row.masterId}),projectId:chapter.projectId,chapterId:chapter.id,jobId:job?.id || row.jobId,operationId:job?.commandId || null,format,arrangement:row.arrangement,renderRevision:row.renderRevision || 0,renderSignature:row.renderSignature || null,current,available,filename:basename(row.path || ''),createdAt:row.createdAt,...((p.jobId||p.operationId)&&!job?{outsideQuery:true}:{})};
     })).filter(row=>!row.outsideQuery&&(!p.format || row.format===p.format)&&(p.arrangement===undefined || row.arrangement===p.arrangement)).sort((a,b)=>(b.createdAt || '').localeCompare(a.createdAt || '')||a.id.localeCompare(b.id));
     return {items:items.slice(offset,offset+limit),total:items.length,nextCursor:offset+limit<items.length?String(offset+limit):null};
   };

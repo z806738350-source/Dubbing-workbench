@@ -6,6 +6,7 @@ import { compile, templateOf, resolveCompiler, sceneContract, validEventDescript
 import { storedAudioUnavailable } from './audio.mjs';
 import { configurationDecided } from './experience.mjs';
 import { hasNewerAttempt } from './scheduler.mjs';
+import { presentationReview, savePresentationReview, assertPresentationReview, rangeContentKey, savedAudioRange } from './audio-range.mjs';
 
 export const sampleText = '清晨的风吹过窗边，我把桌上的书合上，准备出门。';
 export const defaultFeatures = { voiceCreation: true, groups: true, scenes: true };
@@ -139,8 +140,10 @@ export function createEnhancement(store, d) {
     let input = null, currentBasis = null, prompt = '', promptIssues = [];
     try { input = buildInput(u, mode, undefined, false, true, chapter); currentBasis = basis(u, mode); prompt = compile(input); } catch(e) { promptIssues = [e.message]; }
     const validity = !a ? 'missing' : storedAudioUnavailable(store, a) ? 'broken' : input && same(requestIdentity(input, prompt), requestIdentity(a.input, a.prompt)) ? 'matched' : 'stale';
-    const review = validity === 'matched' && v.review?.audioId === v.current && same(compatibleReviewBasis(u,mode,v.review,a), currentBasis) ? v.review.state : 'pending';
-    return { validity, review, audio: a, basis: currentBasis, prompt, promptIssues, input };
+    const originalReview = validity === 'matched' && v.review?.audioId === v.current && same(compatibleReviewBasis(u,mode,v.review,a), currentBasis) ? v.review.state : 'pending';
+    const review = validity === 'matched' ? presentationReview(store,u.id,mode,v.current,currentBasis,originalReview) : 'pending';
+    const rangeKey=rangeContentKey(savedAudioRange(store,u.id,mode,v.current));
+    return { validity, ...(rangeKey?{rangeContentKey:rangeKey}:{}), review, audio: a, basis: currentBasis, prompt, promptIssues, input };
   }
   function history(u, mode, chapter, currentStatus) {
     const refs = [u.variants[mode].current,u.variants[mode].previous,u.variants[mode].approved];
@@ -220,6 +223,7 @@ export function createEnhancement(store, d) {
   }
   function setReview(u, mode, state, currentBasis) {
     const v = u.variants[mode];
+    if (savePresentationReview(store,u.id,mode,v.current,currentBasis,state)) return;
     v.review = { audioId: v.current, basis: currentBasis, state, at: stamp() };
     if (state === 'passed') v.approved = v.current;
     store.put('units', u, u.chapterId);
@@ -233,7 +237,7 @@ export function createEnhancement(store, d) {
     const rows = resolve(c.id), all = d.list(c.id), included = all.filter(s => !s.excluded);
     if (!rows.length) fail('章节没有有效朗读片段');
     if (rows.some(r => r.validity !== 'matched')) fail('仍有单元缺少匹配音频，请完成生成后重试');
-    const reviewItems = rows.map(r => ({ id: r.s.id, audioId: r.a.id, basis: r.basis }));
+    const reviewItems = rows.map(r => {const rangeKey=rangeContentKey(savedAudioRange(store,r.s.id,r.s.mode,r.a.id));return { id:r.s.id,audioId:r.a.id,basis:r.basis,...(rangeKey?{rangeContentKey:rangeKey}:{}) };});
     let confirmation;
     if (p.kind === 'export') {
       if (!['wav', 'mp3'].includes(p.format)) fail('导出格式无效');
@@ -470,6 +474,7 @@ export function createEnhancement(store, d) {
       const mode = p.mode || u.mode, st = status(u, mode);
       if (!['passed','rework'].includes(p.state)) fail('检查状态无效');
       if (st.validity !== 'matched' || u.variants[mode].current !== p.audioId || !same(st.basis, p.basis)) fail('试听版本已变化，请重新检查当前音频', 409);
+      assertPresentationReview(store,u.id,mode,p.audioId,p.rangeContentKey);
       setReview(u, mode, p.state, st.basis);
       return { ...view(u), chapterRevision: c.revision };
     } else if (action === 'unit.template') {

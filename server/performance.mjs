@@ -10,8 +10,10 @@ export function inspectPerformance(value, text, meta = {}) {
   const issues = [];
   if (typeof value !== 'string' || value.length > performanceContract.maxLength) return ['表演指导须为不超过2000个UTF-16代码单元的文本'];
   if (!hasReadableText(value) || /^(?:待补充|待填写|待分析|同上|略|暂无|无|未知|待定|TODO|N\/A|…|\.{3})[。.!！\s]*$/iu.test(value.trim())) issues.push('表演指导缺失或仅有占位内容');
-  // These are explicit out-of-field directives, not an emotion whitelist. “笑意” remains ordinary acting.
-  if (/(?:添加|加入|插入|补上|发出|增加|伴随).{0,10}(?:笑声|喘息声?|惊呼|台词|脚步声|衣物声|音效|背景音乐)|(?:播放|添加|加入|关闭|去掉|取消|压低|降低).{0,8}(?:背景|音乐|音效)|(?:无|不要|禁止).{0,4}(?:背景音乐|环境声|背景声)|(?:改写|删掉|删除|省略|替换|增加).{0,8}(?:正文|台词|词句)|(?:换成|改用|切换).{0,8}(?:音色|声音|角色)|(?:陌生|新|改用).{0,3}口音|\d+(?:\.\d+)?\s*(?:毫秒|秒钟?)/u.test(value)) issues.push('表演指导包含额外发声、正文、声音身份、背景或时长操作');
+  const directives=value.replace(/(?:从|重音(?:落)?在|强调|在)[“「『"']([^”」』"']+)[”」』"']/gu,(quote,words)=>text.includes(words)?' '.repeat(quote.length):quote);
+  // ponytail: deterministic directive/negation phrases; ambiguous prose remains non-blocking, add a parser only for demonstrated misses.
+  const operations=/(?:添加|加入|插入|补上|发出|增加|伴随)[^，,。；;！？!?]{0,10}?(?:笑声|喘息声?|惊呼|台词|脚步声|衣物声|音效|背景音乐)|(?:播放|添加|加入|关闭|去掉|取消|压低|降低)[^，,。；;！？!?]{0,8}?(?:背景|音乐|音效)|(?:无|不要|禁止)\s*(?:背景音乐|环境声|背景声)|(?:改写|删掉|删除|省略|替换|增加)[^，,。；;！？!?]{0,8}?(?:正文|台词|词句)|(?:换成|改用|切换)[^，,。；;！？!?]{0,8}?(?:音色|声音|角色)|(?:陌生|新|改用).{0,3}口音|(?:停顿?|停留|暂停|持续|时长|延长|压缩|控制在)[^，,。；;！？!?]{0,6}\d+(?:\.\d+)?\s*(?:毫秒|秒钟?)|\d+(?:\.\d+)?\s*(?:毫秒|秒钟?)(?:内|之内|以内)(?:读完|说完|结束|完成)/gu;
+  for(const match of directives.matchAll(operations))if(!/(?:不要|别|无需|禁止|不应|不准|不能|避免|勿|不允许)(?:\s*(?:再|额外|主动|自行|继续|擅自|直接|自动))*\s*$/u.test(directives.slice(0,match.index))){issues.push('表演指导包含额外发声、正文、声音身份、背景或时长操作');break;}
   const anchors = meta.performanceAnchors ?? [];
   if (!Array.isArray(anchors) || anchors.some(a => typeof a !== 'string' || !a || !text.includes(a))) issues.push('表演锚点不属于当前片段');
   for (const match of value.matchAll(/(?:从|重音(?:落)?在|强调|在)[“「『"']([^”」』"']+)[”」』"']/gu)) if (!text.includes(match[1])) issues.push('表演引用的词句不在当前片段');

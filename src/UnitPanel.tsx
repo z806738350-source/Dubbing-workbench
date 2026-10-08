@@ -5,7 +5,6 @@ import { hasDraft } from "./drafts";
 import { Dialog, Field, Select, Status } from "./components";
 import { ObjectDraftTools, objectDraftId, useObjectDraft } from "./ObjectDraft";
 import { saveAction, withSavedDrafts, draftScopeRevision, type SaveContext } from "./autosave";
-import TaskAuthorization from "./TaskAuthorization";
 import { submitOperation } from "./taskOperations";
 import SceneSuggestions from "./SceneSuggestions";
 import { AudioProvenance } from "./AudioProvenance";
@@ -34,7 +33,7 @@ export function CreateGroup({ chapter, ids, roles, enabled, state, refresh, clos
 }) {
   const controller = useObjectDraft("unit", "new-" + chapter.id, { ids: chapter.segments.filter(segment => ids.includes(segment.id)).map(segment => segment.id), guidance: "", chapterRevision: chapter.revision }, 0, { scope: "chapter:" + chapter.id, dependencies: ["new-group:" + chapter.id], deferUnmounted: true });
   const [preview, setPreview] = useState<{ conflicts: unknown[]; prompt?: string } | null>(null);
-  const [error, setError] = useState(""), [pending, setPending] = useState(false), [grantId, setGrantId] = useState<string | null>(null), [resumeRoute,setResumeRoute]=useState(false);
+  const [error, setError] = useState(""), [pending, setPending] = useState(false), [resumeRoute,setResumeRoute]=useState(false);
   useEffect(()=>{setResumeRoute(false);},[state?.settings.routeBlocked,state?.settings.model]);
   const active = useRef(true); useEffect(() => () => { active.current = false; }, []);
   const signature = JSON.stringify({ ids: controller.draft.ids, guidance: controller.draft.guidance, revision: chapter.revision });
@@ -56,7 +55,7 @@ export function CreateGroup({ chapter, ids, roles, enabled, state, refresh, clos
         if (controller.draft.ids.some(id => hasDraft(id))) throw new Error("相关台词有其他页面或遗留编辑，请先在上方处理。");
         const receipt = await controller.save(async value => {
           if(!active.current)throw new Error("准备已取消，未发送音频请求；编辑仍保留。");
-          const operation = await submitOperation<{ unit?: GenerationUnit; job?: Job }>("group:" + chapter.id, { kind: "groupAndGenerate", chapterId: chapter.id, revision: draftScopeRevision("chapter:" + chapter.id, chapter.revision), ids: value.ids, guidance: value.guidance, mode: "dry", grantId, ...(resumeRoute?{resumeRoute:true}:{}) }, state?.jobs);
+          const operation = await submitOperation<{ unit?: GenerationUnit; job?: Job }>("group:" + chapter.id, { kind: "groupAndGenerate", chapterId: chapter.id, revision: draftScopeRevision("chapter:" + chapter.id, chapter.revision), ids: value.ids, guidance: value.guidance, mode: "dry", ...(resumeRoute?{resumeRoute:true}:{}) }, state?.jobs);
           const unit = operation.result?.unit;
           if (!unit) throw new Error(operation.error || "对话尚未创建，请处理提示后重试。");
           savedUnit = unit; warning = operation.error ? "对话已保存，声音未生成：" + operation.error : undefined;
@@ -72,11 +71,10 @@ export function CreateGroup({ chapter, ids, roles, enabled, state, refresh, clos
     }
     finally { if (active.current) {setResumeRoute(false);setPending(false);} }
   };
-  const voiceIds = [...new Set(chapter.segments.filter(segment => controller.draft.ids.includes(segment.id)).flatMap(segment => segment.voiceId ? [segment.voiceId] : []))];
   return <Dialog title="一起演绎" presentation="sidepanel" onClose={close} footer={<>
     <p className="task-request-summary">这 {controller.draft.ids.length} 句一起生成 · 1 次音频请求 · 原有声音保留</p>
     {state?.settings.routeBlocked&&<label className="check-label warning"><input type="checkbox" checked={resumeRoute} disabled={pending} onChange={event=>setResumeRoute(event.target.checked)}/>已核对接口权限与额度，恢复本次声音请求。</label>}
-    <button className="button primary" disabled={!enabled || pending || controller.composing || !grantId || !!preview?.conflicts.length || controller.base !== 0 || state?.settings.configured === false || state?.settings.audioTools === false || (state?.settings.routeBlocked&&!resumeRoute)} onClick={() => void generate()}>{pending ? "正在准备这段对话…" : "生成这段对话"}</button>
+    <button className="button primary" disabled={!enabled || pending || controller.composing || !!preview?.conflicts.length || controller.base !== 0 || state?.settings.configured === false || state?.settings.audioTools === false || (state?.settings.routeBlocked&&!resumeRoute)} onClick={() => void generate()}>{pending ? "正在准备这段对话…" : "生成这段对话"}</button>
     {state?.settings.routeBlocked && <p className="warning">声音接口已暂停。核对权限与额度后，勾选上方恢复选项，再点击生成。</p>}
   </>}>
     <p className="task-panel-summary">连续台词一起演绎，修改其中一句会重做整段。生成成功后才替换当前编排。</p>
@@ -84,7 +82,6 @@ export function CreateGroup({ chapter, ids, roles, enabled, state, refresh, clos
     <Field label="希望他们怎样接话？" hint="例如：紧张地争论，轮流接话，后一句稍有迟疑。"><textarea rows={3} disabled={pending || controller.frozen} value={controller.draft.guidance} onCompositionStart={controller.compositionStart} onCompositionEnd={controller.compositionEnd} onChange={event => { controller.edit({ guidance: event.target.value }); setPreview(null); }} /></Field>
     {preview?.conflicts?.map((conflict, index) => <p className="warning" key={index}>{message(conflict)}</p>)}
     {error && <p className="error-inline" role="alert">{error}</p>}
-    <TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="制作这段对话" steps={["unit-generate"]} model={state?.settings.model} voiceIds={voiceIds} onReady={setGrantId} disabled={pending} />
     <details><summary>未完成编辑与请求详情</summary><ObjectDraftTools inline controller={controller} title="这段对话" onError={setError} render={value => <><Members ids={value.ids} chapter={chapter} roles={roles} open={open} /><p>{value.guidance}</p></>} />{preview?.prompt && <pre className="prompt-text">{preview.prompt}</pre>}</details>
     {controller.base !== 0 && <p className="warning">对话已保存。请从正文中的对话块继续，不会再次创建相同对话。</p>}
   </Dialog>;
@@ -102,7 +99,7 @@ export default function UnitPanel(props: UnitPanelProps) {
   return <UnitDetails key={props.unit.id + "/" + mode} {...props} mode={mode} setMode={setMode} />;
 }
 function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, close, open, play, playingId, mode, setMode, initialEventId, onTask }: UnitPanelProps & { mode: "dry" | "scene"; setMode: (mode: "dry" | "scene") => void }) {
-  const [error, setError] = useState(""), [pending, setPending] = useState(false), [grantId, setGrantId] = useState<string | null>(null), [resumeRoute,setResumeRoute]=useState(false);
+  const [error, setError] = useState(""), [pending, setPending] = useState(false), [resumeRoute,setResumeRoute]=useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [feedbackScope, setFeedbackScope] = useState("generate"), [notice, setNotice] = useState("");
   useEffect(()=>{setResumeRoute(false);},[state.settings.routeBlocked,state.settings.model]);
@@ -206,7 +203,7 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
           kind: mode === "scene" ? "sceneAndGenerate" : "generateSelection", chapterId: chapter.id,
           revision,
           ...(mode === "scene" ? { unitId: unit.id, entityRevision: confirmed.current.revision, eventIds: [...confirmedEvents.current.values()].filter(event => event.state === "adopted").map(event => event.id) } : { ids: unit.members, unitId: unit.id, mode, regenerate: true }),
-          grantId, ...(unknown && retryUnknown ? { retryUnknown: true, ...(outstandingAttemptIds.length?{acknowledgedAttemptIds:outstandingAttemptIds}:{}) } : {}), ...(resumeRoute?{resumeRoute:true}:{}),
+          ...(unknown && retryUnknown ? { retryUnknown: true, ...(outstandingAttemptIds.length?{acknowledgedAttemptIds:outstandingAttemptIds}:{}) } : {}), ...(resumeRoute?{resumeRoute:true}:{}),
         }, state.jobs);
         if (operation.error&&active.current) setError((operation.outcome === "prepared" ? "设置已保存，声音尚未生成：" : "") + operation.error);
         if(active.current)setRetryUnknown(false); await refresh();
@@ -216,7 +213,6 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
   };
   const openEvent = (id: string, scope = id === "new" ? "settings" : id) => void run(async () => { await controller.flush(); setEventSelection(undefined); setEditingEvent(id); }, scope);
   const eventUnit = { ...unit, revision: confirmed.current.revision }, eventChapter = { ...chapter, revision: draftScopeRevision("chapter:" + chapter.id, confirmed.current.chapterRevision) };
-  const voiceIds = [...new Set(chapter.segments.filter(segment => unit.members.includes(segment.id)).flatMap(segment => segment.voiceId ? [segment.voiceId] : []))];
   const keptMode = variant.current && status.validity !== "broken" ? mode : unit.mode, kept = unit.variants[keptMode];
   const memberAudio = !kept.current && unit.state === "pending" ? chapter.playbackItems.find(item => item.audioId && item.validity === "matched" && (item.members || [item.id]).some(id => unit.members.includes(id))) : undefined;
   const keptId = kept.current || memberAudio?.audioId;
@@ -231,12 +227,11 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
     </div>
     <div className="unit-submit-actions">
     {job ? <div role="status"><p>{labels[job.status]} · {job.done} / {job.total}</p><button className="button secondary" onClick={() => void run(async () => { await action("job.stop", { id: job.id }); await refresh(); }, "generate")}>停止后续请求</button></div> : <>
-      {localRecoveryPending ? <button className="button primary" disabled={pending} onClick={viewRecord}>查看并免费恢复</button> : <button className={"button " + (needsPresenceTemplate ? "secondary" : "primary")} aria-describedby={needsPresenceTemplate ? "unit-template-required-" + unit.id : undefined} disabled={needsPresenceTemplate || !enabled || !state.settings.configured || !state.settings.audioTools || locked || pending || !grantId || !!editingEvent || controller.composing || (!!unknown && !retryUnknown) || (state.settings.routeBlocked&&!resumeRoute)} onClick={() => void generate()}>{pending ? feedbackScope === "generate" ? "正在保存与准备…" : "正在处理当前操作…" : unknown ? "再次提交 1 次请求" : status.validity === "matched" ? "再做一版" : mode === "scene" ? "应用并生成带背景声" : unit.kind === "group" ? "生成这段对话" : "更新这句声音"}</button>}
+      {localRecoveryPending ? <button className="button primary" disabled={pending} onClick={viewRecord}>查看并免费恢复</button> : <button className={"button " + (needsPresenceTemplate ? "secondary" : "primary")} aria-describedby={needsPresenceTemplate ? "unit-template-required-" + unit.id : undefined} disabled={needsPresenceTemplate || !enabled || !state.settings.configured || !state.settings.audioTools || locked || pending || !!editingEvent || controller.composing || (!!unknown && !retryUnknown) || (state.settings.routeBlocked&&!resumeRoute)} onClick={() => void generate()}>{pending ? feedbackScope === "generate" ? "正在保存与准备…" : "正在处理当前操作…" : unknown ? "再次提交 1 次请求" : status.validity === "matched" ? "再做一版" : mode === "scene" ? "应用并生成带背景声" : unit.kind === "group" ? "生成这段对话" : "更新这句声音"}</button>}
       {needsPresenceTemplate && !localRecoveryPending && <button className="button primary" aria-describedby={"unit-template-required-" + unit.id} disabled={editLocked || pending || !!editingEvent || controller.composing || controller.frozen} onClick={() => previewTemplate("scene-v4-presence-1", "generate")}>查看并切换到 v4</button>}
       {state.settings.routeBlocked && <p className="warning">声音接口已暂停。核对权限与额度后，勾选上方恢复选项，再点击生成。</p>}
       {!state.settings.configured && <p className="warning">尚未连接声音接口，请打开设置与连接。</p>}
       {!state.settings.audioTools && <p className="warning">音频处理不可用，请打开设置与连接检查。</p>}
-      {!grantId && enabled && <p className="hint">先在“生成权限与剩余次数”中允许本次制作范围，再生成新版。</p>}
       {!!editingEvent && <p className="hint">先点击正在编辑的背景旁“完成编辑”，再生成新版。</p>}
     </>}
     </div>
@@ -275,7 +270,7 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
         {!!status.promptIssues?.length && <p className="warning">{status.promptIssues.join("；")}</p>}
         <div className="unit-current-action">{!unknown && <button className="button secondary" disabled={!variant.current || !connected || status.validity === "broken"} onClick={() => play(variant.current!, modeLabel(mode) + (status.validity !== "matched" ? " · 旧版" : ""), invalid || unit.state === "dissolved")}>{playingId===variant.current?"暂停":"试听"}{status.validity === "matched" ? "这份声音" : "旧版声音"}</button>}<button className="button secondary" aria-describedby={switchHint ? switchHintId : undefined} disabled={pending || !!editingEvent || editLocked || unit.mode === mode || status.validity !== "matched" || relatedDraft} onClick={() => void run(async () => { await action("unit.switch", { ...payload, mode }); await refresh(); }, "current", "已选用" + modeLabel(mode) + "，整章试听与导出会使用它。") }>{using ? "正在使用" + modeLabel(mode) : mode === "dry" ? "切回纯人声" : "使用这份带背景声"}</button></div>
         {switchHint && <p className="hint" id={switchHintId}>{switchHint}</p>}
-        <div className="unit-review-actions"><button className="button secondary small" disabled={status.review === "passed" || pending || editLocked || !connected || status.validity !== "matched" || unitHasDraft(unit, events, mode)} onClick={() => void run(async () => { await action("unit.review", { ...payload, mode, audioId: variant.current, basis: status.basis, state: "passed" }); await refresh(); }, "current", "已记录你的人工听评通过。") }>{status.review === "passed" ? "人工听评已通过" : "我已试听，检查通过"}</button><button className="button secondary small warning" disabled={status.review === "rework" || pending || editLocked || status.validity !== "matched"} onClick={() => void run(async () => { await action("unit.review", { ...payload, mode, audioId: variant.current, basis: status.basis, state: "rework" }); await refresh(); }, "current", "已标记需要重做；当前声音保留，尚未提交生成请求。") }>{status.review === "rework" ? "已标记需要重做" : "标记需要重做"}</button></div>
+        <div className="unit-review-actions"><button className="button secondary small" disabled={status.review === "passed" || pending || editLocked || !connected || status.validity !== "matched" || unitHasDraft(unit, events, mode)} onClick={() => void run(async () => { await action("unit.review", { ...payload, mode, audioId: variant.current, basis: status.basis, ...(status.rangeContentKey ? {rangeContentKey:status.rangeContentKey} : {}), state: "passed" }); await refresh(); }, "current", "已记录你的人工听评通过。") }>{status.review === "passed" ? "人工听评已通过" : "我已试听，检查通过"}</button><button className="button secondary small warning" disabled={status.review === "rework" || pending || editLocked || status.validity !== "matched"} onClick={() => void run(async () => { await action("unit.review", { ...payload, mode, audioId: variant.current, basis: status.basis, ...(status.rangeContentKey ? {rangeContentKey:status.rangeContentKey} : {}), state: "rework" }); await refresh(); }, "current", "已标记需要重做；当前声音保留，尚未提交生成请求。") }>{status.review === "rework" ? "已标记需要重做" : "标记需要重做"}</button></div>
         {feedback("current")}
       </section>
       <details className="task-panel-section unit-history"><summary>历史声音 · {visibleHistory.length} 版</summary>
@@ -328,7 +323,6 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
       {feedback("settings")}
       </details>
       {!singleDry && <><ObjectDraftTools inline controller={controller} title="表演要求" onError={failure => { setFeedbackScope("draft-tools"); setError(failure); }} render={value => <p>{value.guidance}</p>} />{feedback("draft-tools")}</>}
-      {enabled && <details className="unit-submit-authorization" open={!unknown}><summary>生成权限与剩余次数</summary><TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label={mode === "scene" ? "制作这份带背景声" : "制作这段声音"} steps={["unit-generate"]} model={state.settings.model} voiceIds={voiceIds} onReady={setGrantId} disabled={pending || editLocked} /></details>}
       <details className="task-panel-section unit-advanced"><summary>高级设置与请求记录</summary>
         <Field label="下一次生成的提示模板" hint={targetTemplate !== currentTemplate ? "尚未应用，请先查看模板差异。" : undefined}><Select label="提示模板" value={targetTemplate} options={[...(currentTemplate && !templates.some(template => template.id === currentTemplate) ? [{ value: currentTemplate, label: currentTemplate + " · 已保存" }] : []), ...templates.map(template => ({ value: template.id, label: template.name + (mode === "scene" ? template.id === "scene-v4-presence-1" ? " · 默认" : " · 旧版" : "") }))]} onChange={setTargetTemplate} /></Field>
         <button className="button secondary small" disabled={editLocked || pending || !!editingEvent || controller.composing || controller.frozen || !targetTemplate || targetTemplate === currentTemplate || unitHasDraft(unit, events, mode)} onClick={() => previewTemplate(targetTemplate, "advanced")}>查看模板差异</button>
@@ -346,7 +340,7 @@ function UnitDetails({ unit, chapter, roles, state, locked, connected, refresh, 
     {showHelp && <Dialog title={mode === "scene" ? "声音背景 · 操作说明" : "纯人声 · 操作说明"} onClose={() => setShowHelp(false)}>
       <div className="unit-help-content">
         <section><h3>试听与选用</h3><p>试听不改变整章使用的声音。选用已有声音用于整章试听与导出，不会重新生成或产生费用。显示“正在使用…”时，已选用，无需再次点击。</p></section>
-        <section><h3>听评与生成</h3><p>检查通过只记录人工听评；标记重做保留原声音，需要你另行点击生成。授权限定本次制作范围与请求次数，不会自动发送。结果不明时先查看记录，再决定是否重试。</p></section>
+        <section><h3>听评与生成</h3><p>检查通过只记录人工听评；标记重做保留原声音，需要你另行点击生成。点击生成只制作当前这句或这段声音，不会自动扩大范围。结果不明时先查看记录，再决定是否重试。</p></section>
         <section><h3>历史声音</h3><p>设置一致可直接使用；旧设置先核对差异，再恢复。恢复不重新生成，也不会撤销后来修改的台词、角色、参考声音或数值设置。新版生成后仍保留旧音频和历史。请求记录与可试听的历史声音分别查看。</p></section>
         {mode === "scene" ? <>
           <section><h3>背景存在感</h3><p>默认选择清楚；轻、自然、清楚会同时用于 AI 声音建议与下一次旁白、背景联合生成。已有音频保持原样。声音描述与存在感矛盾时，需要先修改描述或共同要求，不会将两种要求一同发送。首次使用且没有旧模板或场景历史时，默认使用 v4；已保存的旧模板仍保留。点“查看并切换到 v4”比较提示，再点“使用这个模板”。核对与启用免费，确认后仍须点击生成新版。实际背景效果仍需试听检查。</p></section>

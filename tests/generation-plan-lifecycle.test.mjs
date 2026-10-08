@@ -23,7 +23,7 @@ const plan=(revision=4,ids=['one'])=>({chapterId:'chapter',revision,arrangement:
 function fixture(){
   const calls={api:[],paid:[],grants:[],chapters:[],plans:[],errors:[],notices:[],refresh:0};
   const waiting=new Map();
-  const env={chapter:chapter(),chapterRef:{current:'chapter'},generationIntent:{current:0},generationPlan:{plan:plan(),ids:['one'],regenerate:true,retryUnknown:true,resumeRoute:true},grantId:'old-grant',state:{jobs:[],settings:{model:'fixture-audio'}},
+  const env={chapter:chapter(),chapterRef:{current:'chapter'},generationIntent:{current:0},generationPlan:{plan:plan(),ids:['one'],regenerate:true,retryUnknown:true,resumeRoute:true},grantId:'old-grant',state:{jobs:[],settings:{model:'fixture-audio',routeBlocked:true}},
     playIntent:{current:0},segmentDeletionIntent:{current:0},pendingPlay:{current:null},pendingPlaySnapshot:{current:null},audio:{current:{pause(){}}},
     withSavedDrafts:async(_scope,_dependencies,next)=>{const pending=waiting.get('save')?.shift();if(pending)await pending.promise;return next();},hasDraft:()=>false,unitHasDraft:()=>false,draftScopeRevision:(_scope,revision)=>revision,
     api:async(path,payload)=>{calls.api.push({path,payload});const pending=waiting.get(path)?.shift();if(pending)return pending.promise;return path.startsWith('/chapters/')?chapter(7):plan(payload.revision,payload.ids);},
@@ -35,7 +35,7 @@ function fixture(){
     setGrantId:value=>{env.grantId=value;},setError:value=>calls.errors.push(value),setNotice:value=>calls.notices.push(value),
     setDeleteTarget(){},setRenameTarget(){},setSegmentDeletion(){},setInspectorOpen(){},setVoiceTarget(){},setUnitPanelId(){},setUnitInitialMode(){},setPlayer(){},setNavOpen(){},
   };
-  function render(){env.closeGeneration=project(declaration('closeGeneration'),env);env.generate=project(declaration('generate'),env);env.planIntent=project(declaration('planIntent'),env);return {generate:env.generate,recheck:project(callback('onRecheck'),env),close:project(callback('onClose'),env),grant:project(callback('onGrant'),env),pick:project(declaration('pickChapter'),env),submit:project(declaration('submitGeneration'),env)};}
+  function render(){env.closeGeneration=project(declaration('closeGeneration'),env);env.submitGeneration=project(declaration('submitGeneration'),env);env.generate=project(declaration('generate'),env);return {generate:env.generate,recheck:project(callback('onRecheck'),env),close:project(callback('onClose'),env),pick:project(declaration('pickChapter'),env),submit:env.submitGeneration};}
   function defer(path){let resolve,reject;const pending={promise:new Promise((yes,no)=>{resolve=yes;reject=no;}),resolve:value=>resolve(value),reject:error=>reject(error)};waiting.set(path,[...(waiting.get(path)||[]),pending]);return pending;}
   return {env,calls,render,defer};
 }
@@ -62,29 +62,25 @@ test('关闭后同章第二次计划先完成，旧第一次核对迟到不能�
   assert.equal(f.calls.api.filter(call=>call.path==='/operations/plan').length,1);assert.equal(f.calls.paid.length,0);
 });
 
-test('正常重新核对使用新章版本并清授权，只有明确开始生成才提交一次',async()=>{
+test('变化后重新核对使用新章版本，只有明确开始生成才提交一次',async()=>{
   const f=fixture();await f.render().recheck();
   assert.equal(f.env.chapter.revision,7);assert.equal(f.env.generationPlan.plan.revision,7);
   assert.deepEqual(f.env.generationPlan.ids,['one']);assert.equal(f.env.generationPlan.regenerate,true);
-  assert.equal(f.env.generationPlan.retryUnknown,false);assert.equal(f.env.generationPlan.resumeRoute,false);assert.equal(f.env.grantId,null);
+  assert.equal(f.env.generationPlan.retryUnknown,false);assert.equal(f.env.generationPlan.resumeRoute,false);assert.equal(f.calls.grants.length,0);
   assert.equal(f.calls.paid.length,0);assert.deepEqual(f.calls.api.map(call=>call.path),['/chapters/chapter','/operations/plan']);
-  f.render().grant('fresh-grant');await f.render().submit();
-  assert.equal(f.calls.paid.length,1);assert.equal(f.calls.paid[0][1].revision,7);assert.equal(f.calls.paid[0][1].grantId,'fresh-grant');assert.equal(f.env.generationPlan,null);
+  await f.render().submit();
+  assert.equal(f.calls.paid.length,1);assert.equal(f.calls.paid[0][1].revision,7);assert.equal('grantId' in f.calls.paid[0][1],false);assert.equal(f.env.generationPlan,null);
 });
 
 test('真实按钮同一调用直接携带unknown及恢复决定，仍绑定确切attempt IDs',async()=>{
   const f=fixture();f.env.generationPlan.retryUnknown=false;f.env.generationPlan.resumeRoute=false;f.env.generationPlan.plan.outstandingAttemptIds=['attempt-original'];
-  await f.render().submit('explicit-grant',{retryUnknown:true,resumeRoute:true});assert.equal(f.calls.paid.length,1);const payload=f.calls.paid[0][1];assert.equal(payload.retryUnknown,true);assert.equal(payload.resumeRoute,true);assert.deepEqual(payload.acknowledgedAttemptIds,['attempt-original']);assert.equal(payload.grantId,'explicit-grant');
-});
-
-test('同卡生成等候具体grant时取消，不发声音；迟到授权不重开窗口',async()=>{
-  const f=fixture();f.env.grantId=null;const grant=f.defer('grant'),callbacks=f.render(),pending=callbacks.submit(undefined,{retryUnknown:true});await tick();assert.equal(f.calls.grants.length,1);assert.equal(f.calls.paid.length,0);callbacks.close();grant.resolve('grant');await pending;assert.equal(f.calls.paid.length,0);assert.equal(f.env.generationPlan,null);
+  await f.render().submit('explicit-grant',{retryUnknown:true,resumeRoute:true});assert.equal(f.calls.paid.length,1);const payload=f.calls.paid[0][1];assert.equal(payload.retryUnknown,true);assert.equal(payload.resumeRoute,true);assert.deepEqual(payload.acknowledgedAttemptIds,['attempt-original']);assert.equal('grantId' in payload,false);
 });
 
 test('真实切章回调取消旧章核对，迟到读取不能触及新章或付费提交',async()=>{
   const f=fixture(),read=f.defer('/chapters/chapter'),callbacks=f.render(),pending=callbacks.recheck();
   callbacks.pick('other');read.resolve(chapter(7));await Promise.allSettled([pending]);
-  assert.equal(f.env.chapterRef.current,'other');assert.equal(f.env.generationPlan,null);assert.equal(f.env.grantId,null);
+  assert.equal(f.env.chapterRef.current,'other');assert.equal(f.env.generationPlan,null);assert.equal(f.calls.grants.length,0);
   assert.deepEqual(f.calls.chapters,[]);assert.equal(f.calls.api.filter(call=>call.path==='/operations/plan').length,0);assert.equal(f.calls.paid.length,0);
 });
 
@@ -126,9 +122,27 @@ test('已明确提交的旧回执仍刷新任务，但不关闭后来新计划�
   assert.equal(f.calls.refresh,1,'已经发送的操作回执仍需刷新任务');assert.equal(f.calls.paid.length,1);
 });
 
-test('关闭后旧授权回调迟到，不会将授权写入同章新计划',async()=>{
-  const f=fixture(),old=f.render();old.close();await f.render().generate(['two']);const second=f.env.generationPlan;
-  old.grant('expired-grant');assert.equal(f.env.grantId,null);assert.equal(f.env.generationPlan,second);assert.equal(f.calls.paid.length,0);
+test('普通一击按新计划直接生成，不读取授权、不提交旧卡范围',async()=>{
+  const f=fixture();f.env.state.settings.routeBlocked=false;
+  await f.render().generate(['two'],false,{regenerate:true});
+  assert.equal(f.calls.paid.length,1);assert.deepEqual(f.calls.paid[0][1].ids,['two']);assert.equal(f.calls.paid[0][1].regenerate,true);
+  assert.equal('grantId' in f.calls.paid[0][1],false);assert.equal(f.calls.grants.length,0);assert.equal(f.env.generationPlan,null);
+});
+
+test('普通入口等待计划期间有新范围，迟到旧计划不再发送；未知结果仍留一次决定',async()=>{
+  const f=fixture();f.env.state.settings.routeBlocked=false;const slow=f.defer('/operations/plan'),first=f.render().generate(['one']);await tick();
+  await f.render().generate(['two']);slow.resolve(plan());await first;
+  assert.equal(f.calls.paid.length,1);assert.deepEqual(f.calls.paid[0][1].ids,['two']);assert.equal(f.env.generationPlan,null);
+  const unknown=fixture();unknown.env.state.settings.routeBlocked=false;
+  unknown.env.api=async(_path,p)=>({...plan(p.revision,p.ids),outstandingAttemptIds:['real-unknown-attempt']});
+  await unknown.render().generate(['one']);assert.equal(unknown.calls.paid.length,0);assert.deepEqual(unknown.env.generationPlan.plan.outstandingAttemptIds,['real-unknown-attempt']);
+});
+
+test('直接提交前范围失效，不自动扩大或再发，显示免费重新核对的具体卡',async()=>{
+  const f=fixture();f.env.state.settings.routeBlocked=false;
+  f.env.submitOperation=async(...args)=>{f.calls.paid.push(args);return{error:'本次内容已变化',errorStatus:409,jobIds:[]};};
+  await f.render().generate(['two']);assert.equal(f.calls.paid.length,1);assert.equal(f.env.generationPlan.invalidated,true);assert.deepEqual(f.env.generationPlan.ids,['two']);
+  assert.equal(f.calls.grants.length,0);
 });
 
 test('已有匹配待检查声音的生成所选明确重做两条，普通生成仍复用且零提交',async t=>{
@@ -142,7 +156,7 @@ test('已有匹配待检查声音的生成所选明确重做两条，普通生�
   t.mock.method(globalThis,'fetch',async()=>{calls++;return new Response(bytes,{headers:{'Content-Type':'audio/wav'}});});
   worker.enqueue({kind:'generate',chapterId:chapterRow.id,revision:rev(),ids,commandId:uid()});await worker.tick();
   const current=domain.chapter(chapterRow.id);assert.ok(current.segments.every(s=>s.validity==='matched'&&s.review==='pending'));assert.equal(calls,2);
-  const f=fixture();f.env.chapter=current;f.env.chapterRef.current=current.id;f.env.generationPlan=null;f.env.grantId=null;
+  const f=fixture();f.env.chapter=current;f.env.chapterRef.current=current.id;f.env.generationPlan=null;f.env.state.settings.routeBlocked=false;
   f.env.api=async(path,payload)=>{f.calls.api.push({path,payload});assert.equal(path,'/operations/plan');return experience.plan(payload);};
   f.env.submitOperation=async(name,request)=>{f.calls.paid.push([name,request]);return experience.run({operationId:uid(),...request});};
   await f.render().generate(ids);assert.equal(f.env.generationPlan,null);assert.equal(f.calls.api.at(-1).payload.actionKind,'updateSelected');assert.match(f.calls.notices.at(-1),/复用/);assert.equal(f.calls.paid.length,0);
@@ -150,9 +164,8 @@ test('已有匹配待检查声音的生成所选明确重做两条，普通生�
   const selectedButton=find(node=>ts.isJsxElement(node)&&node.openingElement.tagName.getText(file)==='button'&&node.children.some(child=>ts.isJsxText(child)&&child.getText(file).includes('生成所选')));
   const click=selectedButton.openingElement.attributes.properties.find(node=>ts.isJsxAttribute(node)&&node.name.getText(file)==='onClick').initializer.expression;
   await project(click,{checked:ids,generate:f.render().generate,run:work=>work()})();
-  assert.equal(f.calls.api.at(-1).payload.actionKind,'forceRegenerate');assert.equal(f.env.generationPlan.plan.audioRequests,2);assert.ok(f.env.generationPlan.plan.units.every(u=>!u.reuse));assert.deepEqual(f.env.generationPlan.ids,ids);
-  const grant=experience.grant({grantId:uid(),projectId:projectRow.id,chapterId:chapterRow.id,steps:['unit-generate'],materials:['text','reference'],voiceIds:[voice.id],textLimit:0,audioLimit:2});
-  f.render().grant(grant.grantId);await f.render().submit();assert.equal(f.calls.paid.length,1);assert.equal(f.calls.paid[0][1].actionKind,'forceRegenerate');assert.deepEqual(f.calls.paid[0][1].ids,ids);
+  assert.equal(f.calls.api.at(-1).payload.actionKind,'forceRegenerate');assert.equal(f.env.generationPlan,null);assert.equal(f.calls.grants.length,0);
+  assert.equal(f.calls.paid.length,1);assert.equal(f.calls.paid[0][1].actionKind,'forceRegenerate');assert.deepEqual(f.calls.paid[0][1].ids,ids);assert.equal('grantId' in f.calls.paid[0][1],false);
   const job=store.all('jobs',chapterRow.id).at(-1);assert.equal(job.kind,'unit-generate');assert.deepEqual(job.unitIds,ids);assert.equal(store.all('attempts',job.id).length,2);
   await worker.tick();assert.equal(calls,4,'两条已匹配但待检查的声音均收到一次新的Mock生成请求');assert.equal(store.get('jobs',job.id).status,'success');
 });

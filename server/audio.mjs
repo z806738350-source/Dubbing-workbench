@@ -10,7 +10,10 @@ import {
   appendFile,
   copyFile,
 } from "node:fs/promises";
-import { constants, existsSync, rmSync, statSync, renameSync, readFileSync } from "node:fs";
+import { constants, existsSync, rmSync, statSync, renameSync, readFileSync, createReadStream, createWriteStream } from "node:fs";
+import { pipeline } from 'node:stream/promises';
+import { renderRangeResource } from './audio-range.mjs';
+import { pcmWave } from './tail-audio.mjs';
 import { join, dirname } from "node:path";
 import { projectFile, projectExportFile } from './workspace.mjs';
 import { fail, uid, text } from "./store.mjs";
@@ -221,39 +224,49 @@ export async function buildMaster(store, segments, gap, id) {
   const mapping = [];
   const gapFrames = Math.round(gap * 48000);
   try {
+    const inputs=[];
+    for(const {s,a,range} of segments){
+      const source=range ? await renderRangeResource(store,s.unitId || s.id,s.mode || 'dry',a.id,range.startFrame,range.endFrame,range) : null;
+      const input=source ? source.path : join(store.directory,a.path);
+      const wave=await pcmWave(input,w=>w.sampleRate===48000?{offset:w.offset,length:w.length,channels:w.channels}:null);
+      inputs.push({input,wave});
+    }
+    const channels=inputs.length&&inputs.every(({wave})=>wave?.channels===2)?2:1;
     for (let i = 0; i < segments.length; i++) {
-      const { s, a } = segments[i];
+      const { s, a, range } = segments[i];
+      const {input,wave}=inputs[i],direct=wave?.channels===channels?wave:null;
       const temp = base + `-${i}.pcm.part`;
       try {
-        await exec(ffmpeg, [
+        if (!direct) await exec(ffmpeg, [
           "-v",
           "error",
           "-xerror",
           "-i",
-          join(store.directory, a.path),
+          input,
           "-ar",
           "48000",
           "-ac",
-          "1",
+          String(channels),
           "-f",
           "s16le",
           "-y",
           temp,
         ]);
-        const raw = await readFile(temp);
-        if (!raw.length || raw.length % 2) fail("音频采样帧不完整");
-        const frames = raw.length / 2;
-        await appendFile(pcm, raw);
+        const bytes = direct ? direct.length : statSync(temp).size;
+        if (!bytes || bytes % (channels*2)) fail("音频采样帧不完整");
+        const frames = bytes / (channels*2);
+        await pipeline(createReadStream(direct ? input : temp,direct ? {start:direct.offset,end:direct.offset+bytes-1} : undefined), createWriteStream(pcm, { flags: 'a' }));
         mapping.push({
           ...(s.kind === "group" ? {} : {segmentId: s.members?.[0] || s.id}),
           ...(s.unitId ? { unitId: s.unitId, memberIds: s.members, mode: s.mode } : {}),
           audioId: a.id,
+          ...(range ? { sourceHash: range.sourceHash, clipStartFrame: range.startFrame, clipEndFrame: range.endFrame, rangeRevision: range.revision, decodeProfile: range.decodeProfile, edgePolicy: range.edgePolicy } : { clipStartFrame: 0, clipEndFrame: frames }),
           startFrame: cursor,
           endFrame: cursor + frames,
         });
         cursor += frames;
         if (i < segments.length - 1) {
-          await appendFile(pcm, Buffer.alloc(gapFrames * 2));
+          await appendFile(pcm, Buffer.alloc(gapFrames * channels * 2));
           cursor += gapFrames;
         }
       } finally {
@@ -268,9 +281,11 @@ export async function buildMaster(store, segments, gap, id) {
       "-ar",
       "48000",
       "-ac",
-      "1",
+      String(channels),
       "-i",
       pcm,
+      "-ac",
+      "1",
       "-c:a",
       "pcm_s16le",
       "-f",

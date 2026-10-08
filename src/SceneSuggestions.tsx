@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { Select } from "./components";
 import { draftScopeRevision, withSavedDrafts } from "./autosave";
-import TaskAuthorization from "./TaskAuthorization";
 import { submitOperation } from "./taskOperations";
 import type { ChapterDetail, GenerationUnit, SoundEvent, SceneReusePreview } from "./types";
 
@@ -16,7 +15,7 @@ export default function SceneSuggestions({ unit, chapter, contextRevision, model
   const records = (chapter.suggestions as Suggestion[]).filter(record => record.kind === "scene" && record.unitId === unit.id);
   const [selected, setSelected] = useState<string[]>([]), [view, setView] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [grantId, setGrantId] = useState<string | null>(null), [pending, setPending] = useState<"analysis" | "apply" | null>(null), [error, setError] = useState(""), [applyError, setApplyError] = useState("");
+  const [pending, setPending] = useState<"analysis" | "apply" | null>(null), [error, setError] = useState(""), [applyError, setApplyError] = useState("");
   const [appliedMessage, setAppliedMessage] = useState("");
   const [reusePreview, setReusePreview] = useState<{key:string;result:SceneReusePreview} | null>(null), [previewError,setPreviewError] = useState(""), [previewRetry,setPreviewRetry] = useState(0);
   const live=useRef(true);useEffect(()=>()=>{live.current=false;},[]);
@@ -57,7 +56,7 @@ export default function SceneSuggestions({ unit, chapter, contextRevision, model
         const base = savedBase ? await savedBase() : { revision: draftScopeRevision("chapter:" + chapter.id, chapter.revision), entityRevision: unit.revision };
         if(!live.current)return;
         if (base.revision !== draftScopeRevision("chapter:" + chapter.id, chapter.revision)) throw new Error("声音背景在准备期间发生了变化，请核对后再分析。");
-        const result = await submitOperation<{ analysis: Suggestion }>("scene-analysis:" + unit.id, { kind: "prepareChapter", analysisKind: "scene", sceneEnabled: true, chapterId: chapter.id, revision: base.revision, unitId: unit.id, unitRevision: base.entityRevision, model, grantId });
+        const result = await submitOperation<{ analysis: Suggestion }>("scene-analysis:" + unit.id, { kind: "prepareChapter", analysisKind: "scene", sceneEnabled: true, chapterId: chapter.id, revision: base.revision, unitId: unit.id, unitRevision: base.entityRevision, model });
         if (result.error) throw new Error(result.error);
         if (!result.result?.analysis?.id) throw new Error("未取得这次分析的记录，请先在任务记录中核对。");
         if (live.current) { setView(result.result.analysis.id); setHistoryOpen(false); setSelected([]); }
@@ -100,10 +99,9 @@ export default function SceneSuggestions({ unit, chapter, contextRevision, model
     </section>;
   return <details className="task-panel-section scene-suggestions"><summary>让 AI 提供声音建议</summary>
     <div className="scene-analysis-toolbar">
-      <button className={"button " + (records.length ? "secondary" : "primary")} disabled={!enabled || !!pending || running || !grantId} aria-busy={pending === "analysis" || running} onClick={() => void analyze()}>{pending === "analysis" || running ? "正在分析…" : "分析声音建议"}</button>
-      <span className="hint">{grantId ? "已允许" : "先允许"} · 本次 1 次文本请求</span>
+      <button className={"button " + (records.length ? "secondary" : "primary")} disabled={!enabled || !!pending || running} aria-busy={pending === "analysis" || running} onClick={() => void analyze()}>{pending === "analysis" || running ? "正在分析…" : "分析声音建议"}</button>
+      <span className="hint">本次 1 次文本请求 · {model}</span>
     </div>
-    <details className="scene-analysis-permission"><summary>分析权限与模型</summary><p className="hint">文本模型：{model}</p><TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label="分析这段声音背景" step="text" steps={["scene"]} model={model} onReady={setGrantId} disabled={!enabled || !!pending || running} /></details>
     {error && <p className="error-inline" role="alert">{error}</p>}
     {!!records.length && <>
       <div className="scene-analysis-views" role="group" aria-label="声音建议结果">

@@ -7,7 +7,6 @@ import type { DraftRecord } from './drafts';
 import { withSavedDrafts, draftScopeRevision, hasLiveDraft } from './autosave';
 import { submitOperation } from './taskOperations';
 import VoiceCreation from './VoiceCreation';
-import TaskAuthorization from './TaskAuthorization';
 import type { VoiceTarget } from './VoiceCreation';
 import type { ChapterDetail, GenerationPlan, Role, Segment, State, Voice } from './types';
 
@@ -20,7 +19,7 @@ export function configurationDecided(segment:Segment,field?:'role'|'identity'):b
   });
 }
 export function playbackIdentity(items:ChapterDetail['playbackItems']|undefined):string {
-  return JSON.stringify(items?.map(({id,unitId,members,mode,audioId,basis,validity})=>({id,unitId,members,mode,audioId,basis,validity})));
+  return JSON.stringify(items?.map(({id,unitId,members,mode,audioId,basis,validity,sourceHash,clipStartFrame,clipEndFrame,rangeRevision,edgePolicy})=>({id,unitId,members,mode,audioId,basis,validity,sourceHash,clipStartFrame,clipEndFrame,rangeRevision,edgePolicy})));
 }
 export function chapterMemberState(chapter:ChapterDetail,segment:Segment){
   const item=chapter.playbackItems.find(item=>item.id===segment.id||item.members?.includes(segment.id));
@@ -43,7 +42,7 @@ export function chapterIssues(chapter:ChapterDetail, roles:Role[], voices:Voice[
     if(unknown.length) issues.push({key:'identity:'+roleId,kind:'identity',title:`核对${name}的说话人归属`,detail:`${unknown.length} 条需要判断。先查看原文，再确认或改绑角色。`,ids:unknown.map(s=>s.id),roleId});
     const missing=segments.filter(s=>!s.voiceId || !voices.some(v=>v.id===s.voiceId&&['active','archived'].includes(v.state)&&!v.deletePending));
     const generationMissing=missing.filter(s=>{const status=chapterMemberState(chapter,s);return status.validity!=='matched'||status.review==='rework';});
-    if(missing.length)issues.push({key:'voice:'+roleId,code:'reference_unavailable',kind:generationMissing.length?'voice':'advice',title:generationMissing.length?`为${name}选声音`:`${name}的参考已停用`,detail:generationMissing.length?`${generationMissing.length} 句的新生成需要可用参考。可应用到本章沿用默认声音的台词。`:'已有匹配声音仍可试听和导出；下一次生成前请改选可用参考。',ids:missing.map(s=>s.id),roleId});
+    if(missing.length)issues.push({key:'voice:'+roleId,code:'reference_unavailable',kind:generationMissing.length?'voice':'advice',title:generationMissing.length?`为${name}选声音`:`${name}的参考已停用`,detail:generationMissing.length?`${generationMissing.length} 句的新生成需要可用参考。可补齐未选声音的台词，并更新本章沿用默认声音的台词。`:'已有匹配声音仍可试听和导出；下一次生成前请改选可用参考。',ids:missing.map(s=>s.id),roleId});
     const pendingIdentity=segments.filter(s=>configurationDecided(s,'role')&&s.voiceId&&!configurationDecided(s,'identity'));
     if(pendingIdentity.length)issues.push({key:'sound-identity:'+roleId,kind:'identity',title:`核对${name}使用的声音`,detail:`${pendingIdentity.length} 条声音身份尚未确认。明确选用声音后继续。`,ids:pendingIdentity.map(s=>s.id),roleId});
   }
@@ -111,7 +110,7 @@ export function VoicePicker({state,chapter,roles,initialTarget,onClose,onRefresh
   const [uploaded,setUploaded]=useState<Voice|null>(null);
   const live=useRef({chapter,roles,scope});live.current={chapter,roles,scope};
   const active=useRef(true);useEffect(()=>()=>{active.current=false;},[]);
-  const affected=scope==='single'&&segment?[segment]:basis.chapter.segments.filter(s=>!s.excluded&&s.roleId===role?.id&&s.voiceSource!=='override');
+  const affected=scope==='single'&&segment?[segment]:basis.chapter.segments.filter(s=>!s.excluded&&s.roleId===role?.id&&(s.voiceSource!=='override'||!s.voiceId));
   const needsReview=chapter.id!==basis.chapter.id||draftScopeRevision('chapter:'+basis.chapter.id,chapter.revision)!==draftScopeRevision('chapter:'+basis.chapter.id,basis.chapter.revision)||
     (role&&roles.find(r=>r.id===role.id)?.revision!==role.revision)||!!(segment&&!chapter.segments.some(s=>s.id===segment.id&&!s.excluded));
   const target:VoiceTarget={projectId:basis.chapter.projectId,chapterId:basis.chapter.id,revision:basis.chapter.revision,roleId:scope==='chapter'?role?.id:undefined,segmentId:scope==='single'?segment?.id:undefined,entityRevision:role?.revision||1,apply:true,scope,chapterOnly:true,firstDefault:scope==='chapter'&&!role?.voiceId,dependencies:affected.map(s=>'segment:'+s.id).concat(role?'role:'+role.id:[]),needsReview:!!needsReview,label:scope==='single'?`第 ${(segment?.order||0)+1} 条`:role?.name};
@@ -129,7 +128,7 @@ export function VoicePicker({state,chapter,roles,initialTarget,onClose,onRefresh
   };
   return <Dialog title={`为${target.label||'当前角色'}选声音`} presentation="sidepanel" onClose={onClose} footer={tab!=='create'&&<button className="button primary" disabled={!picked||pending||!affected.length||!!needsReview||!(scope==='single'?segment:role)} onClick={()=>void use(picked)}>{pending?'正在保存并应用…':'用这个声音'}</button>}>
     {!!needsReview&&<section className="warning" role="alert"><p>章节或角色在选择期间发生了变化。你的声音选择仍保留，请重新核对范围后再应用。</p><button className="button secondary" disabled={pending} onClick={()=>{setBasis({chapter,roles});setError('');}}>重新核对当前范围</button></section>}
-    <section className="voice-scope"><h3>应用范围</h3><div className="tabs"><button disabled={pending} aria-pressed={scope==='chapter'} onClick={()=>setScope('chapter')}>角色在本章</button>{segment&&<button disabled={pending} aria-pressed={scope==='single'} onClick={()=>setScope('single')}>仅这一句</button>}</div><p className="hint">{affected.length} 条将使用所选声音。{scope==='chapter'?'只更新本章，保留已经单独指定声音的台词。'+(target.firstDefault?'首次绑定也设为未来新片段的角色默认。':''):'这句单独指定，其他台词继续沿用角色声音。'}</p><details><summary>查看受影响台词</summary>{affected.map(s=><p className="original-excerpt" key={s.id}>第 {s.order+1} 条 · {s.text}</p>)}</details></section>
+    <section className="voice-scope"><h3>应用范围</h3><div className="tabs"><button disabled={pending} aria-pressed={scope==='chapter'} onClick={()=>setScope('chapter')}>角色在本章</button>{segment&&<button disabled={pending} aria-pressed={scope==='single'} onClick={()=>setScope('single')}>仅这一句</button>}</div><p className="hint">{affected.length} 条将使用所选声音。{scope==='chapter'?'更新本章沿用默认或尚未选声音的台词，保留已单独指定的声音。'+(target.firstDefault?'首次绑定也设为未来新片段的角色默认。':''):'这句单独指定，其他台词继续沿用角色声音。'}</p><details><summary>查看受影响台词</summary>{affected.map(s=><p className="original-excerpt" key={s.id}>第 {s.order+1} 条 · {s.text}</p>)}</details></section>
     <div className="tabs task-tabs" aria-label="声音来源">{[['library','已有声音'],['upload','上传参考'],['create','描述创建']].map(([id,label])=><button key={id} disabled={pending} className={tab===id?'active':''} aria-pressed={tab===id} onClick={()=>setTab(id)}>{label}</button>)}</div>
     {tab==='library'&&<><div className="search-field"><Search size={16}/><input aria-label="查找声音" value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索声音名称"/></div><div className="voice-choice-list">{state.voices.filter(v=>v.state==='active'&&v.name.includes(query)).map(v=><article className={'voice-choice '+(picked===v.id?'selected':'')} key={v.id}><button className="voice-choice-main" onClick={()=>setPicked(v.id)} aria-pressed={picked===v.id}><strong>{v.name}</strong><small>{Math.round(v.duration)} 秒参考 · {v.sourceCandidateId?'描述创建':'参考录音'}{picked===v.id?' · 已选':''}</small></button><button className="icon" aria-label={'试听'+v.name} onClick={()=>play('voices',v.id,v.name)}><Play size={16}/></button></article>)}</div>{!state.voices.some(v=>v.state==='active')&&<p className="empty-inline">还没有声音。上传参考录音，或描述你想要的声音。</p>}</>}
     {tab==='upload'&&<Form label={uploaded?'已保存参考声音':'保存参考声音'} busy={pending||!!uploaded} onSubmit={async f=>{
@@ -203,19 +202,19 @@ export function RecoveryCenter({chapter,state,onClose,onRecovered}:{chapter:Chap
     {error&&<p className="error-inline" role="alert">{error}</p>}
   </Dialog>;
 }
-export function GeneratePlan({plan,chapter,model,concurrency,unknown,routeBlocked,busy,onGrant,onGenerate,onRecheck,onEdit,onClose}:{plan:GenerationPlan;chapter:ChapterDetail;model?:string;concurrency?:import('react').ReactNode;unknown:boolean;routeBlocked:boolean;busy:boolean;onGrant:(id:string|null)=>void;onGenerate:(grantId?:string,decision?:{retryUnknown?:boolean;resumeRoute?:boolean})=>Promise<void>;onRecheck:()=>Promise<void>;onEdit:(id:string)=>void;onClose:()=>void}){
-  const [invalid,setInvalid]=useState(false),[pending,setPending]=useState(false),[error,setError]=useState(''),[updated,setUpdated]=useState(false),[grantNeeded,setGrantNeeded]=useState(false);
+export function GeneratePlan({plan,chapter,model,concurrency,unknown,routeBlocked,busy,invalidated=false,onGenerate,onRecheck,onEdit,onClose}:{plan:GenerationPlan;chapter:ChapterDetail;model?:string;concurrency?:import('react').ReactNode;unknown:boolean;routeBlocked:boolean;busy:boolean;invalidated?:boolean;onGenerate:(grantId?:string,decision?:{retryUnknown?:boolean;resumeRoute?:boolean})=>Promise<void>;onRecheck:()=>Promise<void>;onEdit:(id:string)=>void;onClose:()=>void}){
+  const [invalid,setInvalid]=useState(invalidated),[pending,setPending]=useState(false),[error,setError]=useState(''),[updated,setUpdated]=useState(false);
   const execute=async(recheck:boolean)=>{
     if(pending||busy||!recheck&&invalid)return;
     setPending(true);setError('');
     try{if(recheck){await onRecheck();setInvalid(false);setUpdated(true);}else await onGenerate(undefined,{retryUnknown:unknown,resumeRoute:routeBlocked});}
-    catch(e){if((e as {status?:number}).status===409)setInvalid(true);else{setError((e as Error).message);setGrantNeeded((e as {code?:string}).code==='task-grant-needed');}}
+    catch(e){if((e as {status?:number}).status===409)setInvalid(true);else setError((e as Error).message);}
     finally{setPending(false);}
   };
   return <Dialog title="生成这次待办" presentation="sidepanel" onClose={onClose} footer={invalid
     ? <button className="button primary" disabled={busy||pending} onClick={()=>void execute(true)}>{pending?'正在重新核对…':'重新核对生成范围'}</button>
     : plan.audioRequests===0 ? <button className="button primary" disabled={busy||pending} onClick={onClose}>完成核对</button>
-    : !grantNeeded&&<button className="button primary" disabled={busy||pending} onClick={()=>void execute(false)}>{pending?'正在提交…':unknown?`重新发送 ${plan.audioRequests} 次并继续${routeBlocked?'（同时恢复接口）':''}`:routeBlocked?`恢复接口并生成 ${plan.audioRequests} 个声音`:`开始生成 ${plan.audioRequests} 个声音`}</button>}>
+    : <button className="button primary" disabled={busy||pending} onClick={()=>void execute(false)}>{pending?'正在提交…':unknown?`重新发送 ${plan.audioRequests} 次并继续${routeBlocked?'（同时恢复接口）':''}`:routeBlocked?`恢复接口并生成 ${plan.audioRequests} 个声音`:`开始生成 ${plan.audioRequests} 个声音`}</button>}>
     {invalid&&<div className="task-outcome" role="alert"><h3>内容已变化，本次未发送</h3><p>先免费重新核对生成范围。更新后的范围会在这里展示，再由你决定开始生成。</p></div>}
     {!invalid&&updated&&<p className="hint" role="status">已按当前内容重新核对，请查看下面的范围后再开始生成。</p>}
     <p className="task-panel-summary">{invalid?'之前核对的范围：':'本次覆盖 '}{plan.memberIds.length} 条台词，其中 {plan.units.filter(u=>u.reuse).length} 个已有声音直接复用；实际发送 {plan.audioRequests} 次音频请求。</p>
@@ -227,10 +226,9 @@ export function GeneratePlan({plan,chapter,model,concurrency,unknown,routeBlocke
     })}
     {!invalid&&plan.audioRequests>0&&<>
       {concurrency}
-      <p className="hint">点击开始即使用 {model||'当前声音模型'}，发送所列正文、表演指导及已选参考录音；仅生成以上范围，沿用已有明确上限。</p>
+      <p className="hint">点击开始即使用 {model||'当前声音模型'}，发送所列正文、表演指导及已选参考录音；仅生成以上范围。</p>
       {unknown&&<p className="warning">上次结果不明，可能已计费。本次将发送上列 {plan.audioRequests} 次请求，可能重复计费；点击“重新发送并继续”作出这次具体决定。关闭窗口不会发送。</p>}
       {routeBlocked&&<p className="warning">接口曾因权限或额度问题暂停。请先确认服务已恢复；点击下方明确的恢复操作后，才继续上列请求。</p>}
-      {grantNeeded&&<TaskAuthorization projectId={chapter.projectId} chapterId={chapter.id} label={`本次 ${plan.audioRequests} 次声音请求需要新增的范围${unknown?'（包含结果不明的重新发送，可能重复计费）':''}${routeBlocked?'，并恢复已暂停的接口':''}`} steps={["unit-generate"]} model={model} requests={plan.audioRequests} voiceIds={[...new Set(chapter.segments.filter(s=>plan.memberIds.includes(s.id)).flatMap(s=>s.voiceId?[s.voiceId]:[]))]} onReady={onGrant} onAuthorized={id=>onGenerate(id,{retryUnknown:unknown,resumeRoute:routeBlocked})} disabled={busy||pending}/>}
     </>}
     {!invalid&&plan.audioRequests===0&&<p className="hint">当前范围已有匹配声音，可以直接复用，无需发送新的配音请求。</p>}
     {error&&<p className="error-inline" role="alert">{error}</p>}

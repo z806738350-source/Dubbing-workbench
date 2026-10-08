@@ -47,9 +47,10 @@ import { ObjectDraftTools, useObjectDraft } from "./ObjectDraft";
 import { saveAction, speechDraftProblem, withSavedDrafts, draftScopeRevision } from "./autosave";
 import { useDraftSaveStatus } from "./ObjectDraft";
 import { chapterIssues, chapterMemberState, configurationDecided, playbackIdentity, IssueCenter, ProjectOverview, VoicePicker, RecoveryCenter, QuickHelp, GeneratePlan, type RecoveryTarget } from "./WorkspaceExperience";
-import TaskAuthorization, { ensureTaskGrant } from "./TaskAuthorization";
 import { submitOperation } from "./taskOperations";
 import { LocalAudioRecovery } from "./AudioProvenance";
+import SegmentWaveform from './SegmentWaveform';
+import { flushAudioRanges } from './audioRangeSave';
 import AssistantPanel from "./AssistantPanel";
 import { ConcurrencySettings, ConcurrencyStatus } from "./ConcurrencySettings";
 import type { UIAction } from "./assistantClient";
@@ -71,6 +72,7 @@ import type {
   GenerationUnit,
   GenerationPlan,
   OperationResult,
+  AudioRangeRecord,
 } from "./types";
 
 const inVoiceLibrary = (voice: Voice) => voice.state !== "deleted" && !voice.deletePending;
@@ -151,8 +153,7 @@ export default function App() {
   const [unitInitialMode,setUnitInitialMode] = useState<"dry"|"scene">();
   const [density,setDensity] = useState(localStorage.getItem("reading-density")||"comfortable");
   const [readingSize,setReadingSize] = useState(Number(localStorage.getItem("reading-size"))||17);
-  const [grantId,setGrantId] = useState<string|null>(null);
-  const [generationPlan,setGenerationPlan] = useState<{plan:GenerationPlan;ids:string[];regenerate:boolean;retryUnknown:boolean;resumeRoute:boolean}|null>(null);
+  const [generationPlan,setGenerationPlan] = useState<{plan:GenerationPlan;ids:string[];regenerate:boolean;retryUnknown:boolean;resumeRoute:boolean;invalidated?:boolean}|null>(null);
   const generationIntent=useRef(0);
   const closeGeneration=()=>{generationIntent.current++;setGenerationPlan(null);};
   const [taskRecord,setTaskRecord] = useState<{jobId:string;attempt:{id:string;status:string;mode?:string;error?:string;phase?:string;localRecoveryPending?:boolean}}|null>(null);
@@ -163,8 +164,22 @@ export default function App() {
   const bookmarks = useRef<Record<string, string>>({});
   const chapterPlaybackSnapshots = useRef<Record<string, ChapterDetail>>({});
   const playIntent = useRef(0);
+  const playbackPreparation = useRef<{key:string;intent:number}|null>(null);
+  const [playPreparing,setPlayPreparing] = useState(false);
+  const beginPlayback = (key:string,preparedIntent?:number) => {
+    if(preparedIntent===undefined&&playbackPreparation.current?.key===key&&playbackPreparation.current.intent===playIntent.current)return null;
+    if(preparedIntent!==undefined&&preparedIntent!==playIntent.current)return null;
+    const intent=preparedIntent??++playIntent.current;
+    if(playbackPreparation.current?.intent!==intent)playbackPreparation.current={key,intent};
+    setPlayPreparing(true);
+    return intent;
+  };
+  const finishPlayback = (intent?:number) => {
+    if(playbackPreparation.current?.intent===intent){playbackPreparation.current=null;setPlayPreparing(false);}
+  };
   const pendingPlay = useRef<string | null>(null);
-  const pendingPlaySnapshot = useRef<{intent:number;arrangement:number;items:ChapterDetail["playbackItems"]}|null>(null);
+  const pendingPlaySnapshot = useRef<{intent:number;arrangement:number;items:ChapterDetail["playbackItems"];anchor?:{unitId:string;audioId:string;sourceFrame:number}}|null>(null);
+  const rangeResume = useRef<{intent:number;chapterId:string;kind:string;unitId:string;audioId:string;sourceFrame:number}|null>(null);
   const [oldPreview, setOldPreview] = useState<Segment | null>(null);
   useEffect(() => {
     const close = () => {
@@ -191,6 +206,11 @@ export default function App() {
     [follow, setFollow] = useState(true),
     [connectionReady, setConnectionReady] = useState(false),
     [loading, setLoading] = useState(true);
+  useEffect(()=>{
+    if(!notice)return;
+    const timer=setTimeout(()=>setNotice(current=>current===notice?'':current),1000);
+    return()=>clearTimeout(timer);
+  },[notice]);
   const [player, setPlayer] = useState<{
       kind: string;
       id: string;
@@ -202,6 +222,12 @@ export default function App() {
       resumeAt?: number;
       intent?: number;
       unitSession?: UnitPlayback;
+      url?: string;
+      sourceStartFrame?: number;
+      sourceEndFrame?: number;
+      sampleRate?: number;
+      rangePreview?: boolean;
+      preserveBrowse?: boolean;
     } | null>(null),
     [playing, setPlaying] = useState(false),
     [position, setPosition] = useState(0),
@@ -211,6 +237,7 @@ export default function App() {
   const projectRef = useRef(projectId);
   projectRef.current = projectId;
   const audio = useRef<HTMLAudioElement>(null),
+    playbackButton = useRef<HTMLButtonElement>(null),
     listRef = useRef<HTMLDivElement>(null),
     chapterRef = useRef(chapterId),
     stateRef = useRef(state),
@@ -219,6 +246,9 @@ export default function App() {
   chapterRef.current = chapterId;
   stateRef.current = state;
   playerRef.current = player;
+  useEffect(()=>{
+    if(playbackPreparation.current&&playbackPreparation.current.intent!==playIntent.current)finishPlayback(playbackPreparation.current.intent);
+  });
   const seekPlayback = useCallback((delta: number) => {
     const el = audio.current;
     if (!playerRef.current || !el || !el.readyState || !Number.isFinite(el.duration) || el.duration <= 0) return false;
@@ -229,11 +259,17 @@ export default function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
-        !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+        ![" ", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
       const target = event.target instanceof Element ? event.target : null;
       if (target && !target.matches("input[data-playback-progress]") && target.closest(
         'input, textarea, select, .select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="slider"], [role="spinbutton"], [role="listbox"], [role="tablist"], [role="menu"]',
       )) return;
+      if (event.key === " ") {
+        if (target?.closest('button, [role="button"], a[href], summary') || !playbackButton.current || playbackButton.current.disabled) return;
+        event.preventDefault();
+        if (!event.repeat) playbackButton.current.click();
+        return;
+      }
       if (seekPlayback(event.key === "ArrowLeft" ? -5 : 5)) event.preventDefault();
     };
     window.addEventListener("keydown", onKeyDown);
@@ -244,11 +280,12 @@ export default function App() {
   const refresh = useCallback(() => {
     if(refreshPending.current)return refreshPending.current;
     const request=(async()=>{
+    const requestedPlayback=pendingPlaySnapshot.current;
     try {
     const s = await api<State>("/state");
     const identity=s.settings.workspaceIdentity||s.settings.workspaceDirectory,changedWorkspace=!!draftWorkspace()&&draftWorkspace()!==identity;
     bindDraftWorkspace(identity);
-    if(changedWorkspace){playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;generationIntent.current++;setGenerationPlan(null);setGrantId(null);setDeleteTarget(null);setRenameTarget(null);segmentDeletionIntent.current++;setUnitPanelId(null);setVoiceTarget(null);setOldPreview(null);setModal(null);setChapter(null);setDraftSignal(value=>value+1);bookmarks.current={};chapterPlaybackSnapshots.current={};audio.current?.pause();setPlayer(null);}
+    if(changedWorkspace){playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;generationIntent.current++;setGenerationPlan(null);setDeleteTarget(null);setRenameTarget(null);segmentDeletionIntent.current++;setUnitPanelId(null);setVoiceTarget(null);setOldPreview(null);setModal(null);setChapter(null);setDraftSignal(value=>value+1);bookmarks.current={};chapterPlaybackSnapshots.current={};audio.current?.pause();setPlayer(null);}
     setState(s);
     let id = chapterRef.current;
     if (!s.chapters.some((c) => c.id === id))
@@ -276,29 +313,36 @@ export default function App() {
         if (regenerated) bookmarks.current[id] = regenerated.unitId || regenerated.id;
         chapterPlaybackSnapshots.current[id] = c;
       }
-      if (pendingPlay.current === id) {
-        const master = c.masters.find((m) => m.arrangement === c.arrangement);
-        if (master) {
+      if (pendingPlay.current === id && pendingPlaySnapshot.current === requestedPlayback) {
+        const master = c.masters.find((m) => m.arrangement === c.arrangement && (m.renderSignature ?? null) === (c.renderSignature ?? null));
+        if (master && !s.jobs.some(j=>j.chapterId===id&&active(j.status))) {
           pendingPlay.current = null;
           const intent=pendingPlaySnapshot.current;pendingPlaySnapshot.current=null;
           if(intent&&intent.intent===playIntent.current&&intent.arrangement===c.arrangement&&playbackIdentity(intent.items)===playbackIdentity(c.playbackItems)&&!s.jobs.some(j=>j.chapterId===id&&active(j.status))){
             const bookmark=bookmarks.current[id],point=master.mapping.find(x=>x.segmentId===bookmark||x.unitId===bookmark||x.memberIds?.includes(bookmark));
-            if(bookmark&&!point){delete bookmarks.current[id];setNotice('断点已变化，试听已准备好，请重新选择播放位置。');}
-            else setPlayer({kind:'masters',id:master.id,title:c.title,chapterId:id,arrangement:c.arrangement,playbackItems:c.playbackItems,master,intent:intent.intent,resumeAt:(point?.startFrame||0)/master.sampleRate});
-          }else if(intent?.intent===playIntent.current)setNotice('整章试听已准备好；版本已变化，请点击播放继续。');
+            if(bookmark&&!point){delete bookmarks.current[id];finishPlayback(intent.intent);setNotice('断点已变化，试听已准备好，请重新选择播放位置。');}
+            else {
+              const anchor=intent.anchor,entry=anchor&&master.mapping.find(x=>x.unitId===anchor.unitId);
+              const resumeFrame=entry&&anchor ? entry.audioId===anchor.audioId ? entry.startFrame+Math.max(0,Math.min(entry.endFrame-entry.startFrame,anchor.sourceFrame-(entry.clipStartFrame || 0))) : entry.startFrame : point?.startFrame || 0;
+              setNotice(previous=>previous==='正在本机准备整章试听，完成后继续播放；不调用配音模型。'?'':previous);
+              setPlayer({kind:'masters',id:master.id,title:c.title,chapterId:id,arrangement:c.arrangement,playbackItems:c.playbackItems,master,intent:intent.intent,preserveBrowse:!!intent.anchor,resumeAt:resumeFrame/master.sampleRate});
+            }
+          }else if(intent?.intent===playIntent.current){finishPlayback(intent.intent);setNotice('整章试听已准备好；版本已变化，请点击播放继续。');}
         } else if (
           !s.jobs.some(
             (j) =>
               j.chapterId === id && ["queued", "running"].includes(j.status),
           )
-        )
-          pendingPlay.current = null;
-      } else if (pendingPlay.current && pendingPlay.current !== id)
+        ) {
+          finishPlayback(pendingPlaySnapshot.current?.intent);
+          pendingPlay.current = null;pendingPlaySnapshot.current=null;
+        }
+      } else if (pendingPlay.current && pendingPlay.current !== id && pendingPlaySnapshot.current === requestedPlayback)
         pendingPlay.current = null;
       const p = playerRef.current;
       const selectedUnit = p?.unitSession && c.units?.find(u=>u.id === p.unitSession!.id);
       const unitChanged = p?.unitSession && (!selectedUnit || selectedUnit.state !== p.unitSession.state || selectedUnit.variants[p.unitSession.mode].current !== p.unitSession.audioId || JSON.stringify(selectedUnit.variants[p.unitSession.mode].status.basis) !== JSON.stringify(p.unitSession.basis));
-      if (p?.chapterId === id && p.intent === playIntent.current && (p.arrangement !== c.arrangement || playbackIdentity(p.playbackItems) !== playbackIdentity(c.playbackItems) || unitChanged || s.jobs.some(j => j.chapterId === id && active(j.status)))) {
+      if (p?.chapterId === id && p.intent === playIntent.current && (p.arrangement !== c.arrangement || !p.rangePreview && playbackIdentity(p.playbackItems) !== playbackIdentity(c.playbackItems) || unitChanged || s.jobs.some(j => j.chapterId === id && active(j.status)))) {
         playIntent.current++;
         audio.current?.pause();
         setPlayer(null);
@@ -467,7 +511,7 @@ export default function App() {
     playIntent.current++;
     chapterRef.current=id;
     pendingPlay.current=null;pendingPlaySnapshot.current=null;
-    closeGeneration();setGrantId(null);setVoiceTarget(null);setUnitPanelId(null);setUnitInitialMode(undefined);
+    closeGeneration();setVoiceTarget(null);setUnitPanelId(null);setUnitInitialMode(undefined);
     audio.current?.pause();
     setPlayer(null);
     setChapterId(id);
@@ -526,27 +570,26 @@ export default function App() {
       const plan=await api<GenerationPlan>("/operations/plan",{kind:"generateSelection",chapterId:context.id,revision,ids,regenerate:options.regenerate===true,actionKind:options.actionKind||(options.regenerate===true?'forceRegenerate':'updateSelected')});
       if(!current())return;
       if(!plan.audioRequests){setGenerationPlan(null);setNotice("所选范围已有匹配声音，已复用；无需发送新的配音请求。");return;}
-      setGrantId(null);
-      setGenerationPlan({plan,ids,regenerate:options.regenerate===true,retryUnknown:false,resumeRoute:false});
+      const request={plan,ids,regenerate:options.regenerate===true,retryUnknown:false,resumeRoute:false};
       setInspectorOpen(false);
+      const unknown=!!plan.outstandingAttemptIds?.length||plan.units.some(p=>context.units?.find(u=>u.id===p.unitId)?.variants[p.mode].latest==='unknown');
+      if(intent!==undefined||unknown||state?.settings.routeBlocked)setGenerationPlan(request);
+      else try{await submitGeneration(undefined,undefined,request,context,expected);}
+      catch(error){if(current()&&(error as {status?:number}).status===409)setGenerationPlan({...request,invalidated:true});else throw error;}
     });}catch(error){if(current())throw error;}
   };
-  const planIntent=generationIntent.current;
   const generationUnknown = !!generationPlan?.plan.outstandingAttemptIds?.length || generationPlan?.plan.units.some(planned=>!!chapter?.units?.find(u=>u.id===planned.unitId)?.variants[planned.mode].outstandingAttemptIds?.length || chapter?.units?.find(u=>u.id===planned.unitId)?.variants[planned.mode].latest === "unknown") || false;
-  const submitGeneration = async (authorizedGrant?:string,decision?:{retryUnknown?:boolean;resumeRoute?:boolean}) => {
-    if(!generationPlan||!chapter)return;
-    const request=generationPlan;
-    const intent=generationIntent.current;
+  const submitGeneration = async (_authorizedGrant?:string,decision?:{retryUnknown?:boolean;resumeRoute?:boolean},request=generationPlan,context=chapter,intent=generationIntent.current) => {
+    if(!request||!context)return;
     const dependencies=request.plan.memberIds.map(id=>"segment:"+id).concat(request.plan.units.flatMap(u=>["unit:"+u.unitId,"unit:"+u.unitId+"/"+u.mode,...(u.mode==="scene"?["events:"+u.unitId]:[])]));
-    await withSavedDrafts("chapter:"+chapter.id,dependencies,async()=>{
+    await withSavedDrafts("chapter:"+context.id,dependencies,async()=>{
       if(generationIntent.current!==intent)return;
       if(chapterRef.current!==request.plan.chapterId)throw new Error("章节已切换，本次未发送。");
-      if(request.plan.memberIds.some(id=>hasDraft(id))||request.plan.units.some(p=>{const u=chapter.units?.find(u=>u.id===p.unitId);return u&&unitHasDraft(u,chapter.events||[],p.mode);}))throw new Error("相关其他页面的草稿仍需处理，本次未发送。");
-      if(draftScopeRevision("chapter:"+chapter.id,request.plan.revision)!==request.plan.revision)throw Object.assign(new Error("生成范围在核对后已变化，请重新核对生成范围。"),{status:409});
-      const allowed=authorizedGrant||grantId||await ensureTaskGrant({projectId:chapter.projectId,chapterId:chapter.id,step:"audio",steps:["unit-generate"],model:state?.settings.model,requests:request.plan.audioRequests,voiceIds:[...new Set(chapter.segments.filter(segment=>request.plan.memberIds.includes(segment.id)).flatMap(segment=>segment.voiceId?[segment.voiceId]:[]))]});
+      if(request.plan.memberIds.some(id=>hasDraft(id))||request.plan.units.some(p=>{const u=context.units?.find(u=>u.id===p.unitId);return u&&unitHasDraft(u,context.events||[],p.mode);}))throw new Error("相关其他页面的草稿仍需处理，本次未发送。");
+      if(draftScopeRevision("chapter:"+context.id,request.plan.revision)!==request.plan.revision)throw Object.assign(new Error("生成范围在核对后已变化，请重新核对生成范围。"),{status:409});
       if(generationIntent.current!==intent||chapterRef.current!==request.plan.chapterId)return;
       playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;audio.current?.pause();setPlayer(null);
-      const receipt=await submitOperation("generate:"+chapter.id,{kind:"generateSelection",chapterId:chapter.id,revision:request.plan.revision,arrangement:request.plan.arrangement,ids:request.ids,regenerate:request.regenerate,actionKind:request.plan.actionKind,grantId:allowed,...(decision?.retryUnknown||request.retryUnknown?{retryUnknown:true,acknowledgedAttemptIds:request.plan.outstandingAttemptIds}:{}),...(decision?.resumeRoute||request.resumeRoute?{resumeRoute:true}:{})},state?.jobs||[]);
+      const receipt=await submitOperation("generate:"+context.id,{kind:"generateSelection",chapterId:context.id,revision:request.plan.revision,arrangement:request.plan.arrangement,ids:request.ids,regenerate:request.regenerate,actionKind:request.plan.actionKind,...(decision?.retryUnknown||request.retryUnknown?{retryUnknown:true,acknowledgedAttemptIds:request.plan.outstandingAttemptIds}:{}),...(decision?.resumeRoute||request.resumeRoute?{resumeRoute:true}:{})},state?.jobs||[]);
       if(generationIntent.current!==intent||chapterRef.current!==request.plan.chapterId){await refresh();return;}
       if(receipt.error)throw Object.assign(new Error(receipt.error),{status:receipt.errorStatus});
       if(chapterRef.current!==request.plan.chapterId)return;
@@ -562,8 +605,12 @@ export default function App() {
     unitSession?: UnitPlayback,
     preparedIntent?: number,
   ) => {
-    const intent=preparedIntent??++playIntent.current;
+    let playbackChapter=chapter;
+    const intent=beginPlayback(kind+':'+id,preparedIntent);
+    if(intent===null)return;
     const current=()=>intent===playIntent.current;
+    let mediaRequested=false;
+    try {
     pendingPlay.current=null;pendingPlaySnapshot.current=null;
     if(!master&&playerRef.current?.kind===kind&&playerRef.current?.id===id&&audio.current&&!audio.current.paused){audio.current.pause();setPlaying(false);return;}
     audio.current?.pause();
@@ -575,17 +622,27 @@ export default function App() {
         const now = await api<State>("/state");
         if(!current()||chapterRef.current!==chapter.id)return;
         const latest = now.chapters.find(c=>c.id===chapter.id), observed = stateRef.current?.chapters.find(c=>c.id===chapter.id);
-        const superseded = !latest || latest.revision !== fresh.revision || latest.arrangement !== fresh.arrangement || observed && (observed.revision > fresh.revision || observed.arrangement > fresh.arrangement);
+        const superseded = !latest || latest.revision !== fresh.revision || latest.arrangement !== fresh.arrangement || (latest.renderRevision ?? 0)!==(fresh.renderRevision ?? 0) || observed && (observed.revision > fresh.revision || observed.arrangement > fresh.arrangement || (observed.renderRevision ?? 0)>(fresh.renderRevision ?? 0));
         const existing = playerRef.current;
         const expected = existing?.chapterId === chapter.id && existing.kind === kind && existing.id === id ? existing.playbackItems : chapter.playbackItems;
         const target = unitSession && fresh.units?.find(u=>u.id === unitSession.id);
         const unitChanged = unitSession && (!target || target.state !== unitSession.state || target.variants[unitSession.mode].current !== unitSession.audioId || JSON.stringify(target.variants[unitSession.mode].status.basis) !== JSON.stringify(unitSession.basis));
-        if (superseded || fresh.arrangement !== chapter.arrangement || playbackIdentity(fresh.playbackItems) !== playbackIdentity(expected) || unitChanged || now.jobs.some(j => j.chapterId === chapter.id && active(j.status))) {
+        const changedContent=superseded || (kind==='masters' ? !fresh.masters.some(m=>m.id===id&&m.arrangement===fresh.arrangement&&(m.renderSignature ?? null)===(fresh.renderSignature ?? null)) : fresh.revision!==chapter.revision || fresh.arrangement !== chapter.arrangement) || unitChanged || now.jobs.some(j => j.chapterId === chapter.id && active(j.status));
+        if(kind==='masters'&&!master&&!standalone&&changedContent&&!superseded&&!unitChanged&&existing?.kind===kind&&existing.id===id&&existing.chapterId===chapter.id&&!now.jobs.some(j=>j.chapterId===chapter.id&&active(j.status))&&fresh.playbackItems.every(item=>item.validity==='matched')){
+          await refresh();if(!current()||chapterRef.current!==chapter.id)return;
+          mediaRequested=true;await playChapter(intent);return;
+        }
+        if (changedContent || playbackIdentity(fresh.playbackItems) !== playbackIdentity(expected)) {
+          setPlayer(null);playerRef.current=null;
+          if(!changedContent){playbackChapter=fresh;setChapter(fresh);}
+          else {
           await refresh();
           if(!current())return;
           setError("章节版本或任务状态已变化，请核对后重新选择试听。");
           return;
+          }
         }
+        playbackChapter=fresh;
       } catch { if(current()&&chapterRef.current===chapter.id)setError("无法核对播放版本，请恢复连接后重试。"); return; }
     }
     if (
@@ -594,8 +651,10 @@ export default function App() {
       playerRef.current?.id === id &&
       audio.current
     ) {
-      if (audio.current.paused)
-        setPlayer({...playerRef.current,intent,resumeAt:audio.current.ended || (Number.isFinite(audio.current.duration) && audio.current.duration > 0 && audio.current.currentTime >= audio.current.duration) ? 0 : audio.current.currentTime});
+      if (audio.current.paused) {
+        mediaRequested=true;
+        setPlayer({...playerRef.current,intent,resumeAt:audio.current.ended || (Number.isFinite(audio.current.duration) && audio.current.duration > 0 && audio.current.currentTime >= audio.current.duration) ? 0 : !audio.current.readyState && playerRef.current.resumeAt!==undefined ? playerRef.current.resumeAt : audio.current.currentTime});
+      }
       else audio.current.pause();
       return;
     }
@@ -605,9 +664,22 @@ export default function App() {
       setNotice("原断点片段已拆分、合并或移除。请重新选择片段；再次点击试听将从开头播放。");
       return;
     }
+    let rangePlayback: {url:string;sourceStartFrame:number;sourceEndFrame:number;sampleRate:number} | undefined;
+    if (kind === 'audios' && playbackChapter) {
+      const owner = unitSession ? {unitId:unitSession.id,mode:unitSession.mode} : playbackChapter.units?.flatMap(unit=>(['dry','scene'] as const).map(mode=>({unit,mode}))).find(({unit,mode})=>[unit.variants[mode].current,unit.variants[mode].previous,unit.variants[mode].approved,...(unit.variants[mode].history || []).map(a=>a.id)].includes(id));
+      if (owner) {
+        const unitId='unitId' in owner ? owner.unitId : owner.unit.id;
+        try {
+          const resolved=await api<{range:AudioRangeRecord;previewUrl:string}>(`/units/${encodeURIComponent(unitId)}/audio-range?mode=${owner.mode}&audioId=${encodeURIComponent(id)}`);
+          if (!current()) return;
+          rangePlayback={url:resolved.previewUrl,sourceStartFrame:resolved.range.startFrame,sourceEndFrame:resolved.range.endFrame,sampleRate:resolved.range.sampleRate};
+        } catch (failure) { if(current())setError((failure as Error).message);return; }
+      }
+    }
     setPosition(0);
     setDuration(0);
     setTransitioning(false);
+    mediaRequested=true;
     setPlayer({
       kind,
       id,
@@ -615,15 +687,17 @@ export default function App() {
       intent,
       unitSession,
       chapterId: kind === "voices" || standalone ? undefined : chapterId,
-      arrangement: chapter?.arrangement,
-      playbackItems: chapter?.playbackItems,
+      arrangement: playbackChapter?.arrangement,
+      playbackItems: playbackChapter?.playbackItems,
       master,
+      ...rangePlayback,
       resumeAt: master
         ? (master.mapping.find(
             (x) => x.segmentId === bookmarks.current[chapterId] || x.unitId === bookmarks.current[chapterId] || x.memberIds?.includes(bookmarks.current[chapterId]),
           )?.startFrame || 0) / master.sampleRate
         : 0,
     });
+    } finally {if(!mediaRequested)finishPlayback(intent);}
   };
   useEffect(() => {
     if (!player) {
@@ -639,15 +713,20 @@ export default function App() {
     const el = audio.current!;
     if (player.master) {
       if (chapter && chapter.id === player.chapterId) chapterPlaybackSnapshots.current[chapter.id] = chapter;
-      setFollow(true); setCurrentSegment(""); setCurrentMembers([]);
+      if(!player.preserveBrowse)setFollow(true); setCurrentSegment(""); setCurrentMembers([]);
     }
-    el.src = player.kind === "demo" ? "/demo.mp3" : `/api/media/${player.kind}/${player.id}`;
-    el.load();
+    const source=player.url || (player.kind === "demo" ? "/demo.mp3" : `/api/media/${player.kind}/${player.id}`);
+    if(el.getAttribute('src')!==source){el.src=source;el.load();}
+    else if(el.readyState&&player.resumeAt!==undefined)el.currentTime=player.resumeAt;
     const intent=player.intent;
-    void el.play().then(()=>{if(intent!==playIntent.current&&playerRef.current===player)el.pause();}).catch(() => {if(intent===playIntent.current){setPlaying(false);setError("浏览器未能开始播放，请再次点击播放。");}});
+    void el.play().then(()=>{finishPlayback(intent);if(intent!==playIntent.current&&playerRef.current===player)el.pause();}).catch(() => {finishPlayback(intent);if(intent===playIntent.current){setPlaying(false);setError("浏览器未能开始播放，请再次点击播放。");}});
   }, [player]);
-  const playChapter = () => {
-    const intent=++playIntent.current,current=()=>intent===playIntent.current&&chapterRef.current===chapter?.id;
+  const playChapter = (preparedIntent?:number) => {
+    if(!chapter)return;
+    const intent=beginPlayback('chapter:'+chapter.id,preparedIntent);
+    if(intent===null)return;
+    const current=()=>intent===playIntent.current&&chapterRef.current===chapter.id;
+    let handedOff=false;
     pendingPlay.current=null;pendingPlaySnapshot.current=null;
     audio.current?.pause();
     return run(async()=>{
@@ -655,20 +734,82 @@ export default function App() {
     try{
     await withSavedDrafts('chapter:'+chapter.id,undefined,async()=>{
       if(!current())return;
+      await flushAudioRanges(chapter.id);
+      if(!current())return;
       const fresh=await api<ChapterDetail>('/chapters/'+chapter.id);
       if(!current())return;
       if(fresh.playbackItems.some(item=>item.validity!=='matched'))throw new Error('有效修改已保存。请先生成待更新的声音，再整章试听。');
-      const master=fresh.masters.find(m=>m.arrangement===fresh.arrangement);
-      if(master){await startPlay('masters',master.id,fresh.title,master,false,undefined,intent);return;}
+      const master=fresh.masters.find(m=>m.arrangement===fresh.arrangement&&(m.renderSignature ?? null)===(fresh.renderSignature ?? null));
+      if(master){handedOff=true;await startPlay('masters',master.id,fresh.title,master,false,undefined,intent);return;}
       setPlayer(null);
       await api('/jobs',{kind:'master',chapterId:chapter.id,revision:fresh.revision,commandId:crypto.randomUUID()});
       if(!current())return;
       pendingPlay.current=chapter.id;pendingPlaySnapshot.current={intent,arrangement:fresh.arrangement,items:fresh.playbackItems};
+      handedOff=true;
       setNotice('正在本机准备整章试听，完成后继续播放；不调用配音模型。');
     });
     }catch(failure){if(current())throw failure;}
+    finally{if(!handedOff)finishPlayback(intent);}
   });};
   const playDemo = () => {setModal(null);void startPlay("demo","welcome","免费演示 · 本机语音",undefined,true);};
+  const beginRangeEdit = (unitId:string,audioId:string) => {
+    setFollow(false);
+    const p=playerRef.current,el=audio.current;
+    if (!p || !el || p.kind==='voices' || p.kind!=='masters' && p.id!==audioId) return;
+    const entry=p.master?.mapping.find(x=>el.currentTime*48000<x.endFrame) || p.master?.mapping.at(-1);
+    const sourceFrame=entry ? (entry.clipStartFrame || 0)+Math.max(0,Math.round(el.currentTime*48000)-entry.startFrame) : (p.sourceStartFrame || 0)+Math.round(el.currentTime*(p.sampleRate || 48000));
+    const wasPlaying=!el.paused&&!el.ended;
+    const intent=++playIntent.current;
+    rangeResume.current=wasPlaying ? {intent,chapterId:chapterId,kind:p.kind,unitId:entry?.unitId || unitId,audioId:entry?.audioId || audioId,sourceFrame} : null;
+    if(wasPlaying&&p.kind==='masters')beginPlayback('chapter:'+chapterId,intent);
+    pendingPlay.current=null;pendingPlaySnapshot.current=null;
+    el.pause();setPlayer(null);
+  };
+  const previewRange = (preview:{url:string;unitId:string;mode:'dry'|'scene';audioId:string;startFrame:number;endFrame:number;sampleRate:number;fullSource:boolean;sourceFrame?:number;seekOnly?:boolean},preparedIntent?:number) => {
+    if(preview.seekOnly && !rangeResume.current && audio.current?.paused)return;
+    const intent=preparedIntent ?? ++playIntent.current;
+    if (intent!==playIntent.current) return;
+    rangeResume.current=null;pendingPlay.current=null;pendingPlaySnapshot.current=null;setFollow(false);
+    audio.current?.pause();
+    const unit=chapter?.units?.find(u=>u.id===preview.unitId);
+    const sourceFrame=Math.max(preview.startFrame,preview.sourceFrame ?? preview.startFrame);
+    if(sourceFrame>=preview.endFrame){setPlayer(null);return;}
+    setCurrentSegment(unit?.members[0] || '');setCurrentMembers(unit?.kind==='group'?unit.members:[]);
+    setPlayer({kind:'audios',id:preview.audioId,title:preview.fullSource?'完整源音 · 仅试听':'本段所选范围',chapterId,arrangement:chapter?.arrangement,playbackItems:chapter?.playbackItems,intent,url:preview.url,sourceStartFrame:preview.startFrame,sourceEndFrame:preview.endFrame,sampleRate:preview.sampleRate,rangePreview:true,resumeAt:(sourceFrame-preview.startFrame)/preview.sampleRate,...(unit?{unitSession:{id:unit.id,mode:preview.mode,audioId:preview.audioId,basis:unit.variants[preview.mode].status.basis,state:unit.state}}:{})});
+  };
+  const rangeChanged = (range:AudioRangeRecord) => {
+    const resume=rangeResume.current;
+    if(!resume || resume.kind==='masters' || resume.intent!==playIntent.current || resume.audioId!==range.audioId)return;
+    const url='/api/audio-ranges/preview?'+new URLSearchParams({unitId:range.unitId,mode:range.mode,audioId:range.audioId,startFrame:String(range.startFrame),endFrame:String(range.endFrame),sourceHash:range.sourceHash,decodeProfile:range.decodeProfile});
+    previewRange({url,unitId:range.unitId,mode:range.mode,audioId:range.audioId,startFrame:range.startFrame,endFrame:range.endFrame,sampleRate:range.sampleRate,fullSource:false,sourceFrame:resume.sourceFrame},resume.intent);
+  };
+  const rangeSaved = async (range:AudioRangeRecord) => {
+    const preparingIntent=rangeResume.current?.intent;
+    let handedOff=false;
+    try {
+    await refresh();
+    const resume=rangeResume.current;
+    if(!resume || resume.kind!=='masters' || resume.intent!==playIntent.current || resume.chapterId!==chapterRef.current)return;
+    await flushAudioRanges(range.chapterId);
+    if(resume.intent!==playIntent.current)return;
+    const fresh=await api<ChapterDetail>('/chapters/'+range.chapterId);
+    if(resume.intent!==playIntent.current || chapterRef.current!==range.chapterId)return;
+    const master=fresh.masters.find(m=>m.arrangement===fresh.arrangement&&(m.renderSignature ?? null)===(fresh.renderSignature ?? null));
+    if(master){
+      const entry=master.mapping.find(x=>x.unitId===resume.unitId);
+      if(!entry){rangeResume.current=null;setNotice('原续播片段已变化，请重新选择播放位置。');return;}
+      const frame=entry.audioId===resume.audioId ? entry.startFrame+Math.max(0,Math.min(entry.endFrame-entry.startFrame,resume.sourceFrame-(entry.clipStartFrame || 0))) : entry.startFrame;
+      rangeResume.current=null;
+      handedOff=true;
+      setPlayer({kind:'masters',id:master.id,title:fresh.title,chapterId:fresh.id,arrangement:fresh.arrangement,playbackItems:fresh.playbackItems,master,intent:resume.intent,preserveBrowse:true,resumeAt:frame/master.sampleRate});
+    }else{
+      await api('/jobs',{kind:'master',chapterId:fresh.id,revision:fresh.revision,renderSignature:fresh.renderSignature,commandId:crypto.randomUUID()});
+      if(resume.intent!==playIntent.current)return;
+      pendingPlay.current=fresh.id;pendingPlaySnapshot.current={intent:resume.intent,arrangement:fresh.arrangement,items:fresh.playbackItems,anchor:resume};rangeResume.current=null;
+      handedOff=true;
+    }
+    }finally{if(!handedOff)finishPlayback(preparingIntent);}
+  };
   const closeOldPreview = () => {
     playIntent.current++;pendingPlay.current=null;pendingPlaySnapshot.current=null;
     audio.current?.pause();
@@ -944,7 +1085,7 @@ export default function App() {
                 <div><button className="title-button" onClick={()=>setModal("rename")} disabled={locked}><h1>{chapter.title}</h1><MoreHorizontal size={18}/></button><p>{total} 句台词 · {chapter.playbackItems.length} 个声音单元 · {ready} 句声音就绪 · {passed} 句听评通过 <progress max={total||1} value={ready} aria-label="声音准备进度"/></p></div>
                 <div className="chapter-actions">
                   <button className="button" onClick={()=>setModal("issues")}>{issues.length?`查看问题 · ${issues.length} 项`:"查看问题"}</button>
-                  {!locked&&<button className="button primary" disabled={busy||!connectionReady} onClick={()=>{
+                  {!locked&&<button className="button primary" disabled={busy||playPreparing||!connectionReady} onClick={()=>{
                     if(saveStatus==='conflict'||saveStatus==='unreliable'){setModal('recovery');return;}
                     if(!segments.length||criticalIssues.length){if(!segments.length){setPanelMode('analysis');if(window.innerWidth<1216)setInspectorOpen(true);}else setModal('issues');return;}
                     if(ready<total){void run(()=>generate(segments.filter(s=>!s.excluded&&effectiveStatus(s).validity!=='matched').map(s=>s.id),true));return;}
@@ -1105,6 +1246,8 @@ export default function App() {
                       const rowUnit = grouped || chapter.units?.find(u=>u.kind === "single" && u.state === "active" && u.id === s.id);
                       const rowAudio = rowUnit?.variants[rowUnit.mode].current || s.current;
                       const rowStatus = effectiveStatus(s);
+                      const mappedAudio=player?.master?.mapping.find(item=>item.audioId===rowAudio);
+                      const waveTime=mappedAudio && player?.master ? ((mappedAudio.clipStartFrame || 0)+position*player.master.sampleRate-mappedAudio.startFrame)/player.master.sampleRate : player?.id===rowAudio ? (player.sourceStartFrame || 0)/(player.sampleRate || 48000)+position : undefined;
                       const groupOrders = grouped?.members.map(id=>(segments.find(item=>item.id===id)?.order??0)+1)||[];
                       const groupRange = groupOrders.length>1?`${groupOrders[0]}—${groupOrders.at(-1)}`:String(groupOrders[0]||"");
                       return (
@@ -1235,6 +1378,7 @@ export default function App() {
                                   <button className="icon" aria-label={`删除第 ${s.order+1} 条台词`} title="删除台词" disabled={locked || busy || !connectionReady} onClick={()=>void run(()=>onDeleteSegments([s.id]))}><Trash2 size={14}/></button>
                                 </div>
                           </div>
+                          {!s.excluded && (!grouped || visible.find(item=>grouped.members.includes(item.id))?.id===s.id) && <SegmentWaveform key={`${rowUnit?.id || s.id}:${rowUnit?.mode || 'dry'}:${rowAudio || 'empty'}`} unitId={rowUnit?.id || s.id} mode={rowUnit?.mode || 'dry'} audioId={rowAudio || null} chapterId={chapter.id} projectId={chapter.projectId} workspaceId={state?.settings.workspaceIdentity} lockedReason={rowUnit && ["queued","running","sending","processing"].includes(rowUnit.variants[rowUnit.mode].latest)?"本段正在重新生成，完成后可调整范围。":undefined} sourceLabel={grouped?`第 ${groupRange} 句共用一段音频`:rowUnit?.variants[rowUnit.mode].status.audio?.originalAudioId?'当前为自动清理版；恢复完整范围仍使用此版声音。':undefined} sourceTime={waveTime} onBrowse={()=>setFollow(false)} onEditStart={()=>beginRangeEdit(rowUnit?.id || s.id,rowAudio || '')} onEditCancel={range=>void rangeSaved(range).catch(failure=>setError(failure.message))} onRangeChange={range=>rangeChanged(range)} onPreview={preview=>previewRange(preview)} onSaved={range=>void rangeSaved(range).catch(failure=>setError(failure.message))}/>}
                         </article>
                       );
                     })}
@@ -1286,7 +1430,7 @@ export default function App() {
               <div>
                 <strong>{player?.title || (chapter && !chapter.coverage.valid ? "当前剧本试听" : "整章试听")}</strong>
                 <span>
-                  {player
+                  {playPreparing ? '正在准备试听，完成后继续播放' : player
                     ? player.kind === "masters"
                       ? `${chapter?.coverage.valid ? "与导出共用同一母版" : "当前剧本试听，内容尚未完整"}${transitioning ? " · 片段间过渡" : ""}`
                       : player.kind === "voices"
@@ -1309,9 +1453,13 @@ export default function App() {
               </button>
               <button
                 className="play-button"
-                aria-label={playing ? "暂停" : "播放"}
+                ref={playbackButton}
+                aria-label={playPreparing ? "正在准备试听" : playing ? "暂停" : "播放"}
+                aria-busy={playPreparing}
+                aria-keyshortcuts="Space"
+                title="播放／暂停（空格键）"
                 disabled={
-                  !connectionReady || busy || locked || (!player && (!total || ready !== total))
+                  !connectionReady || busy || playPreparing || locked || (!player && (!total || ready !== total))
                 }
                 onClick={() =>
                   player
@@ -1359,12 +1507,12 @@ export default function App() {
             <div className="player-options">
               <button
                 className="button small"
-                disabled={!connectionReady || !total || ready !== total || locked}
+                disabled={!connectionReady || busy || playPreparing || !total || ready !== total || locked}
                 onClick={() => void playChapter()}
               >
                 <AudioLines size={14} />
                 {chapter?.masters.some(
-                  (m) => m.arrangement === chapter.arrangement,
+                  (m) => m.arrangement === chapter.arrangement && (m.renderSignature ?? null) === (chapter.renderSignature ?? null),
                 )
                   ? chapter.coverage.valid ? "整章试听" : "当前剧本试听"
                   : "准备试听"}
@@ -1396,6 +1544,7 @@ export default function App() {
         onError={() => {
           if(player?.intent!==playIntent.current)return;
           playIntent.current++;
+          finishPlayback(player?.intent);
           pendingPlay.current=null;pendingPlaySnapshot.current=null;
           setPlaying(false);setPlayer(null);
           setError(player?.master ? "整章试听文件无法播放，请检查已有音频后点击“准备试听”重建本机母版。" : "音频无法播放，文件可能缺失或格式不受支持。请检查文件后再次试听。");
@@ -1457,8 +1606,8 @@ export default function App() {
         }}
         play={(id,title,historical)=>{const unit=chapter.units!.find(u=>u.id === unitPanelId)!;const mode=unit.variants.scene.current === id ? "scene" : "dry";setCurrentMembers(unit.kind === "group" && !historical ? unit.members : []);
           void startPlay("audios",id,title,undefined,!!historical,historical ? undefined : {id:unit.id,mode,audioId:id,basis:unit.variants[mode].status.basis,state:unit.state});}}/>}
-      {generationPlan && chapter && <GeneratePlan plan={generationPlan.plan} chapter={chapter} model={state?.settings.model} concurrency={<ConcurrencySettings key={state?.settings.workspaceIdentity} status={state?.settings.scheduler} connected={connectionReady} refresh={refresh}/>} unknown={generationUnknown} routeBlocked={!!state?.settings.routeBlocked} busy={busy}
-        onGrant={id=>{if(generationIntent.current===planIntent)setGrantId(id);}} onGenerate={submitGeneration} onClose={closeGeneration} onEdit={id=>{closeGeneration();locate(id);}} onRecheck={async()=>{
+      {generationPlan && chapter && <GeneratePlan plan={generationPlan.plan} chapter={chapter} model={state?.settings.model} concurrency={<ConcurrencySettings key={state?.settings.workspaceIdentity} status={state?.settings.scheduler} connected={connectionReady} refresh={refresh}/>} unknown={generationUnknown} routeBlocked={!!state?.settings.routeBlocked} busy={busy} invalidated={generationPlan.invalidated}
+        onGenerate={submitGeneration} onClose={closeGeneration} onEdit={id=>{closeGeneration();locate(id);}} onRecheck={async()=>{
           const request=generationPlan;
           const intent=++generationIntent.current;
           const current=()=>generationIntent.current===intent&&chapterRef.current===request.plan.chapterId;
@@ -1540,10 +1689,8 @@ export default function App() {
                 if(!receipt){
                   const target=await api<ChapterDetail>("/chapters/"+id),model=stateRef.current?.settings.textModel||"gemini-3.8-flash";
                   const payload={kind:"prepareChapter",chapterId:id,revision:target.revision,ids:[],includePerformance:true,performanceMode:"initial",model};
-                  const plan=await api<{kind:string;textRequests:number;maxTextRequests?:number}>("/operations/plan",payload);
                   if(projectRef.current!==projectId||draftWorkspace()!==workspaceIdentity)return true;
-                  const grantId=await ensureTaskGrant({projectId,chapterId:id,step:"text",steps:[plan.kind],model,requests:plan.maxTextRequests??plan.textRequests,minimumRequests:plan.textRequests});
-                  receipt=await api<OperationResult<{analysis:{status:string}}>>("/operations",{...payload,operationId,grantId});
+                  receipt=await api<OperationResult<{analysis:{status:string}}>>("/operations",{...payload,operationId});
                 }
                 if(receipt.error)throw new Error(receipt.error);
                 if(receipt.outcome==="unknown"&&projectRef.current===projectId&&draftWorkspace()===workspaceIdentity)setNotice("章节和已收到的结果保留。部分分析请求结果未确认，尚未再次发送；请查看本轮分析记录。");
@@ -2152,7 +2299,6 @@ function VoiceLibrary({
   const [libraryError, setLibraryError] = useState("");
   const [testCommand, setTestCommand] = useState(crypto.randomUUID());
   const [uploadId,setUploadId] = useState(crypto.randomUUID());
-  const [testGrant,setTestGrant] = useState<string|null>(null);
   const [testRetry,setTestRetry] = useState(false);
   const [testResume,setTestResume] = useState(false);
   const [creating, setCreating] = useState(initialCreate);
@@ -2186,7 +2332,7 @@ function VoiceLibrary({
         <Form
           label="生成测试样音"
           onSubmit={async (f) => {
-            if(!testGrant||!projectId)throw new Error("请先允许当前项目的试音范围");
+            if(!projectId)throw new Error("请先选择当前试音项目");
             const unknown=jobs.some(j=>j.voiceId===testing.id&&j.status==='unknown');
             if(unknown&&!testRetry)throw new Error("上次结果不明，请核对后明确是否再次发送");
             if(routeBlocked&&!testResume)throw new Error("声音接口已暂停，请核对后明确恢复本次请求");
@@ -2197,8 +2343,6 @@ function VoiceLibrary({
               text: f.get("text"),
               commandId: testCommand,
               projectId,
-              grantId:testGrant,
-              requireGrant:true,
               ...(testRetry?{retryUnknown:true}:{}),
               ...(testResume?{resumeRoute:true}:{}),
             });
@@ -2218,7 +2362,7 @@ function VoiceLibrary({
               rows={4}
             />
           </Field>
-          {projectId?<TaskAuthorization projectId={projectId} label="测试所选声音" steps={["voice-test"]} model={model} voiceIds={[testing.id]} onReady={setTestGrant}/>:<p className="warning">先选择项目，再生成测试样音。</p>}
+          {!projectId&&<p className="warning">先选择项目，再生成测试样音。</p>}
           {jobs.some(j=>j.voiceId===testing.id&&j.status==='unknown')&&<label className="check-label warning"><input type="checkbox" checked={testRetry} onChange={e=>setTestRetry(e.target.checked)}/>上次结果不明，可能已计费；本次明确再发送一次。</label>}
           {routeBlocked&&<label className="check-label warning"><input type="checkbox" checked={testResume} onChange={e=>setTestResume(e.target.checked)}/>已检查接口与额度，恢复本次声音请求。</label>}
           <button
@@ -2352,7 +2496,7 @@ function VoiceLibrary({
                         }
                         onClick={() => {
                           setTesting(v);
-                          setTestGrant(null);setTestRetry(false);setTestResume(false);
+                          setTestRetry(false);setTestResume(false);
                           setTestCommand(crypto.randomUUID());
                         }}
                       >
@@ -2649,9 +2793,9 @@ function Roles({
                     onChange={e => setApplyDefault(e.target.checked)}
                     disabled={locked || !chapter}
                   />
-                  应用到本章使用角色默认的片段
+                  应用到本章沿用默认或尚未选声的片段
                 </label>
-                {applyDefault && chapter && <div className="hint">将更新以下片段至上方所选默认音色：{chapter.segments.filter(s => s.roleId === role.id && s.voiceSource !== "override").map(s => <p key={s.id}>第 {s.order + 1} 条 · {voices.find(v => v.id === s.voiceId)?.name || "未绑定"} · {s.text.slice(0, 40)}</p>)}本条指定的片段不受影响。</div>}
+                {applyDefault && chapter && <div className="hint">选用非空声音时，会补齐未选声的片段并更新沿用默认的片段：{chapter.segments.filter(s => s.roleId === role.id && (s.voiceSource !== "override" || !s.voiceId)).map(s => <p key={s.id}>第 {s.order + 1} 条 · {voices.find(v => v.id === s.voiceId)?.name || "未绑定"} · {s.text.slice(0, 40)}</p>)}已单独选定的声音保留。</div>}
                 <p className="hint">
                   首次绑定自动补齐本章尚未指定音色的片段。后续修改默认只影响新片段；本条指定的音色保留。
                 </p>
@@ -3062,6 +3206,7 @@ function Editor({
                         id: s.id,
                         audioId: s.current,
                         basis: basis(s),
+                        ...(s.rangeContentKey ? {rangeContentKey:s.rangeContentKey} : {}),
                         state: "rework",
                       }),
                     )
@@ -3369,11 +3514,15 @@ function ExportDialog({
         busy={!connectionReady || exporting || gap !== c.gap || !!c.arrangementIssues?.length}
         onSubmit={async () => {
           await withSavedDrafts("chapter:"+c.id, undefined,async()=>{
+          await flushAudioRanges(c.id);
+          const fresh=await api<ChapterDetail>('/chapters/'+c.id);
+          if(fresh.revision!==confirmation.revision || fresh.arrangement!==confirmation.arrangement || (fresh.renderSignature ?? null)!==(confirmation.renderSignature ?? null))throw new Error('内容或播放范围已变化，请按当前范围核对后导出。');
           const receipt=await submitOperation("export:"+c.id+":"+format,{
             kind: "export",
             chapterId: c.id,
             revision: confirmation.revision,
             arrangement: confirmation.arrangement,
+            renderSignature: confirmation.renderSignature ?? null,
             format,
             confirm: true,
             reviewItems: confirmation.reviewItems || confirmation.segments

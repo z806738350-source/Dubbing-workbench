@@ -44,10 +44,16 @@ test('unknown与接口恢复在同一张卡一次提交，具体flags不依赖�
   assert.equal(nodes(tree).some(node=>node.type==='input'&&node.props.type==='checkbox'),false);assert.match(words(tree),/接口曾因权限或额度问题暂停/);await press(tree,'重新发送 1 次并继续（同时恢复接口）');assert.deepEqual(calls,[[undefined,{retryUnknown:true,resumeRoute:true}]]);
 });
 
-test('确实缺額时同卡追加范围并继续，unknown決定只带原卡真实flags',async()=>{
-  const calls=[];const f=await setup({unknown:true,routeBlocked:true,onGenerate:async(...args)=>{calls.push(args);if(!args[0])throw Object.assign(new Error('已有上限不足'),{code:'task-grant-needed'});}});
-  await press(f.tree(),'重新发送');const tree=f.tree(),authorize=nodes(tree).find(node=>node.type==='TaskAuthorization');assert.ok(authorize);assert.equal(button(tree,'重新发送'),undefined);assert.match(authorize.props.label,/1 次.*可能重复计费.*恢复/);
-  await authorize.props.onAuthorized('explicit-added-grant');assert.deepEqual(calls,[[undefined,{retryUnknown:true,resumeRoute:true}],['explicit-added-grant',{retryUnknown:true,resumeRoute:true}]]);
+test('具体决定卡一击按当前范围提交，无次数或24小时授权；失败留在原卡不扩大范围',async()=>{
+  const calls=[];const f=await setup({unknown:true,routeBlocked:true,onGenerate:async(...args)=>{calls.push(args);throw new Error('测试接口暂不可用');}});
+  await press(f.tree(),'重新发送');const tree=f.tree();assert.equal(nodes(tree).some(node=>node.type==='TaskAuthorization'||node.type==='input'&&node.props.type==='number'),false);assert.doesNotMatch(words(tree),/24小时|请求上限|沿用已有明确上限/);assert.ok(button(tree,'重新发送'));assert.match(words(tree),/测试接口暂不可用/);
+  assert.deepEqual(calls,[[undefined,{retryUnknown:true,resumeRoute:true}]]);
+});
+
+test('直接生成遇409初次打开失效卡，免费重核对后才允许当前范围的明确提交',async()=>{
+  let submissions=0,rechecks=0;const f=await setup({invalidated:true,onGenerate:async()=>{submissions++;},onRecheck:async()=>{rechecks++;}});
+  assert.equal(button(f.tree(),'开始生成'),undefined);assert.ok(button(f.tree(),'重新核对生成范围'));assert.match(words(f.tree()),/内容已变化，本次未发送/);
+  await press(f.tree(),'重新核对生成范围');assert.equal(rechecks,1);assert.equal(submissions,0);await press(f.tree(),'开始生成');assert.equal(submissions,1);
 });
 test('rechecked all-reuse scope finishes with no paid start or authorization controls',async()=>{
   let submissions=0,closed=0;

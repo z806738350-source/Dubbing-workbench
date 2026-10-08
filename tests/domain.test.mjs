@@ -13,6 +13,7 @@ import {
   compile,
 } from "../server/domain.mjs";
 import { createWorker } from "../server/worker.mjs";
+import { createExperience, configurationDecided } from "../server/experience.mjs";
 
 function setup(t, source = "第一句。😀第二句。") {
   const dir = mkdtempSync(join(tmpdir(), "dubbing-test-"));
@@ -51,6 +52,82 @@ function setup(t, source = "第一句。😀第二句。") {
     });
   return { store, d, p, c, role, v, voice, update };
 }
+
+function inferredLegacy(t) {
+  const f=setup(t,'甲收起😀信纸。\n乙抬眼望向门外。'),items=f.d.list(f.c.id).map(s=>({id:uid(),roleId:f.role.id,type:'narration',text:s.text,span:s.source.spans[0],evidence:'上下文推断',uncertain:false,roleIssues:[],issues:[]}));
+  const draft={id:uid(),kind:'extract',status:'applied',chapterId:f.c.id,source:f.c.source,sourceVersion:f.c.sourceVersion,revision:f.c.revision,roles:[{id:f.role.id,narrator:true}],items};
+  f.store.put('suggestions',draft,f.c.id);
+  const rows=f.d.list(f.c.id).map((s,index)=>({...s,roleConfirmed:false,identityConfirmed:true,analysisOrigin:{draftId:draft.id,itemId:items[index].id,evidence:'上下文推断'},decisions:{role:{source:'policy_ai',state:'needsDecision',values:[s.roleId,s.type],draftId:draft.id,inputRevision:draft.revision,sourceSpan:items[index].span}}}));
+  rows.forEach(s=>f.store.put('segments',s,f.c.id));
+  const change={id:'ux-change:'+draft.id,changeId:draft.id,chapterId:f.c.id,projectId:f.p.id,items:rows.map(s=>({id:s.id,before:{roleConfirmed:false,decisions:{}},after:{roleId:s.roleId,type:s.type,roleConfirmed:false,decisions:structuredClone(s.decisions)}}))};
+  f.store.put('settings',change,f.c.id);
+  return {...f,draft,rows,change};
+}
+
+test('启动只修可由已采用原稿证实的旁白推断，章修订仅加一次、音频和后续撤销保持',t=>{
+  const f=inferredLegacy(t),inputs=f.rows.map(inputOf),before=f.store.get('chapters',f.c.id);
+  f.rows[0].current='retained-audio';f.rows[0].approved='retained-audio';f.rows[0].review={audioId:'retained-audio',state:'passed'};f.store.put('segments',f.rows[0],f.c.id);f.store.put('audios',{id:'retained-audio',input:inputs[0],review:f.rows[0].review},f.c.id);
+  const audio=f.store.get('audios','retained-audio'),domain=createDomain(f.store),rows=f.rows.map(s=>f.store.get('segments',s.id)),after=f.store.get('chapters',f.c.id);
+  assert.ok(rows.every(s=>s.roleConfirmed&&s.decisions.role.state==='accepted'&&configurationDecided(s)));assert.deepEqual(rows.map(inputOf),inputs);assert.deepEqual(rows.map(s=>s.source),f.rows.map(s=>s.source));assert.deepEqual(f.store.get('audios','retained-audio'),audio);assert.equal(rows[0].current,'retained-audio');assert.deepEqual(rows[0].review,f.rows[0].review);assert.equal(after.revision,before.revision+1);assert.equal(after.arrangement,before.arrangement);assert.equal(f.store.all('jobs').length,0);assert.equal(f.store.all('attempts').length,0);assert.deepEqual(f.store.get('suggestions',f.draft.id),f.draft);
+  assert.throws(()=>domain.mutate('segment.update',{chapterId:f.c.id,revision:before.revision,id:rows[0].id,roleConfirmed:false}),e=>e.status===409);
+  createDomain(f.store);assert.equal(f.store.get('chapters',f.c.id).revision,after.revision);assert.deepEqual(f.rows.map(s=>f.store.get('segments',s.id)),rows);
+  createExperience(f.store,domain,{}, {},{}).undo({changeId:f.draft.id,revision:after.revision});assert.ok(f.rows.every(s=>!f.store.get('segments',s.id).roleConfirmed));
+  const undone=f.rows.map(s=>f.store.get('segments',s.id));createDomain(f.store);assert.deepEqual(f.rows.map(s=>f.store.get('segments',s.id)),undone);
+});
+
+for(const type of ['dialogue','thought'])test('启动修复已知人物的明确上下文归属 '+type,t=>{
+  const f=inferredLegacy(t),person={...f.role,id:uid(),name:'人物',narrator:false};f.store.put('roles',person,f.p.id);f.draft.roles.push(person);
+  for(const [index,s] of f.rows.entries()){
+    s.roleId=person.id;s.type=type;Object.assign(f.draft.items[index],{roleId:person.id,type});s.decisions.role.values=[person.id,type];
+    f.change.items[index].after={...f.change.items[index].after,roleId:person.id,type,decisions:structuredClone(s.decisions)};f.store.put('segments',s,f.c.id);
+  }
+  f.store.put('suggestions',f.draft,f.c.id);f.store.put('settings',f.change,f.c.id);createDomain(f.store);
+  assert.ok(f.rows.every(s=>configurationDecided(f.store.get('segments',s.id))));
+  assert.deepEqual(f.rows.map(s=>f.store.get('segments',s.id).text),f.rows.map(s=>s.text));
+});
+
+for(const [name,alter] of [
+  ['真实uncertain',(s,r)=>r.items[0].uncertain=true],
+  ['旁白被标作对白',(s,r)=>{s.type=r.items[0].type='dialogue';s.decisions.role.values=[s.roleId,s.type];}],
+  ['旁白被标作独白',(s,r)=>{s.type=r.items[0].type='thought';s.decisions.role.values=[s.roleId,s.type];}],
+  ['角色疑点',(s,r)=>r.items[0].roleIssues=['仍有归属冲突']],
+  ['片段身份pending',s=>s.identityPending=true],
+  ['已手动归属',s=>s.decisions.role.source='human'],
+  ['人工保护角色',s=>s.protectedFields=['roleId']],
+  ['人工保护类型',s=>s.protectedFields=['type']],
+  ['人工取消',s=>s.decisions.role.state='rejected'],
+  ['正文后来修改',s=>s.text+='新内容。'],
+  ['类型后来修改',s=>s.type='dialogue'],
+  ['源范围后来修改',s=>s.source.spans[0]={start:1,end:3}],
+  ['源版本后来修改',s=>s.source.version++],
+  ['决定值不匹配',s=>s.decisions.role.values=['other-role','narration']],
+  ['决定原稿不匹配',s=>s.decisions.role.draftId='other-draft'],
+  ['决定源范围不匹配',s=>s.decisions.role.sourceSpan={start:1,end:3}],
+  ['决定输入修订不匹配',s=>s.decisions.role.inputRevision++],
+  ['不是已采用原稿',(s,r)=>r.status='ready'],
+  ['缺原始uncertain',(s,r)=>delete r.items[0].uncertain],
+  ['原稿正文不匹配',(s,r)=>r.items[0].text+='另一份文字。'],
+  ['已人工编辑候选',(s,r)=>r.items[0].userEdited=true],
+  ['原稿并非已知旁白',(s,r)=>r.roles[0].narrator=false],
+  ['原稿角色表格式损坏',(s,r)=>r.roles={}],
+  ['缺analysisOrigin',s=>delete s.analysisOrigin],
+  ['缺draftId且旧policy无draftId',s=>{delete s.analysisOrigin.draftId;delete s.decisions.role.draftId;}],
+  ['缺itemId',s=>delete s.analysisOrigin.itemId],
+  ['损坏角色键不执行SQL',s=>{s.roleId={id:'invalid-role'};s.decisions.role.values=[s.roleId,s.type];}],
+  ['损坏章节键不执行SQL',s=>s.chapterId={id:'invalid-chapter'}],
+  ['旧角色保护格式损坏',s=>s.protectedFields='roleId'],
+])test('启动兼容保留 '+name,t=>{
+  const f=inferredLegacy(t);alter(f.rows[0],f.draft);f.store.put('segments',f.rows[0],f.c.id);f.store.put('suggestions',f.draft,f.c.id);
+  const before=structuredClone(f.rows[0]);createDomain(f.store);assert.deepEqual(f.store.get('segments',before.id),before);
+});
+
+for(const kind of ['undone','role-pending','chapter-source','chapter-version'])test('启动兼容不复活 '+kind,t=>{
+  const f=inferredLegacy(t);
+  if(kind==='undone'){f.change.undoneAt='already-explicitly-undone';f.store.put('settings',f.change,f.c.id);}
+  if(kind==='role-pending'){f.role.identityPending=true;f.store.put('roles',f.role,f.p.id);}
+  if(kind==='chapter-source'||kind==='chapter-version'){const c=f.store.get('chapters',f.c.id);if(kind==='chapter-source')c.source+='新正文。';else c.sourceVersion++;f.store.put('chapters',c,f.p.id);}
+  const before=f.rows.map(s=>f.store.get('segments',s.id)),revision=f.store.get('chapters',f.c.id).revision;createDomain(f.store);assert.deepEqual(f.rows.map(s=>f.store.get('segments',s.id)),before);assert.equal(f.store.get('chapters',f.c.id).revision,revision);
+});
 test("章节改名保留音频编排，但旧编辑保存仍冲突", t => {
   const {store,d,c,update} = setup(t);
   const before = store.get("chapters", c.id);

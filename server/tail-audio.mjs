@@ -5,7 +5,7 @@ import { pipeline } from 'node:stream/promises';
 // Bump when detection or PCM rewriting changes; persisted recipes must not replay a newer algorithm.
 export const TAIL_PROCESSING_VERSION = 'dry-tail-v1';
 
-async function pcmWave(file, use) {
+export async function pcmWave(file, use) {
   const handle = await open(file, 'r');
   try {
     const size = (await handle.stat()).size;
