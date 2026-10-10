@@ -283,10 +283,15 @@ export function createExperience(store, domain, worker, analysis, config) {
       const context=executionContext || (p.includePerformance===false?{actorKind:'human_direct',performanceBasic:{source:{kind:'ui',id:p.operationId || 'prepare-preview'}}}:undefined);
       return analysis.plan({...p,kind:p.analysisKind || (domain.list(p.chapterId).length ? 'director' : 'extract')},context);
     }
-    const c = domain.editable(p.chapterId,p.revision);
+    let c = domain.editable(p.chapterId,p.revision);
     if (p.arrangement !== undefined && p.arrangement !== c.arrangement) fail('实际声音编排在核对后已变化，请重新查看生成范围',409);
     if (!Array.isArray(p.ids) || !p.ids.length || new Set(p.ids).size !== p.ids.length || p.ids.some(id => !domain.list(c.id).some(s => s.id === id && !s.excluded))) fail('请选择当前章节的有效台词');
+    const beatPlan=domain.enhancement.reconcileProductionBeats(c.id,{ids:p.ids,mode:p.mode,unitId:p.unitId,operationId:p.operationId,allowCreate:!assistantActor(executionContext)});
+    c=store.get('chapters',c.id);
     let rows = domain.enhancement.resolve(c.id).filter(row => row.s.members.some(id => p.ids.includes(id)));
+    for (const unit of [...beatPlan.groups,...beatPlan.protectedPending]) rows=rows.filter(row=>!row.s.members.some(id=>unit.members.includes(id))).concat({s:unit});
+    const order=new Map(domain.list(c.id).map((s,index)=>[s.id,index]));
+    rows.sort((a,b)=>order.get(a.s.members[0])-order.get(b.s.members[0]));
     if (p.unitId) {
       const unit = domain.enhancement.getUnit(p.unitId);
       if (unit.chapterId !== c.id || !['active','pending'].includes(unit.state) || !unit.members.some(id => p.ids.includes(id))) fail('目标对话片段已变化',409);
@@ -311,9 +316,9 @@ export function createExperience(store, domain, worker, analysis, config) {
         try {fileVersion=referenceVersion(statSync(join(store.directory,voice.path)));}catch{}
         return {voiceId,revision:voice.revision ?? 1,fileVersion};
       });
-      return {unitId:row.s.id,members:row.s.members,mode,model:input.model,referenceVoices,reuse:!request,rejected,audioId:st.audio?.id || null,outstandingAttemptIds};
+      return {unitId:row.s.id,members:row.s.members,mode,model:input.model,referenceVoices,reuse:!request,rejected,audioId:st.audio?.id || null,outstandingAttemptIds,...(unit.productionBeat?{productionBeat:unit.productionBeat,guidance:unit.guidance}:{}),...(row.s.productionBeatReason?{productionBeatReason:row.s.productionBeatReason}:{})};
     });
-    return {chapterId:c.id,revision:c.revision,arrangement:c.arrangement,model:config.model,actionKind,unitIds:units.filter(u => !u.reuse).map(u => u.unitId),memberIds:units.flatMap(u => u.members),units,rejectedUnits:units.filter(u=>u.rejected).map(u=>u.unitId),outstandingAttemptIds:[...new Set(units.filter(u=>!u.reuse).flatMap(u=>u.outstandingAttemptIds))],textRequests:0,audioRequests:units.filter(u => !u.reuse).length};
+    return {chapterId:c.id,revision:c.revision,arrangement:c.arrangement,model:config.model,actionKind,unitIds:units.filter(u => !u.reuse).map(u => u.unitId),memberIds:units.flatMap(u => u.members),units,productionBeatSkips:beatPlan.skipped,rejectedUnits:units.filter(u=>u.rejected).map(u=>u.unitId),outstandingAttemptIds:[...new Set(units.filter(u=>!u.reuse).flatMap(u=>u.outstandingAttemptIds))],textRequests:0,audioRequests:units.filter(u => !u.reuse).length};
   }
   function view(op) {
     const result = {...op}; delete result.request;
@@ -409,7 +414,14 @@ export function createExperience(store, domain, worker, analysis, config) {
           });
           payload = {...payload,kind:'unit-generate',revision:adopted.revision,unitIds:[p.unitId],mode:'scene'};
         } else if (p.kind === 'generateSelection') {
-          const selected = plan(p); op.result = {plan:selected};
+          const selected=store.transaction(()=>{
+            const previous=op.result?.plan,current=store.get('chapters',p.chapterId);
+            const request=previous && current.revision===previous.revision && current.arrangement===previous.arrangement ? {...p,revision:previous.revision,arrangement:previous.arrangement} : p;
+            const selected=plan(request,executionContext);
+            if(previous && !same(previous,selected))fail('上次生成范围已变化，请重新核对后发起新操作',409);
+            op.result={plan:selected};op.createdObjectIds=selected.units.filter(u=>u.productionBeat).map(u=>u.unitId);save(op);
+            return selected;
+          });
           if(p.expectedModel!==undefined && (typeof p.expectedModel!=='string' || selected.units.filter(u=>!u.reuse).some(u=>u.model!==p.expectedModel)))fail('模型在发起后已变化，请核对当前范围',409);
           if(p.expectedReferenceVoices!==undefined) {
             const refs=[...new Map(selected.units.filter(u=>!u.reuse).flatMap(u=>u.referenceVoices).map(v=>[v.voiceId,v])).values()].sort((a,b)=>a.voiceId.localeCompare(b.voiceId));

@@ -9,6 +9,7 @@ import {createWorker} from '../server/worker.mjs';
 import {createAnalysis} from '../server/analysis.mjs';
 import {uploadVoice} from '../server/audio.mjs';
 import {compile} from '../server/templates.mjs';
+import {performanceContext} from '../server/performance.mjs';
 import {createExperience,configurationDecided,reserveGrant,settleGrant} from '../server/experience.mjs';
 import {startServer} from '../server/index.mjs';
 
@@ -447,4 +448,122 @@ test('F02 组返工在混合选择中计一次，redoRejected复用好结果且e
   assert.equal(d.chapter(c.id).units.find(u=>u.id===group.id).readiness.export.allowed,false);
   await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),ids:[ids[0],extra.id],actionKind:'redoRejected',grantId:g.grantId});await w.tick();assert.equal(calls,3);
   assert.equal(e.plan({chapterId:c.id,revision:rev(),ids:[...ids,extra.id],actionKind:'forceRegenerate'}).audioRequests,2);
+});
+
+test('productionBeat同次转换进入真实生成计划和冻结请求，operation重放只发送一次组请求',async t=>{
+  const f=setup(t),{store,d,c,role,v,e,a,w,rev,dir}=f;
+  const chapter=store.get('chapters',c.id);chapter.source='教练喜滋滋道。“新队员她今天报到了。”';store.put('chapters',chapter,c.projectId);
+  const voice={...v,id:uid(),path:'speaker-reference.wav'},person={...role,id:uid(),name:'教练',narrator:false,voiceId:voice.id};
+  writeFileSync(join(dir,voice.path),wav());store.put('voices',voice);store.put('roles',person,c.projectId);
+  let textCalls=0,audioCalls=0,frozen;
+  t.mock.method(globalThis,'fetch',async(url,init)=>{
+    if(String(url).includes('/audio/speech')) {audioCalls++;frozen=JSON.parse(init.body);return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});}
+    textCalls++;const input=JSON.parse(JSON.parse(init.body).messages[1].content);
+    return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({items:input.blocks.map(b=>({from:b.id,to:b.id,roleId:b.text.includes('“')?person.id:role.id,type:b.text.includes('“')?'dialogue':'narration',performance:'按原句清楚读出，保持现有语气。',performanceEvidence:{kind:'原文明示',refs:[b.id]},performanceAnchors:[],performanceUncertain:false,evidence:'原文明示',evidenceRefs:[b.id],uncertain:false,reason:'原句归属'})),productionBeats:[{from:input.blocks[0].id,to:input.blocks.at(-1).id,viewpoint:'原叙述',change:'动作旁白接到乐观讲述',requiredRefs:input.blocks.map(b=>b.id),evidenceRefs:[input.blocks[0].id],guidance:'旁白完整交代动作后自然接回原有对白，保持乐观语势，不要添加笑声。'}]})}}]});
+  });
+  const prepared=await e.run({operationId:uid(),kind:'prepareChapter',chapterId:c.id,revision:rev(),auditoryPolicy:{version:1,mode:'conservative'}});await a.close();
+  assert.equal(e.get(prepared.operationId).outcome,'completed');assert.equal(textCalls,1,JSON.stringify(e.get(prepared.operationId).result.analysis));assert.equal(audioCalls,0);
+  const rows=d.list(c.id),ids=rows.map(s=>s.id),unitsBefore=store.all('units');
+  const assistantPlan=e.plan({chapterId:c.id,revision:rev(),ids},{actorKind:'assistant_delegated'});assert.equal(assistantPlan.audioRequests,ids.length);assert.deepEqual(store.all('units'),unitsBefore);
+  const plan=e.plan({chapterId:c.id,revision:rev(),ids});assert.equal(plan.audioRequests,1,JSON.stringify(plan));assert.equal(plan.units.length,1);assert.ok(plan.units[0].productionBeat);assert.equal(plan.units[0].referenceVoices.length,2);
+  const groupId=plan.unitIds[0];assert.deepEqual(d.enhancement.resolve(c.id).map(r=>r.s.id),ids);
+  const request={operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:plan.revision,arrangement:plan.arrangement,ids,expectedModel:plan.model,expectedReferenceVoices:plan.units[0].referenceVoices};
+  const started=await e.run(request);assert.equal(started.error,undefined);assert.deepEqual(started.createdObjectIds,[groupId]);assert.equal(started.result.plan.audioRequests,1);
+  assert.deepEqual((await e.run(request)).jobIds,started.jobIds);assert.equal(store.all('jobs').length,1);assert.equal(store.all('attempts').length,1);
+  await w.tick();assert.equal(audioCalls,1);assert.equal(textCalls,1);assert.equal(store.get('jobs',started.jobIds[0]).status,'success');
+  const attempt=store.all('attempts',started.jobIds[0])[0];assert.equal(attempt.input.template,'dialogue-dry-v1');assert.equal(attempt.input.referenceVoiceIds.length,2);assert.deepEqual(attempt.input.members.map(s=>s.text),rows.map(s=>s.text));assert.equal(frozen.text_prompt,compile(attempt.input));
+  assert.deepEqual(d.enhancement.resolve(c.id).map(r=>r.s.id),[groupId]);assert.deepEqual(d.list(c.id).map(s=>s.text),rows.map(s=>s.text));
+  assert.deepEqual((await e.run(request)).jobIds,started.jobIds);await w.tick();assert.equal(audioCalls,1);assert.equal(store.all('units',c.id).filter(u=>u.kind==='group').length,1);
+});
+
+test('productionBeat生成预检失败后同operation恢复唯一组，外部配声或来源变化停止原范围',async t=>{
+  for(const change of ['unchanged','voice','source'])await t.test(change,async t=>{
+    const {store,d,c,e,w,rev,v}=setup(t,true),analysisId=uid(),chapter=store.get('chapters',c.id);
+    chapter.auditoryPolicy={version:1,mode:'conservative'};store.put('chapters',chapter,c.projectId);
+    const members=d.list(c.id).map(s=>{s.analysisOrigin={draftId:analysisId,itemId:uid()};s.protectedFields=[];s.decisions={...s.decisions,performance:{source:'policy_ai',values:s.performance}};store.put('segments',s,c.id);return s;});
+    const ids=members.map(s=>s.id),beat={batchId:'retry-batch',from:0,to:members.length-1,sourceVersion:1,segmentIds:ids,members,guidance:'两句按原文次序保持自然衔接。',requiredRefs:[0],evidenceRefs:[0]};
+    beat.evidenceContext=performanceContext(chapter,members,[{id:0,...members[0].source.spans[0]}]);
+    store.put('suggestions',{id:analysisId,chapterId:c.id,kind:'extract',status:'applied',productionBeats:[beat]},c.id);
+    let submissions=0,audioCalls=0;const submit=w.submit.bind(w);
+    t.mock.method(w,'submit',async(...args)=>{submissions++;if(submissions===1)throw Object.assign(new Error('模拟发送前预算不足'),{status:403});return submit(...args);});
+    t.mock.method(globalThis,'fetch',async()=>{audioCalls++;return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});});
+    const request={operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),ids},first=await e.run(request),groupId=first.result.plan.unitIds[0];
+    assert.equal(first.errorStatus,403);assert.equal(store.all('jobs').length,0);assert.equal(store.all('units',c.id).filter(u=>u.kind==='group').length,1);assert.equal(first.result.plan.audioRequests,1);
+    if(change==='voice'){const voice={...v,id:uid()};store.put('voices',voice);d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:ids[0],voiceId:voice.id});}
+    if(change==='source'){const changed=store.get('chapters',c.id);changed.source='改过的原文。';changed.sourceVersion++;changed.revision++;store.put('chapters',changed,c.projectId);}
+    const retried=await e.run(request);
+    if(change==='unchanged'){
+      assert.equal(retried.error,undefined);assert.deepEqual(retried.createdObjectIds,[groupId]);assert.deepEqual(retried.result.plan.unitIds,[groupId]);await w.tick();assert.equal(audioCalls,1);assert.equal(store.all('jobs').length,1);
+      assert.deepEqual((await e.run(request)).jobIds,retried.jobIds);assert.equal(submissions,2);
+    }else{assert.equal(retried.errorStatus,409);assert.equal(submissions,1);assert.equal(audioCalls,0);assert.equal(store.all('jobs').length,0);assert.equal(store.all('attempts').length,0);}
+    assert.equal(store.all('units',c.id).filter(u=>u.kind==='group').length,1);
+  });
+});
+
+test('F1 活动自动组引用邻句变化后正常预检阻断，已排队或已发送结果不覆盖原音',async t=>{
+  for(const stage of ['preflight','queued','inflight','unknown'])await t.test(stage,async t=>{
+    const {store,d,e,w,c:initial}=setup(t);
+    const c=d.mutate('chapter.create',{projectId:initial.projectId,title:'组外依据',source:'第一句。第二句。第三句。',segment:true,auditoryPolicy:{version:1,mode:'conservative'}}),rev=()=>store.get('chapters',c.id).revision;
+    d.mutate('segment.confirm',{chapterId:c.id,revision:rev(),ids:d.list(c.id).map(s=>s.id)});
+    const analysisId=uid(),rows=d.list(c.id).map(s=>{
+      s.analysisOrigin={draftId:analysisId,itemId:uid()};s.protectedFields=[];
+      s.decisions={...s.decisions,performance:{source:'policy_ai',values:s.performance}};store.put('segments',s,c.id);return s;
+    }),ids=rows.slice(0,2).map(s=>s.id),beat={batchId:'external-context',from:0,to:1,sourceVersion:1,segmentIds:ids,members:rows.slice(0,2),guidance:'两句按原文次序保持自然衔接。',requiredRefs:[0],evidenceRefs:[2]};
+    beat.evidenceContext=performanceContext(store.get('chapters',c.id),rows,[{id:0,...rows[0].source.spans[0]},{id:2,...rows[2].source.spans[0]}]);
+    store.put('suggestions',{id:analysisId,chapterId:c.id,kind:'extract',status:'applied',productionBeats:[beat]},c.id);
+    let calls=0;const change=(concurrent=false)=>{
+      const text='第三句已经改变了原来的语境。';
+      // 编辑入口已有任务锁；并发存储变化用于核对冻结依据本身，不能只靠章节修订挡住。
+      if(concurrent)store.put('segments',{...store.get('segments',rows[2].id),text},c.id);
+      else d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:rows[2].id,text});
+    };
+    t.mock.method(globalThis,'fetch',async()=>{
+      calls++;if(calls===2&&stage==='inflight')change(true);
+      if(calls===2&&stage==='unknown')throw Error('fixture connection dropped after send');
+      return new Response(wav(),{headers:{'Content-Type':'audio/wav'}});
+    });
+    const first=await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),ids});
+    assert.equal(first.error,undefined);await w.tick();assert.equal(calls,1);
+    const groupId=first.result.plan.unitIds[0],oldAudioId=store.get('units',groupId).variants.dry.current;
+    assert.equal(d.enhancement.status(store.get('units',groupId),'dry').validity,'matched');
+    if(stage!=='preflight'){
+      const job=await w.submit({kind:'unit-generate',chapterId:c.id,revision:rev(),unitId:groupId,mode:'dry',commandId:uid()});
+      if(stage==='queued'){assert.throws(()=>change(),/本章正在处理任务/);change(true);}
+      await w.tick();
+      const attempt=store.all('attempts',job.id)[0];
+      if(stage==='queued'){assert.equal(calls,1);assert.equal(attempt.status,'failed');}
+      else if(stage==='inflight'){assert.equal(calls,2);assert.equal(attempt.status,'success');assert.equal(attempt.adopted,false);assert.ok(store.get('audios',attempt.id));}
+      else{assert.equal(calls,2);assert.equal(attempt.status,'unknown');change();}
+    }else change();
+    const group=store.get('units',groupId);
+    assert.equal(group.state,'active');assert.equal(group.variants.dry.current,oldAudioId);assert.ok(store.get('audios',oldAudioId));
+    assert.equal(d.enhancement.status(group,'dry').validity,'stale');
+    assert.equal(d.chapter(c.id).playbackItems.find(item=>item.id===groupId).validity,'stale');
+    assert.throws(()=>e.plan({chapterId:c.id,revision:rev(),ids}),/局部演播依据已改变/);
+    const retry=await e.run({operationId:uid(),kind:'generateSelection',chapterId:c.id,revision:rev(),ids});
+    assert.equal(retry.errorStatus,409);await w.tick();assert.equal(calls,stage==='preflight'||stage==='queued'?1:2);
+    assert.equal(store.all('units',c.id).filter(u=>u.kind==='group').length,1);
+  });
+});
+
+test('F2 普通范围预检保留人工scene接管的pending组，更新dry指导后仍沿原组生成',t=>{
+  const {store,d,c,e,rev}=setup(t,true),analysisId=uid(),chapter=store.get('chapters',c.id);
+  chapter.auditoryPolicy={version:1,mode:'conservative'};store.put('chapters',chapter,c.projectId);
+  const members=d.list(c.id).map(s=>{
+    s.analysisOrigin={draftId:analysisId,itemId:uid()};s.protectedFields=[];
+    s.decisions={...s.decisions,performance:{source:'policy_ai',values:s.performance}};store.put('segments',s,c.id);return s;
+  }),ids=members.map(s=>s.id),beat={batchId:'manual-scene',from:0,to:1,sourceVersion:1,segmentIds:ids,members,guidance:'两句按原文次序保持自然衔接。',requiredRefs:[0],evidenceRefs:[0]};
+  beat.evidenceContext=performanceContext(chapter,members,[{id:0,...members[0].source.spans[0]}]);
+  store.put('suggestions',{id:analysisId,chapterId:c.id,kind:'extract',status:'applied',productionBeats:[beat]},c.id);
+  const groupId=e.plan({chapterId:c.id,revision:rev(),ids}).unitIds[0];
+  const update=(mode,guidance)=>d.mutate('unit.update',{chapterId:c.id,revision:rev(),id:groupId,entityRevision:store.get('units',groupId).revision,mode,guidance});
+  update('scene','人工指定这个组的场景表达。');
+  d.mutate('segment.update',{chapterId:c.id,revision:rev(),id:ids[0],performance:'人工调整本句重音。'});
+  assert.throws(()=>e.plan({chapterId:c.id,revision:rev(),ids}),/局部演播依据已改变/);
+  const kept=store.get('units',groupId);assert.equal(kept.state,'pending');assert.deepEqual(kept.members,ids);
+  assert.equal(kept.variants.scene.guidance,'人工指定这个组的场景表达。');assert.equal(kept.variants.scene.guidanceSource.kind,'user');
+  update('dry','按人工设置完整演播两句，保留原有重音。');
+  const plan=e.plan({chapterId:c.id,revision:rev(),ids});assert.deepEqual(plan.unitIds,[groupId]);assert.equal(plan.audioRequests,1);
+  assert.equal(store.get('units',groupId).variants.scene.guidance,kept.variants.scene.guidance);
+  assert.equal(store.all('jobs').length,0);assert.equal(store.all('attempts').length,0);
 });

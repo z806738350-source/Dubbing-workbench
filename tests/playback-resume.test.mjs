@@ -233,6 +233,13 @@ test('裁剪等待期间该段换成新音频，按同单元开头续播，不�
   f.fresh.masters=[{id:'new',arrangement:1,sampleRate:48000,mapping:[{unitId:'two',audioId:'two-new',startFrame:240000,endFrame:480000}]}];
   await project(declaration('rangeSaved'),f.env)({chapterId:'chapter'});assert.equal(f.calls.players.at(-1)?.resumeAt,5);
 });
+test('裁剪续播遇到引用语境失配，即使旧母版同签名也不播放或重新准备',async()=>{
+  const f=fixture(),request=f.env.api;f.env.flushAudioRanges=async()=>{};
+  f.env.rangeResume.current={kind:'masters',intent:1,chapterId:'chapter',unitId:'two',audioId:'two-old',sourceFrame:96000};
+  f.fresh.masters=[{id:'old',arrangement:1,sampleRate:48000,mapping:[{unitId:'two',audioId:'two-old',startFrame:240000,endFrame:480000}]}];f.fresh.playbackItems[0].validity='stale';
+  f.env.api=async(path,body)=>{assert.equal(body,undefined,'语境失效不能自动提交成品任务');return request(path);};
+  await project(declaration('rangeSaved'),f.env)({chapterId:'chapter'});assert.equal(f.calls.players.length,0);assert.equal(f.env.rangeResume.current,null);assert.match(f.calls.notices.at(-1),/依据已变化/);
+});
 
 test('只有整章媒体播放建立跟踪，单条抽听不覆盖既有整章快照',async()=>{
   const f=fixture({tracked:false});f.env.player={kind:'masters',id:'master',chapterId:'chapter',master:{mapping:[]},intent:1};f.env.playerRef.current=f.env.player;f.mount();

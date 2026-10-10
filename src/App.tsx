@@ -664,7 +664,10 @@ export default function App() {
       const request={plan,ids,regenerate:options.regenerate===true,retryUnknown:false,resumeRoute:false};
       setInspectorOpen(false);
       const unknown=!!plan.outstandingAttemptIds?.length||plan.units.some(p=>context.units?.find(u=>u.id===p.unitId)?.variants[p.mode].latest==='unknown');
-      if(intent!==undefined||unknown||state?.settings.routeBlocked)setGenerationPlan(request);
+      if(intent!==undefined||unknown||state?.settings.routeBlocked||plan.units.some(unit=>unit.productionBeat)){
+        if(plan.revision!==revision)await refresh();
+        if(current())setGenerationPlan(request);
+      }
       else try{await submitGeneration(undefined,undefined,request,context,expected);}
       catch(error){if(current()&&(error as {status?:number;retryClass?:string}).status===409&&(error as {retryClass?:string}).retryClass!=='check-existing-operation')setGenerationPlan({...request,invalidated:true});else throw error;}
     });}catch(error){if(current())throw error;}
@@ -922,6 +925,7 @@ export default function App() {
     if(context.status.activeJobs.length){await refresh();return;}
     acceptPlaybackChapter(context);
     const fresh=context.chapter;
+    if(fresh.playbackItems.some(item=>item.validity!=='matched')){rangeResume.current=null;setNotice('引用语境或声音依据已变化，请先核对并更新声音，再继续整章试听。');return;}
     const master=fresh.masters.find(m=>m.arrangement===fresh.arrangement&&(m.renderSignature ?? null)===(fresh.renderSignature ?? null));
     if(master){
       const entry=master.mapping.find(x=>x.unitId===resume.unitId);
@@ -1707,7 +1711,7 @@ export default function App() {
       }}/>}
       {unitPanelId === "list" && chapter && <Dialog title="对戏组与声音版本" onClose={()=>setUnitPanelId(null)} wide>
         <p className="hint">组级操作覆盖全部成员。场景版本按单元管理，切换已有版本仅做本地处理。</p>
-        {(chapter.units || []).map(unit=><button className="nav-item" key={unit.id} onClick={()=>setUnitPanelId(unit.id)}>
+        {(chapter.units || []).map(unit=><button className="nav-item unit-version-item" key={unit.id} onClick={()=>setUnitPanelId(unit.id)}>
           {unit.kind === "group" ? "对戏组" : "单条"} · {unit.members.some(id=>!chapter.segments.some(s=>s.id === id)) ? "成员记录缺失" : "第 " + unit.members.map(id=>chapter.segments.find(s=>s.id === id)!.order+1).join("、") + " 条"} · {unit.state === "pending" ? "待生成，未启用" : unit.state === "dissolved" ? "已解除 · 历史保留" : "已启用"} · {unit.mode === "scene" ? "场景" : "干声"}{!!unit.diagnostics?.length && " · 需修复"}
         </button>)}
       </Dialog>}
@@ -1800,7 +1804,7 @@ export default function App() {
                 try{receipt=await api<OperationResult<{analysis:{status:string}}>>("/operations/"+operationId);}catch(error){if((error as {status?:number}).status!==404)throw error;}
                 if(!receipt){
                   const target=await api<ChapterDetail>("/chapters/"+id),model=stateRef.current?.settings.textModel||"gemini-3.8-flash";
-                  const payload={kind:"prepareChapter",chapterId:id,revision:target.revision,ids:[],includePerformance:true,performanceMode:"initial",model};
+                  const payload={kind:"prepareChapter",chapterId:id,revision:target.revision,ids:[],includePerformance:true,performanceMode:"initial",model,...(target.auditoryPolicy?{auditoryPolicy:target.auditoryPolicy}:{})};
                   if(projectRef.current!==projectId||draftWorkspace()!==workspaceIdentity)return true;
                   receipt=await api<OperationResult<{analysis:{status:string}}>>("/operations",{...payload,operationId});
                 }
@@ -2271,11 +2275,11 @@ function RenameProject({ project, save, onClose }: { project: Project; save: (a:
 }
 
 type ImportCommand = {operationId:string;payload:Record<string,unknown>;chapterId?:string;rejection?:{message:string;fieldErrors:Record<string,string>;at:string}};
-type ImportDraft = {source:string;title:string;prepare:boolean;imported:{text:string;name:string}|null;command?:ImportCommand;history?:ImportCommand[]};
+type ImportDraft = {source:string;title:string;prepare:boolean;auditoryMode?:"legacy"|"conservative";imported:{text:string;name:string}|null;command?:ImportCommand;history?:ImportCommand[]};
 function ImportChapter({projectId,onClose,onCreated}:{projectId:string;onClose:()=>void;onCreated:(id:string,prepare?:boolean,operationId?:string)=>Promise<void|boolean>}) {
   const draftId="import-chapter/"+projectId;
   const workspaceIdentity=useRef(draftWorkspace()).current;
-  const [draft,setDraft]=useState<ImportDraft>(()=>readDraft<ImportDraft>(draftId)?.draft||{source:"",title:"",prepare:true,imported:null});
+  const [draft,setDraft]=useState<ImportDraft>(()=>readDraft<ImportDraft>(draftId)?.draft||{source:"",title:"",prepare:true,auditoryMode:"conservative",imported:null});
   const [error,setError]=useState(""),[pending,setPending]=useState(false),[reading,setReading]=useState(false),[saved,setSaved]=useState(true);
   const live=useRef(true),fileIntent=useRef(0),draftRef=useRef(draft);draftRef.current=draft;
   useEffect(()=>()=>{live.current=false;fileIntent.current++;},[]);
@@ -2295,7 +2299,7 @@ function ImportChapter({projectId,onClose,onCreated}:{projectId:string;onClose:(
     persist(value,current()&&draftRef.current.command?.operationId===command.operationId&&owns);
     return owns;
   };
-  const payloadOf=(value:ImportDraft):Record<string,unknown>=>JSON.parse(JSON.stringify({projectId,title:value.title.trim()||"新章节",source:value.source,importedSource:value.imported?.text||value.source,sourceFilename:value.imported?.name,segment:!value.prepare}));
+  const payloadOf=(value:ImportDraft):Record<string,unknown>=>JSON.parse(JSON.stringify({projectId,title:value.title.trim()||"新章节",source:value.source,importedSource:value.imported?.text||value.source,sourceFilename:value.imported?.name,segment:!value.prepare,...(value.auditoryMode?{auditoryPolicy:{version:1,mode:value.auditoryMode}}:{})}));
   const locked=!!draft.command&&!draft.command.rejection;
   const problems={...(draft.command?.rejection&&JSON.stringify(draft.command.payload)===JSON.stringify(payloadOf(draft))?draft.command.rejection.fieldErrors:{}),...importProblems(payloadOf(draft))};
   const edit=(change:Partial<ImportDraft>)=>{if(!current()||(draftRef.current.command&&!draftRef.current.command.rejection))return;if(change.source!==undefined){fileIntent.current++;setReading(false);}try{persist({...draftRef.current,...change});setError("");}catch{/* The full editable text remains in this page for copying. */}};
@@ -2359,6 +2363,8 @@ function ImportChapter({projectId,onClose,onCreated}:{projectId:string;onClose:(
       <Field label="章节名称" hint={`${draft.title.trim().length} / ${importLimits.title} 字符 · 留空使用“新章节”`}><input value={draft.title} disabled={pending||locked} aria-invalid={!!problems.title} aria-describedby={problems.title?"import-title-error":undefined} onChange={event=>edit({title:event.target.value})} placeholder="例如：第一章"/>{problems.title&&<p id="import-title-error" className="error-inline" role="alert">{problems.title}</p>}</Field>
       <Field label="原文预览" hint="原文完整保留；编辑预览不会改写导入文件来源。"><textarea value={draft.source} disabled={pending||locked} aria-invalid={!!(problems.source||problems.importedSource)} onChange={event=>edit({source:event.target.value})} rows={9} placeholder="在这里粘贴本章原文"/>{(problems.source||problems.importedSource)&&<p className="error-inline" role="alert">{problems.source||problems.importedSource}</p>}</Field>
       <label className="check-label"><input type="checkbox" checked={draft.prepare} disabled={pending||locked} onChange={event=>edit({prepare:event.target.checked})}/>同时分析分段、角色与逐段表演</label>
+      {draft.prepare&&<Field label="小说听觉处理"><Select label="小说听觉处理" value={draft.auditoryMode || "legacy"} options={[{value:"conservative",label:"文学演播"},{value:"legacy",label:"保真朗读"}]} disabled={pending||locked} onChange={value=>edit({auditoryMode:value as "legacy"|"conservative"})}/></Field>}
+      {draft.prepare&&<p className="hint">全文与引述语完整保留。文学演播安排局部接话与表演关系，配声后核对请求数量；保真朗读沿用原有编排。</p>}
       {draft.prepare&&<p className="hint">点击导入即准备本章，使用当前文本分析连接，不生成音频；分批与局部补齐在当前明确上限内完成，已有人工指导保留。</p>}
       <p className="hint">非空草稿关闭后仍可找回。仅本地分段不产生 API 费用。</p>
       {draft.command&&<p className="hint" role="status">{draft.command.chapterId?"章节已经创建。继续只打开原章节，不会再次创建或发起AI请求。":draft.command.rejection?"上次导入明确未创建章节。原文仍保留，请修改后重新导入。":"本次导入回执尚未确认。重试只核对同一次命令，不会创建第二章。"}</p>}
@@ -3539,6 +3545,8 @@ function ExportDialog({
 }) {
   const [format, setFormat] = useState("wav"),
     [gap, setGap] = useState(c.gap);
+  const [auditoryMode,setAuditoryMode]=useState<"legacy"|"conservative">(c.auditoryPolicy?.mode || "legacy");
+  const policyChanged=auditoryMode!==(c.auditoryPolicy?.mode || "legacy");
   const [gapRevision, setGapRevision] = useState(c.revision);
   const [confirmation, setConfirmation] = useState(c);
   const [submitted,setSubmitted]=useState(false);
@@ -3585,6 +3593,9 @@ function ExportDialog({
       {openingError&&<p className="error-inline" role="alert">{openingError}</p>}
       {opened&&<p className="success-text export-feedback" role="status">已在访达中定位成品</p>}
       <div className="export-settings">
+      <Field label="停顿方式">
+        <Select label="听觉处理" value={auditoryMode} options={[{value:"legacy",label:"统一停顿"},{value:"conservative",label:"局部停顿"}]} onChange={value=>setAuditoryMode(value as "legacy"|"conservative")}/>
+      </Field>
       <Field label="片段间隔（秒）">
         <input
           type="number"
@@ -3600,34 +3611,40 @@ function ExportDialog({
           label="导出格式"
           value={format}
           options={[
-            { value: "wav", label: "WAV · 48 kHz 无损" },
-            { value: "mp3", label: "MP3 · 192 kbps" },
+            { value: "wav", label: "WAV 无损" },
+            { value: "mp3", label: "MP3 压缩" },
           ]}
           onChange={value=>{setFormat(value);setOpened(null);setOpeningError("");}}
         />
+        <p className="hint">{format === "wav" ? "48 kHz · 无损音质" : "192 kbps · 文件较小"}</p>
       </Field>
       </div>
-      {gap !== c.gap && (
+      <p className="hint">{auditoryMode === "conservative" ? "局部停顿：符合条件的衔接最长0.15秒，其余沿用片段间隔。" : "统一停顿：每个声音片段之间使用所设间隔。"}</p>
+      {c.auditoryPolicy?.mode==="conservative"&&<><p className="hint">正文与引述语全部保留。局部停顿只作用于结构明确的干声边界，当前 {c.auditoryBoundaryPlan?.shortenedBoundaries || 0} 处缩短；局部外加停顿最长0.15秒，章节间隔更短时沿用较短值。</p><details><summary>实际朗读预览</summary>{c.segments.filter(s=>!s.excluded).map(s=><p key={s.id}>{s.text}</p>)}</details></>}
+      {c.auditoryBoundaryPlan&&<details><summary>查看实际边界处理</summary>{c.auditoryBoundaryPlan.boundaries.map(boundary=><p key={boundary.leftUnitId+":"+boundary.rightUnitId}>{boundary.gapFrames/48000} 秒 · {boundary.reason}</p>)}</details>}
+      {(gap !== c.gap || policyChanged) && (
         <Form
-          label="保存间隔"
+          label="保存听觉设置"
           onSubmit={async () => {
             const saved = await action<ChapterDetail>("chapter.update", {
               chapterId: c.id,
               revision: gapRevision,
               gap,
+              ...(policyChanged?{auditoryPolicy:{version:1,mode:auditoryMode}}:{}),
             });
             setGapRevision(saved.revision);
-            setConfirmation(previous => ({...previous, revision: saved.revision, arrangement: saved.arrangement}));
+            const fresh=await api<ChapterDetail>('/chapters/'+c.id);
+            setConfirmation(fresh);
             await onRefresh();
           }}
         >
-          <p className="hint">请先保存新间隔，再导出。</p>
+          <p className="hint">请先保存听觉设置，再试听和导出。</p>
         </Form>
       )}
       <Form
         label={exporting?'正在导出…':pendingReview?'确认检查并导出':currentExport?'重新导出':'导出成品'}
         primary={!currentExport}
-        busy={!connectionReady || exporting || gap !== c.gap || !!c.arrangementIssues?.length}
+        busy={!connectionReady || exporting || gap !== c.gap || policyChanged || !!c.arrangementIssues?.length}
         onSubmit={async () => {
           await withSavedDrafts("chapter:"+c.id, undefined,async()=>{
           await flushAudioRanges(c.id);

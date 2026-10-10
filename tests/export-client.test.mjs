@@ -8,14 +8,14 @@ const code = ts.transpileModule(component, { compilerOptions: { target: ts.Scrip
 const nodes = node => !node || typeof node !== 'object' ? [] : [node, ...(node.props?.children || []).flat(Infinity).flatMap(nodes)];
 const content = node => typeof node === 'string' || typeof node === 'number' ? String(node) : (node?.props?.children || []).flat(Infinity).map(content).join('');
 const button = (tree, label) => nodes(tree).find(node => node.type === 'button' && content(node) === label);
-const exportForm = tree => nodes(tree).find(node => node.type === 'Form' && node.props.label !== '保存间隔');
+const exportForm = tree => nodes(tree).find(node => node.type === 'Form' && node.props.label !== '保存听觉设置');
 const defer = () => { let resolve; return { promise: new Promise(r => resolve = r), resolve: value => resolve(value) }; };
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const click = async node => { node.props.onClick(); await settle(); };
 const savedExport = (id, overrides = {}) => ({ id, format: 'wav', arrangement: 3, createdAt: '2026-10-03T08:00:00Z', fileExists: true, current: true, ...overrides });
 function setup({ submit = async () => ({ jobIds: ['export-job'] }), reveal = async () => ({ directory: '/workspace/项目/output' }), chapter = {} } = {}) {
   let index = 0, close = 0, refresh = 0, stateUpdates = 0;
-  const hooks = [], effects = [], sent = [], requests = [];
+  const hooks = [], effects = [], sent = [], requests = [], actions = [];
   const env = {
     React: { createElement: (type, props, ...children) => ({ type, props: { ...props, children } }) },
     Dialog: 'Dialog', Form: 'Form', Field: 'Field', Select: 'Select', Headphones: 'Headphones', Download: 'Download', FolderOpen: 'FolderOpen', Check: 'Check',
@@ -24,7 +24,7 @@ function setup({ submit = async () => ({ jobIds: ['export-job'] }), reveal = asy
     withSavedDrafts: async (_scope, _deps, next) => next(), flushAudioRanges:async()=>{},
     submitOperation: async (...args) => { sent.push(args); return submit(...args); },
     api: async (...args) => { if(args[0].startsWith("/chapters/"))return props.chapter; requests.push(args); return reveal(...args); },
-    basis: () => ({}), action: async () => {}, active: status => ['queued', 'running'].includes(status),
+    basis: () => ({}), action: async (kind, payload) => { actions.push([kind, payload]); props.chapter={...props.chapter,...payload,revision:props.chapter.revision+1,renderSignature:'saved-auditory-settings'}; return props.chapter; }, active: status => ['queued', 'running'].includes(status),
   };
   const ExportDialog = new Function(...Object.keys(env), code + ';return ExportDialog;')(...Object.values(env));
   const props = {
@@ -34,8 +34,18 @@ function setup({ submit = async () => ({ jobIds: ['export-job'] }), reveal = asy
   };
   const render = () => { index = 0; return ExportDialog(props); };
   render(); const cleanup = effects[0]();
-  return { props, render, submit: () => exportForm(render()).props.onSubmit(), sent, requests, cleanup, close: () => close, refresh: () => refresh, stateUpdates: () => stateUpdates };
+  return { props, render, submit: () => exportForm(render()).props.onSubmit(), sent, requests, actions, cleanup, close: () => close, refresh: () => refresh, stateUpdates: () => stateUpdates };
 }
+
+test('旧章默认统一停顿，切换局部候选必须先保存并用新签名导出',async()=>{
+  const f=setup(), auditory=()=>nodes(f.render()).find(node=>node.type==='Select'&&node.props.label==='听觉处理');
+  assert.equal(auditory().props.value,'legacy');assert.equal(f.actions.length,0);
+  auditory().props.onChange('conservative');assert.equal(exportForm(f.render()).props.busy,true);
+  const save=nodes(f.render()).find(node=>node.type==='Form'&&node.props.label==='保存听觉设置');await save.props.onSubmit();
+  assert.deepEqual(f.actions,[['chapter.update',{chapterId:'chapter',revision:2,gap:0,auditoryPolicy:{version:1,mode:'conservative'}}]]);
+  assert.equal(exportForm(f.render()).props.busy,false);assert.match(content(f.render()),/正文与引述语全部保留/);
+  await f.submit();assert.equal(f.sent[0][1].revision,3);assert.equal(f.sent[0][1].renderSignature,'saved-auditory-settings');
+});
 
 test('导出前重读版本和范围，旧听评快照不能导出后来内容', async () => {
   const f = setup(), confirmed = f.props.chapter;
@@ -86,7 +96,7 @@ test('主按钮定位所选格式最新有效成品，切换格式不会误开�
   assert.ok(!nodes(tree).some(node => node.type === 'a' && node.props.download));
   await click(button(tree, '打开成品文件夹'));
   assert.deepEqual(f.requests[0], ['/exports/latest-wav/reveal', {}]);
-  nodes(f.render()).find(node => node.type === 'Select').props.onChange('mp3');
+  nodes(f.render()).find(node => node.type === 'Select' && node.props.label === '导出格式').props.onChange('mp3');
   await click(button(f.render(), '打开成品文件夹'));
   assert.deepEqual(f.requests[1], ['/exports/latest-mp3/reveal', {}]);
 });

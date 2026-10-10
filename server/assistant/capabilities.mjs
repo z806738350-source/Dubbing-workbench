@@ -250,7 +250,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     if (id==='read.fidelity') return domain.fidelity({...input,chapterId:bound.chapter.id,projectId:scope.projectId});
     if (id==='read.outputs') return outputs(input,scope);
     if (id==='read.audioRange') return resolveAudioRange(store,input.unitId,input.mode,input.audioId);
-    if (id === 'generation.plan') return experience.plan({ ...p, kind: 'generateSelection' });
+    if (id === 'generation.plan') return experience.plan({ ...p, kind: 'generateSelection' },{actorKind:'assistant_delegated'});
     if (id === 'analysis.plan') return analysis.plan({ ...p, kind: input.analysisKind });
     if (id === 'analysis.previewReuse') return analysis.previewReuse(p);
     if (id === 'read.project-deletion-plan') { const result = domain.deletionPlan({ id: input.id }); return pick(result, ['projectId', 'name', 'counts', 'sharedVoiceIds', 'blockers']); }
@@ -336,7 +336,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     else if(id==='segment.update'||id==='role.update'||id==='chapter.update'){const before=target||bound.chapter;detail={id:before.id,changes:Object.entries(input).filter(([key])=>key!=='id').map(([field,after])=>({field,before:before[field]??null,after}))};}
     else if (['segment.delete', 'segment.restore-deleted'].includes(id)) detail = { segments: input.ids.map(segmentId => pick(store.get('segments', segmentId), ['id', 'text', 'excluded', 'deletion'])) };
     else if (id==='audio.tail.repair') {if(!repairAudio)fail('尾部维护接口尚未就绪');detail=await repairAudio({phase:'preview',projectId:scope.projectId,chapterId:scope.chapterId,unitIds:input.unitIds});}
-    else if (id === 'operation.generateSelection') detail = experience.plan({ ...p, kind: 'generateSelection' });
+    else if (id === 'operation.generateSelection') detail = experience.plan({ ...p, kind: 'generateSelection' },{actorKind:'assistant_delegated',...executionContext});
     else if (id === 'operation.prepareChapter') detail = analysis.plan({ ...p, kind: p.analysisKind },executionContext);
     else if (['unit.create', 'operation.groupAndGenerate'].includes(id)) detail = domain.enhancement.preview({ ...p, kind: 'group' });
     else if (['unit.restore', 'unit.dissolve', 'unit.template'].includes(id)) detail = domain.enhancement.preview({ ...p, kind: id.split('.')[1] === 'dissolve' ? 'dissolve' : id.split('.')[1] === 'template' ? 'template' : 'restore' });

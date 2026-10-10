@@ -221,7 +221,7 @@ export async function saveCandidateVoice(store, p) {
     try { await rm(temp, { force: true }); } finally { lease.release(); }
   }
 }
-export async function buildMaster(store, segments, gap, id, renderProfile=DEFAULT_RENDER_PROFILE, { signal } = {}) {
+export async function buildMaster(store, segments, gap, id, renderProfile=DEFAULT_RENDER_PROFILE, { signal, boundaryPlan } = {}) {
   signal?.throwIfAborted();
   assertDiskSpace(store.directory, 0, "试听准备");
   if(![LEGACY_RENDER_PROFILE,DEFAULT_RENDER_PROFILE].includes(renderProfile))fail('渲染声道版本不受支持');
@@ -233,6 +233,10 @@ export async function buildMaster(store, segments, gap, id, renderProfile=DEFAUL
   let cursor = 0;
   const mapping = [];
   const gapFrames = Math.round(gap * 48000);
+  const boundaryGapFrames = boundaryPlan?.gapFrames || segments.slice(0,-1).map(row=>row.gapAfterFrames ?? gapFrames);
+  if(!Number.isSafeInteger(gapFrames)||gapFrames<0||!Array.isArray(boundaryGapFrames)||boundaryGapFrames.length!==Math.max(0,segments.length-1)||boundaryGapFrames.some(frames=>!Number.isSafeInteger(frames)||frames<0))fail('母版边界帧数无效');
+  if(boundaryPlan && (!Array.isArray(boundaryPlan.gapFrames)||!([0,1].includes(boundaryPlan.version)&&boundaryPlan.mode===(boundaryPlan.version===1?'conservative':'legacy'))))fail('母版边界策略版本不受支持');
+  const localBoundaries=!!boundaryPlan || segments.some(row=>row.gapAfterFrames!==undefined);
   try {
     const inputs=[];
     for(const {s,a,range} of segments){
@@ -244,7 +248,7 @@ export async function buildMaster(store, segments, gap, id, renderProfile=DEFAUL
       inputs.push({input,wave,frames:Math.ceil(seconds*48000)});
     }
     signal?.throwIfAborted();
-    const projected=inputs.reduce((sum,input)=>sum+input.frames,0)+gapFrames*Math.max(0,segments.length-1);
+    const projected=inputs.reduce((sum,input)=>sum+input.frames,0)+boundaryGapFrames.reduce((sum,frames)=>sum+frames,0);
     lease=reserveDiskSpace(store.directory,projected*8+Math.max(0,...inputs.map(input=>input.frames))*4+1024*1024,"整章试听构建");
     await mkdir(dirname(base), { recursive: true });
     await writeFile(pcm, Buffer.alloc(0));
@@ -287,6 +291,7 @@ export async function buildMaster(store, segments, gap, id, renderProfile=DEFAUL
           ...(s.kind === "group" ? {} : {segmentId: s.members?.[0] || s.id}),
           ...(s.unitId ? { unitId: s.unitId, memberIds: s.members, mode: s.mode } : {}),
           audioId: a.id,
+          ...(localBoundaries?{gapAfterFrames:boundaryGapFrames[i] || 0}:{}),
           ...(preserve?{renderProfile,boundaryPolicy:BOUNDARY_POLICY}:{}),
           ...(range ? { sourceHash: range.sourceHash, clipStartFrame: range.startFrame, clipEndFrame: range.endFrame, rangeRevision: range.revision, decodeProfile: range.decodeProfile, edgePolicy: range.edgePolicy } : { clipStartFrame: 0, clipEndFrame: frames }),
           startFrame: cursor,
@@ -294,8 +299,8 @@ export async function buildMaster(store, segments, gap, id, renderProfile=DEFAUL
         });
         cursor += frames;
         if (i < segments.length - 1) {
-          await appendFile(pcm, Buffer.alloc(gapFrames * channels * 2));
-          cursor += gapFrames;
+          await appendFile(pcm, Buffer.alloc(boundaryGapFrames[i] * channels * 2));
+          cursor += boundaryGapFrames[i];
         }
       } finally {
         await rm(temp, { force: true });
@@ -333,6 +338,7 @@ export async function buildMaster(store, segments, gap, id, renderProfile=DEFAUL
       channels: preserve?2:1,
       renderProfile,boundaryPolicy:BOUNDARY_POLICY,
       gapFrames,
+      ...(localBoundaries?{boundaryGapFrames,...(boundaryPlan?{auditoryBoundaryPlan:boundaryPlan}:{})}:{}),
       processing: preserve?"pcm_s16le-48000-stereo":"pcm_s16le-48000-mono",
       duration: cursor / 48000,
     };

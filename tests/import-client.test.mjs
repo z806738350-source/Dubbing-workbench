@@ -15,7 +15,7 @@ const defer=()=>{let resolve;return {promise:new Promise(r=>resolve=r),resolve:v
 function setup({records=new Map(),create=async()=>({id:'created'}),navigate=async()=>{},failStorage=false,workspace={current:'/fixture'},projectId='project'}={}){
   let index=0;const hooks=[],effects=[],sent=[],writes=[],opened=[];
   const storage={fail:failStorage},key=(id,identity=workspace.current)=>identity==='/fixture'?id:identity+'\0'+id;
-  const env={React:{createElement:(type,props,...children)=>({type,props:{...props,children}})},Dialog:'Dialog',Form:'Form',Field:'Field',Upload:'Upload',TextDecoder,crypto,importLimits,importProblems,
+  const env={React:{createElement:(type,props,...children)=>({type,props:{...props,children}})},Dialog:'Dialog',Form:'Form',Field:'Field',Select:'Select',Upload:'Upload',TextDecoder,crypto,importLimits,importProblems,
     useState:value=>{const i=index++;if(!(i in hooks))hooks[i]=typeof value==='function'?value():value;return [hooks[i],value=>hooks[i]=typeof value==='function'?value(hooks[i]):value];},useRef:value=>hooks[index++]||={current:value},useEffect:next=>effects.push(next),
     draftWorkspace:()=>workspace.current,readDraft:(id,identity)=>records.has(key(id,identity))?{draft:JSON.parse(records.get(key(id,identity))),revision:0}:null,writeDraft:(id,value,revision,identity)=>{if(storage.fail)throw new Error('quota');records.set(key(id,identity),JSON.stringify(value));writes.push(JSON.parse(JSON.stringify(value)));},clearDraft:(id,expected,abandon,identity)=>records.delete(key(id,identity)),action:async(name,payload)=>{sent.push(payload);return create(payload);}};
   const ImportChapter=new Function(...Object.keys(env),compiled+';return ImportChapter;')(...Object.values(env));

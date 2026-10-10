@@ -334,9 +334,9 @@ export function createWorker(store, domain, config) {
       };
       if (kind !== 'generate') {
         const rows = preparedRender?.rows || all.map(s => ({ s, a: store.get('audios', s.current) }));
-        const identity = renderIdentity(store, c.id, rows);
+        const {auditoryBoundaryPlan,...identity} = renderIdentity(store, c.id, rows);
         if (p.renderSignature !== undefined && p.renderSignature !== identity.renderSignature) fail('声音范围已变化，请按当前范围继续', 409);
-        Object.assign(job, identity, { renderGap: c.gap, renderRows: rows.map(({s,a}) => ({s,a,range:savedAudioRange(store,s.unitId || s.id,s.mode || 'dry',a.id)})) });
+        Object.assign(job, identity, { renderBoundaryPlan:preparedRender?.renderBoundaryPlan || auditoryBoundaryPlan, renderGap: c.gap, renderRows: rows.map(({s,a}) => ({s,a,range:savedAudioRange(store,s.unitId || s.id,s.mode || 'dry',a.id)})) });
         for (const queued of activeJobs().filter(j => j.chapterId === c.id && kind === 'master' && j.kind === 'master' && j.status === 'queued')) {
           if (queued.arrangement === c.arrangement && (queued.renderSignature ?? null) === identity.renderSignature && (queued.renderRevision || 0) === identity.renderRevision) return queued;
           setJob({ ...queued, status:'stopped', stop:true, error:'已合并到更新的试听范围' });
@@ -690,6 +690,7 @@ export function createWorker(store, domain, config) {
     job.localOutputPending=true;
     setJob({...current,outputRecords:job.outputRecords,masterId:job.masterId,...(job.exportId?{exportId:job.exportId}:{}),result:job.result,localOutputPending:true});return true;
   }
+  const currentRenderRows = chapterId => domain.enhancement?.resolve(chapterId) || domain.list(chapterId).filter(s=>!s.excluded).map(s=>({s,a:s.current&&store.maybe('audios',s.current),validity:segmentStatus(store,s).validity}));
   async function recoverOutputs(job) {
     if(!['master','export'].includes(job.kind))return false;
     const before=JSON.stringify(job);
@@ -711,8 +712,8 @@ export function createWorker(store, domain, config) {
     job.masterId=master.id;if(exported)job.exportId=exported.id;
     job.result={chapterId:job.chapterId,arrangement:job.arrangement,renderRevision:job.renderRevision || 0,renderSignature:job.renderSignature ?? null,masterId:master.id,...(exported?{exportId:exported.id,format:exported.format}:{})};
     if((active(job)||job.localOutputPending)&&!job.stop&&!master.superseded&&!exported?.superseded) {
-      const current=renderIdentity(store,job.chapterId,domain.enhancement?.resolve(job.chapterId));
-      if(store.get('chapters',job.chapterId).arrangement!==job.arrangement || !same([current.renderRevision,current.renderSignature],[job.renderRevision || 0,job.renderSignature ?? null])) {
+      const rows=currentRenderRows(job.chapterId),current=renderIdentity(store,job.chapterId,rows);
+      if(!rows.length || rows.some(row=>row.validity!=='matched') || store.get('chapters',job.chapterId).arrangement!==job.arrangement || !same([current.renderRevision,current.renderSignature],[job.renderRevision || 0,job.renderSignature ?? null])) {
         for(const [table,record]of [['masters',master],['exports',exported]])if(record)store.put(table,{...record,superseded:true},job.chapterId);
         job.status='stopped';job.error='旧范围的本地成品已恢复为历史，请使用当前范围';
       }else{job.status='success';job.done=job.total;delete job.error;}
@@ -722,8 +723,8 @@ export function createWorker(store, domain, config) {
   }
   async function render(job) {
     const c = store.get("chapters", job.chapterId);
-    const isCurrent = () => {const current=store.get('jobs',job.id), identity=renderIdentity(store,c.id,domain.enhancement?.resolve(c.id));return active(current)&&!current.stop&&store.get("chapters", c.id).arrangement === job.arrangement&&(identity.renderSignature ?? null)===(job.renderSignature ?? null)&&(identity.renderRevision || 0)===(job.renderRevision || 0);};
-    const rows = job.renderRows || domain.enhancement?.resolve(c.id) || domain.list(c.id).filter(s => !s.excluded).map(s => ({s,a:s.current && store.maybe("audios",s.current)}));
+    const isCurrent = () => {const current=store.get('jobs',job.id),rows=currentRenderRows(c.id),identity=renderIdentity(store,c.id,rows);return rows.length>0&&rows.every(row=>row.validity==='matched')&&active(current)&&!current.stop&&store.get("chapters", c.id).arrangement === job.arrangement&&(identity.renderSignature ?? null)===(job.renderSignature ?? null)&&(identity.renderRevision || 0)===(job.renderRevision || 0);};
+    const rows = job.renderRows || currentRenderRows(c.id);
     for (const [index,{s,a}] of rows.entries()) {
       if (!a || !await validateStoredAudio(store, a)) fail(`第 ${(s.order ?? index) + 1} 条音频损坏或缺失，请先恢复文件`);
     }
@@ -750,7 +751,7 @@ export function createWorker(store, domain, config) {
       if (!isCurrent()) fail('构建任务或编排已失效，请按当前版本重新准备');
       const id = job.masterId || uid();
       job.masterId=id;setJob({...store.get('jobs',job.id),masterId:id});
-      const info = await buildMaster(store, rows, job.renderGap ?? c.gap, id, renderProfileOf(job));
+      const info = await buildMaster(store, rows, job.renderGap ?? c.gap, id, renderProfileOf(job),{boundaryPlan:job.renderBoundaryPlan});
       master = {
         id,
         jobId: job.id,

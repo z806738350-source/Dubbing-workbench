@@ -95,7 +95,7 @@ export function createStorageMaintenance(store,{currentRows}={}) {
   async function temporaryMaster(master,signal) {
     signal?.throwIfAborted();
     const rows=await historicalMasterRows(store,master,{signal}),id=uid(),file=deletionPath(store,projectFile(store,master.chapterId,'masters',id+'.wav'));let rebuilt;
-    try {signal?.throwIfAborted();rebuilt=await buildMaster(store,rows,master.gapFrames/48000,id,renderProfileOf(master),{signal});signal?.throwIfAborted();verifyRebuiltMaster(master,rebuilt);return {rebuilt,file:deletionPath(store,rebuilt.path)};}
+    try {signal?.throwIfAborted();rebuilt=await buildMaster(store,rows,master.gapFrames/48000,id,renderProfileOf(master),{signal,boundaryPlan:master.boundaryGapFrames?master.auditoryBoundaryPlan:undefined});signal?.throwIfAborted();verifyRebuiltMaster(master,rebuilt);return {rebuilt,file:deletionPath(store,rebuilt.path)};}
     catch(error){await rm(file,{force:true});await rm(file+'.part',{force:true});throw error;}
   }
   async function ensureMasterFile(id) {

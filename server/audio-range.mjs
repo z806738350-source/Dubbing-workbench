@@ -7,6 +7,7 @@ import { audioDigest } from './audio-delivery.mjs';
 import { createLocalPool } from './scheduler.mjs';
 import { reserveDiskSpace } from './disk-space.mjs';
 import { pcmWave } from './tail-audio.mjs';
+import { auditoryBoundaryPlan } from './auditory.mjs';
 
 export const decodeProfile = 'pcm-s16le-48000-native-v1', sampleRate = 48000, edgePolicy = 'short-fade-v1';
 export const LEGACY_RENDER_PROFILE='legacy-mono-v1',DEFAULT_RENDER_PROFILE='source-stereo-v1',BOUNDARY_POLICY='unit-gap-v1';
@@ -160,12 +161,19 @@ export function renderIdentity(store,chapterId,rows,renderProfile) {
   const chapter=store.get('chapters',chapterId);
   renderProfile ||= chapter.renderProfile || DEFAULT_RENDER_PROFILE;
   if(![LEGACY_RENDER_PROFILE,DEFAULT_RENDER_PROFILE].includes(renderProfile))fail('渲染声道版本不受支持');
-  rows ||= store.all('units',chapterId).filter(u=>u.state==='active').map(u=>({s:{unitId:u.id,mode:u.mode},a:store.maybe('audios',u.variants[u.mode].current)}));
+  let segments, units;
+  if (!rows) {
+    segments=store.all('segments',chapterId).filter(s=>!s.retired&&!s.deletion&&!s.excluded).sort((a,b)=>a.order-b.order);units=store.all('units',chapterId).filter(u=>u.state==='active');
+    const owner=new Map(units.filter(u=>u.kind==='group').flatMap(u=>u.members.map(id=>[id,u]))), byId=new Map(units.map(u=>[u.id,u])), seen=new Set();
+    rows=segments.flatMap(s=>{const u=owner.get(s.id)||byId.get(s.id);if(!u||seen.has(u.id))return [];seen.add(u.id);return [{s:{id:u.id,unitId:u.id,mode:u.mode,kind:u.kind,members:u.members},a:store.maybe('audios',u.variants[u.mode].current)}];});
+  }
   const items=rows.map(r=>{const unitId=r.s?.unitId || r.s?.id || r.unitId || r.id,mode=r.s?.mode || r.mode || 'dry',audioId=r.a?.id || r.audioId,range=Object.hasOwn(r,'range')?r.range:savedAudioRange(store,unitId,mode,audioId);return {unitId,mode,audioId,range};});
   const hasRanges=items.some(item=>hasClip(item.range));
   const content=[chapter.arrangement,Math.round(chapter.gap*sampleRate),items.map(item=>[item.unitId,item.mode,item.audioId,rangeContentKey(item.range)])];
-  const renderSignature=renderProfile===LEGACY_RENDER_PROFILE?(hasRanges?hash(content):null):hash([renderProfile,BOUNDARY_POLICY,...content]);
-  return {renderRevision:chapter.renderRevision || 0,renderProfile,boundaryPolicy:BOUNDARY_POLICY,renderSignature,renderContentKey:renderSignature,hasRanges,items};
+  const conservative=chapter.auditoryPolicy?.version===1&&chapter.auditoryPolicy.mode==='conservative';
+  const boundaryPlan=auditoryBoundaryPlan(chapter,rows,conservative?{segments:segments||store.all('segments',chapterId),units:units||store.all('units',chapterId),roles:store.all('roles',chapter.projectId)}:{});
+  const renderSignature=conservative?hash([renderProfile,BOUNDARY_POLICY,...content,[boundaryPlan.version,boundaryPlan.mode,boundaryPlan.gapFrames]]):renderProfile===LEGACY_RENDER_PROFILE?(hasRanges?hash(content):null):hash([renderProfile,BOUNDARY_POLICY,...content]);
+  return {renderRevision:chapter.renderRevision || 0,renderProfile,boundaryPolicy:BOUNDARY_POLICY,renderSignature,renderContentKey:renderSignature,hasRanges,items,auditoryBoundaryPlan:boundaryPlan};
 }
 export function renderMatches(record,identity) { return renderProfileOf(record)===renderProfileOf(identity)&&(record.renderSignature || null)===(identity.renderSignature || null); }
 

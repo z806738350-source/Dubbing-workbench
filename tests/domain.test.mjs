@@ -64,6 +64,22 @@ function inferredLegacy(t) {
   return {...f,draft,rows,change};
 }
 
+test('听觉策略缺省保留历史，切换只失效母版而不改变Seed输入',t=>{
+  const {store,d,c,update}=setup(t),before=store.get('chapters',c.id),inputs=d.list(c.id).map(inputOf);
+  assert.equal(before.auditoryPolicy,undefined);
+  update('chapter.update',{auditoryPolicy:{version:1,mode:'conservative'}});
+  const changed=store.get('chapters',c.id);
+  assert.equal(changed.revision,before.revision+1);assert.equal(changed.arrangement,before.arrangement);
+  assert.equal(changed.renderRevision,1);assert.deepEqual(d.list(c.id).map(inputOf),inputs);
+  update('chapter.update',{auditoryPolicy:{version:1,mode:'conservative'}});
+  assert.equal(store.get('chapters',c.id).revision,changed.revision);
+  update('chapter.update',{auditoryPolicy:{version:1,mode:'legacy'}});
+  assert.equal(store.get('chapters',c.id).renderRevision,2);assert.deepEqual(d.list(c.id).map(inputOf),inputs);
+  assert.throws(()=>update('chapter.update',{auditoryPolicy:{version:2,mode:'conservative'}}),/听觉处理方式无效/);
+  assert.throws(()=>update('chapter.update',{auditoryPolicy:{version:1,mode:'conservative',rewrite:true}}),/听觉处理方式无效/);
+  assert.equal(store.get('chapters',c.id).auditoryPolicy.mode,'legacy');
+});
+
 test('启动只修可由已采用原稿证实的旁白推断，章修订仅加一次、音频和后续撤销保持',t=>{
   const f=inferredLegacy(t),inputs=f.rows.map(inputOf),before=f.store.get('chapters',f.c.id);
   f.rows[0].current='retained-audio';f.rows[0].approved='retained-audio';f.rows[0].review={audioId:'retained-audio',state:'passed'};f.store.put('segments',f.rows[0],f.c.id);f.store.put('audios',{id:'retained-audio',input:inputs[0],review:f.rows[0].review},f.c.id);

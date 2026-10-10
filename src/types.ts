@@ -74,6 +74,8 @@ export interface Project {
   contextRevision: number;
 }
 export interface Chapter {
+  auditoryPolicy?: {version:1;mode:"legacy"|"conservative"};
+  auditoryBoundaryPlan?: {version:number;mode:string;gapFrames:number[];shortenedBoundaries:number;boundaries:{leftUnitId:string;rightUnitId:string;gapFrames:number;originalGapFrames:number;reason:string;cueSegmentId?:string}[]};
   renderRevision?: number;
   renderSignature?: string | null;
   renderContentKey?: string | null;
@@ -186,7 +188,8 @@ export interface GenerationPlan {
   arrangement:number;
   unitIds:string[];
   memberIds:string[];
-  units:{unitId:string;members:string[];mode:"dry"|"scene";reuse:boolean;audioId:string|null;model?:string;referenceVoices?:{voiceId:string;revision:number;fileVersion:string}[];rejected?:boolean;outstandingAttemptIds?:string[]}[];
+  units:{unitId:string;members:string[];mode:"dry"|"scene";reuse:boolean;audioId:string|null;model?:string;referenceVoices?:{voiceId:string;revision:number;fileVersion:string}[];rejected?:boolean;outstandingAttemptIds?:string[];productionBeat?:Record<string,unknown>;guidance?:string;productionBeatReason?:string}[];
+  productionBeatSkips?:{segmentIds:string[];reason:string}[];
   textRequests:number;
   audioRequests:number;
 }

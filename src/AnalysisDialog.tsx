@@ -52,6 +52,8 @@ interface Suggestion {
   automation?: {applied:number;needsDecision:number;pendingItemIds?:string[];error?:string};
   performanceCoverage?:PerformanceCoverage;
   performanceReceipt?:PerformanceReceipt;
+  productionBeats?:{guidance:string}[];
+  productionBeatIssues?:{reason:string}[];
   performancePhase?:"analyzing"|"validating"|"repairing"|"saving";
   roles?: Role[];
   blocks?: { id: number; text: string }[];
@@ -105,13 +107,15 @@ export default function AnalysisDialog({
   const [inheritPerformanceConfirmed,setInheritPerformanceConfirmed]=useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [basicAnalysis,setBasicAnalysis]=useState(false);
+  const [auditoryMode,setAuditoryMode]=useState<"legacy"|"conservative">(chapter.auditoryPolicy?.mode || (chapter.segments.length||chapter.deletedSegments?.length?"legacy":"conservative"));
   const [experience, setExperience] = useState<ExperienceState | null>(null);
   const [plan, setPlan] = useState<TextPlan | null>(null), [advancedPlan, setAdvancedPlan] = useState<TextPlan | null>(null);
   const [preparing, setPreparing] = useState(false), [policySaving, setPolicySaving] = useState(false), [prepareError, setPrepareError] = useState("");
   const [performanceMode,setPerformanceMode]=useState<"initial"|"fillMissing"|"replaceAi"|"selectedRewrite">(chapter.segments.length||chapter.deletedSegments?.length?"fillMissing":"initial");
   const [includeHumanPerformance,setIncludeHumanPerformance]=useState(false);
   const alive=useRef(true);useEffect(()=>()=>{alive.current=false;},[]);
-  const mainPayload={kind:"prepareChapter",chapterId:chapter.id,revision:chapter.revision,ids:performanceMode==="fillMissing"?[]:selected,includePerformance:true,performanceMode,...(performanceMode!=="initial"?{analysisKind:"director"}:{}),...(includeHumanPerformance?{includeHumanPerformance:true}:{})};
+  const auditoryPolicy={version:1,mode:auditoryMode};
+  const mainPayload={kind:"prepareChapter",chapterId:chapter.id,revision:chapter.revision,ids:performanceMode==="fillMissing"?[]:selected,includePerformance:true,performanceMode,...(performanceMode==="initial"?{auditoryPolicy}:{analysisKind:"director"}),...(includeHumanPerformance?{includeHumanPerformance:true}:{})};
   const selectedKey = [...selected].sort().join(",");
   useEffect(()=>{
     if(performanceMode==="initial"&&(chapter.segments.length||chapter.deletedSegments?.length)){
@@ -127,12 +131,12 @@ export default function AnalysisDialog({
     let active = true; setPlan(null);
     void api<TextPlan>("/operations/plan",mainPayload).then(value=>{if(active)setPlan(value);}).catch(error=>{if(active)setPrepareError(error.message);});
     return ()=>{active=false;};
-  }, [chapter.id, chapter.revision, selectedKey,performanceMode,includeHumanPerformance]);
+  }, [chapter.id, chapter.revision, selectedKey,performanceMode,includeHumanPerformance,auditoryMode]);
   useEffect(() => {
     let active = true; setAdvancedPlan(null);
-    void api<TextPlan>("/operations/plan",{kind:"prepareChapter",analysisKind:kind,includePerformance:kind==="director"||!basicAnalysis,performanceMode:kind==="extract"?"initial":"replaceAi",chapterId:chapter.id,revision:chapter.revision,ids:selected,...(kind==="extract" && replaceSource ? {source:source.replace(/\r\n?/g,"\n")} : {})}).then(value=>{if(active)setAdvancedPlan(value);}).catch(()=>{});
+    void api<TextPlan>("/operations/plan",{kind:"prepareChapter",analysisKind:kind,includePerformance:kind==="director"||!basicAnalysis,performanceMode:kind==="extract"?"initial":"replaceAi",chapterId:chapter.id,revision:chapter.revision,ids:selected,...(kind==="extract"?{auditoryPolicy}:{}),...(kind==="extract" && replaceSource ? {source:source.replace(/\r\n?/g,"\n")} : {})}).then(value=>{if(active)setAdvancedPlan(value);}).catch(()=>{});
     return ()=>{active=false;};
-  }, [chapter.id, chapter.revision, selectedKey, kind, replaceSource, source,basicAnalysis]);
+  }, [chapter.id, chapter.revision, selectedKey, kind, replaceSource, source,basicAnalysis,auditoryMode]);
   const draft = drafts.find((d) => d.id === viewId) || drafts.at(-1);
   function editItem(item: DraftItem) {
     if (!draft) return;
@@ -200,12 +204,13 @@ export default function AnalysisDialog({
       <div className="analysis-prepare">
         <h3>{performanceMode==="initial"?"AI 整理这一章":"逐段表演指导"}</h3>
         <p className="hint">{performanceMode==="initial"?"同时分段并安排表演，保留原文和已有人工指导。":includeHumanPerformance?"只重写所选台词的表演指导，包含人工内容；原值可查看与撤销，正文、角色和声音不变。":performanceMode==="fillMissing"?"补齐有效台词的缺失指导，保留已有指导；不重新分段或生成音频。":"重新安排所选台词的 AI 表演指导，保留人工内容；不修改正文或生成音频。"}</p>
+        {performanceMode==="initial"&&<Field label="小说听觉处理" hint="正文与引述语完整保留。文学演播安排有依据的局部接话，配声后按生成计划使用纯人声组；保真朗读沿用原有编排。基础朗读不安排演播关系。"><Select label="小说听觉处理" value={auditoryMode} options={[{value:"conservative",label:"文学演播"},{value:"legacy",label:"保真朗读"}]} onChange={value=>setAuditoryMode(value as "legacy"|"conservative")}/></Field>}
         <div className="tabs analysis-policy" aria-label="AI 协作方式">
           <button type="button" aria-pressed={experience?.policy.mode!=="review"} disabled={!experience || policySaving || preparing || working} onClick={()=>void choosePolicy("smart")}>AI 先安排</button>
           <button type="button" aria-pressed={experience?.policy.mode==="review"} disabled={!experience || policySaving || preparing || working} onClick={()=>void choosePolicy("review")}>先看建议</button>
         </div>
         <p className="hint">{performanceMode==="replaceAi"||performanceMode==="selectedRewrite"?"按本次所选范围直接重写并自动保存，原值可查看与撤销。":experience?.policy.mode==="review"?"先生成完整候选，一屏统一采用；采用后自动保存。":"合法指导自动安排，真正的角色疑点集中处理。AI 安排不会标记为试听通过。"}</p>
-        {!!chapter.segments.length&&<div className="button-row">{performanceMode!=="fillMissing"&&<button type="button" className="text-button" disabled={preparing||working} onClick={()=>{setPerformanceMode("fillMissing");setIncludeHumanPerformance(false);}}>返回补齐缺失指导</button>}{!!selected.length&&<Select label="所选指导操作" value={performanceMode==="selectedRewrite"?"human":performanceMode==="replaceAi"?"ai":""} options={[{value:"",label:`已选 ${selected.length} 条`},{value:"ai",label:"重新安排所选 AI 指导"},{value:"human",label:"重写所选指导，包含人工内容"}]} onChange={value=>{setPerformanceMode(value==="human"?"selectedRewrite":value==="ai"?"replaceAi":"fillMissing");setIncludeHumanPerformance(value==="human");}}/>}</div>}
+        {!!chapter.segments.length&&<div className="button-row">{performanceMode!=="fillMissing"&&<button type="button" className="text-button" disabled={preparing||working} onClick={()=>{setPerformanceMode("fillMissing");setIncludeHumanPerformance(false);}}>返回补齐缺失指导</button>}{!!selected.length&&<Select label="所选指导操作" value={performanceMode==="selectedRewrite"?"human":performanceMode==="replaceAi"?"ai":""} options={[{value:"",label:`已选 ${selected.length} 条`},{value:"ai",label:"重排 AI 指导"},{value:"human",label:"重写含人工指导"}]} onChange={value=>{setPerformanceMode(value==="human"?"selectedRewrite":value==="ai"?"replaceAi":"fillMissing");setIncludeHumanPerformance(value==="human");}}/>}</div>}
         {plan && <>
           <p className="hint">{plan.kind==="extract" ? "整章原文" : `本次 ${plan.memberIds.length} 条台词`} · {plan.textRequests} 次文本请求 · 不生成音频</p><details><summary className="hint">查看请求范围</summary><p className="hint">发送本章所需正文至 {defaultModel}。基础 {plan.textRequests} 次，缺失指导按当前范围局部补齐，合法结果自动保存。</p></details>
         </>}
@@ -213,6 +218,8 @@ export default function AnalysisDialog({
         {plan?.textRequests===0&&performanceMode==="fillMissing"&&<p className="hint">当前没有可自动补齐的缺失项。已有指导保留{coverage?.missingIds.length?`；${coverage.missingIds.length} 段人工内容需核对，未自动覆盖`:""}。</p>}
         {prepareError && <p className="error-inline" role="alert">{prepareError}</p>}
       </div>
+      {draft?.productionBeats&&<p className="hint">本轮保存 {draft.productionBeats.length} 个局部演播候选，配声后在生成计划中核对；原文全部保留。</p>}
+      {!!draft?.productionBeatIssues?.length&&<details><summary>未采用的演播建议</summary>{draft.productionBeatIssues.map((issue,index)=><p className="hint" key={index}>{issue.reason}</p>)}</details>}
       {draft && <div className="analysis-summary" aria-live="polite">
         <div><strong>{draft.status === "running" ? (draft.performancePhase||candidateCoverage?.phase)==="repairing"?`正在补齐 ${candidateCoverage?.missingIds.length||0} 段`:(draft.performancePhase||candidateCoverage?.phase)==="saving"?"正在保存":"正在分析" : draft.performanceReceipt&&coverage ? `${coverage.coveredCount}/${coverage.eligibleCount} 段表演已安排` : candidateCoverage ? `${candidateCoverage.coveredCount}/${candidateCoverage.eligibleCount} 段指导候选已准备` : draft.automation ? `AI 已安排 ${draft.automation.applied} 条 · 需你判断 ${draft.automation.needsDecision} 条` : draft.status === "applied" ? "已应用" : !applicable ? "草稿已过期" : invalidItems.length ? `${invalidItems.length} 条需校对` : current ? "草稿待审阅" : "草稿需要处理"}</strong><span>{draft.items.length} 条标注 · {draft.doneChunks || 0}/{draft.totalChunks || 1} 批{draft.splitResults?.length ? ` · 已拆短 ${draft.splitResults.length} 处` : ""}</span>{draft.performanceReceipt&&<span>新增 {draft.performanceReceipt.writtenIds.length} 段，保留人工 {draft.performanceReceipt.preservedHumanIds.length} 段{coverage?.deletedCount?`；${coverage.deletedCount} 条已删除不参与`:""}{coverage?.waivedBasicIds?.length?`；${coverage.waivedBasicIds.length} 段按基础朗读保留空指导`:""}。{draft.performanceReceipt.affectedUnitIds?.length?`影响 ${draft.performanceReceipt.affectedUnitIds.length} 个声音单元，其中 ${affectedPendingCount} 个待更新；旧声音保留。`:""}</span>}{!draft.performanceReceipt&&candidateCoverage&&coverage&&<span>当前已保存 {coverage.coveredCount}/{coverage.eligibleCount} 段；候选尚未采用。</span>}</div>
         {editable && firstInvalid && <button type="button" className="text-button" onClick={() => editItem(firstInvalid)}>校对第 {draft.items.indexOf(firstInvalid) + 1} 条</button>}
@@ -508,7 +515,7 @@ export default function AnalysisDialog({
         onSubmit={async () => {
           await withSavedDrafts("chapter:"+chapter.id,undefined,async()=>{
             const revision=draftScopeRevision("chapter:"+chapter.id,chapter.revision);
-            const payload={kind:"prepareChapter",analysisKind:kind,autoApply:false,includePerformance:kind==="director"||!basicAnalysis,performanceMode:kind==="extract"?"initial":"replaceAi",chapterId:chapter.id,revision,model,ids:selected,...(kind==="extract" && replaceSource?{source:source.replace(/\r\n?/g,"\n")}: {})};
+            const payload={kind:"prepareChapter",analysisKind:kind,autoApply:false,includePerformance:kind==="director"||!basicAnalysis,performanceMode:kind==="extract"?"initial":"replaceAi",chapterId:chapter.id,revision,model,ids:selected,...(kind==="extract"?{auditoryPolicy}:{}),...(kind==="extract" && replaceSource?{source:source.replace(/\r\n?/g,"\n")}: {})};
             const currentPlan=await api<TextPlan>("/operations/plan",payload);
             if(!alive.current)return;
             setAdvancedPlan(currentPlan);
@@ -525,6 +532,7 @@ export default function AnalysisDialog({
         }}
       >
         <div className="analysis-input-fields">
+        {kind==="extract"&&<Field label="小说听觉处理" hint="正文与引述语完整保留；文学演播安排局部接话，保真朗读沿用原有编排。"><Select label="小说听觉处理" value={auditoryMode} options={[{value:"conservative",label:"文学演播"},{value:"legacy",label:"保真朗读"}]} onChange={value=>setAuditoryMode(value as "legacy"|"conservative")}/></Field>}
         {kind==="extract"&&<label className="check-label"><input type="checkbox" checked={basicAnalysis} onChange={event=>setBasicAnalysis(event.target.checked)}/>本次仅整理剧本／基础朗读，不安排表演</label>}
         {kind === "extract" && (
           <>

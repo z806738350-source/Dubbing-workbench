@@ -114,7 +114,8 @@ export function Select({
     maxHeight: 280,
   });
   const root = useRef<HTMLDivElement>(null),
-    trigger = useRef<HTMLButtonElement>(null);
+    trigger = useRef<HTMLButtonElement>(null),
+    menu = useRef<HTMLDivElement>(null);
   const listId = useRef("list-" + crypto.randomUUID());
   const activeIndex = Math.min(cursor, Math.max(0, options.length - 1));
   useEffect(() => {
@@ -122,12 +123,15 @@ export function Select({
     if (disabled || !options.length) { setOpen(false); return; }
     const place = () => {
       const rect = trigger.current!.getBoundingClientRect();
-      const height = Math.min(280, options.length * 44 + 8);
+      const width = Math.min(hasActions ? Math.max(rect.width, 280) : rect.width, window.innerWidth - 16);
+      // Measure after setting the real width: wrapped labels do not have a fixed row height.
+      const popup = menu.current!;
+      popup.style.width = `${width}px`;
+      const height = Math.min(280, popup.scrollHeight + popup.offsetHeight - popup.clientHeight);
       const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 12);
       const spaceAbove = Math.max(0, rect.top - 12);
       const above = spaceBelow < height && spaceAbove > spaceBelow;
       const maxHeight = Math.min(height, above ? spaceAbove : spaceBelow);
-      const width = Math.min(hasActions ? Math.max(rect.width, 280) : rect.width, window.innerWidth - 16);
       setPlacement({
         top: above ? rect.top - maxHeight - 4 : rect.bottom + 4,
         left: Math.max(
@@ -150,7 +154,7 @@ export function Select({
       window.removeEventListener("resize", place);
       document.removeEventListener("scroll", place, true);
     };
-  }, [open, options.length, disabled, hasActions]);
+  }, [open, options, disabled, hasActions]);
   useEffect(() => {
     if (open && !hasActions) root.current?.querySelector<HTMLElement>(`[id="${listId.current}-${activeIndex}"]`)?.scrollIntoView({ block: "nearest" });
   }, [open, activeIndex, hasActions]);
@@ -227,11 +231,12 @@ export function Select({
           );
         }}
       >
-        <span>{options.find((o) => o.value === value)?.label || "请选择"}</span>
+        <span title={options.find((o) => o.value === value)?.label}>{options.find((o) => o.value === value)?.label || "请选择"}</span>
         <ChevronDown size={14} />
       </button>
       {open && (
         <div
+          ref={menu}
           className="select-menu"
           style={{
             ...placement,

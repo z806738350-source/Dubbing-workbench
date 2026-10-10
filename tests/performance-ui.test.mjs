@@ -37,6 +37,16 @@ test('新章默认smart：一次准备发起联合分析，无policy选择或独
   start.props.onClick();await tick();assert.equal(f.calls.operations.length,1);assert.equal(f.calls.grant.length,0);
   assert.equal(f.calls.api.filter(call=>call.path==='/experience/policy').length,0);
   assert.equal(f.calls.operations[0].payload.includePerformance,true);assert.equal(f.calls.operations[0].payload.performanceMode,'initial');assert.equal(f.calls.operations[0].payload.grantId,undefined);assert.doesNotMatch(words(tree),/24小时|已有显式上限|允许文本请求次数/);
+  assert.deepEqual(f.calls.operations[0].payload.auditoryPolicy,{version:1,mode:'conservative'});
+});
+
+test('一次转换可选保真朗读，旧章补表演不悄悄升级听觉策略',async()=>{
+  const fresh=await fixture(),select=nodes(fresh.render()).find(node=>node.type==='Select'&&node.props.label==='小说听觉处理');
+  select.props.onChange('legacy');fresh.render();await tick();button(fresh.render(),'准备这一章').props.onClick();await tick();
+  assert.deepEqual(fresh.calls.operations[0].payload.auditoryPolicy,{version:1,mode:'legacy'});
+  const old=await fixture({rows:[{id:'one',text:'旧正文。',performance:''}]});
+  button(old.render(),'补齐缺失指导').props.onClick();await tick();
+  assert.equal(old.calls.operations[0].payload.auditoryPolicy,undefined);
 });
 
 test('保存后版本或免费计划改变自动重读后继续，不要求再点准备',async()=>{

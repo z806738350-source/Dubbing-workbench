@@ -19,6 +19,7 @@ function selectFixture(onDelete){
   const hooks=[],effects=[];let index=0,effectIndex=0,pendingEffects=[],tree;
   const calls={chosen:[],deleted:[],renamed:[],focus:[],scrolled:[]};
   const rect={top:50,bottom:86,left:8,width:200};
+  const metrics={height:null};
   const env={React,Check:'Check',ChevronDown:'ChevronDown',Pencil:'Pencil',Trash2:'Trash2',crypto,
     useState:initial=>{const key=index++;if(!(key in hooks))hooks[key]=typeof initial==='function'?initial():initial;return [hooks[key],value=>{hooks[key]=typeof value==='function'?value(hooks[key]):value;}];},
     useRef:initial=>hooks[index++]||=( {current:initial} ),
@@ -34,6 +35,8 @@ function selectFixture(onDelete){
     index=0;effectIndex=0;pendingEffects=[];tree=Select(props);
     const trigger=nodes(tree).find(node=>node.props.className==='select-trigger');
     trigger.props.ref.current={focus:()=>calls.focus.push('trigger'),getBoundingClientRect:()=>rect};
+    const popup=nodes(tree).find(node=>node.props.className==='select-menu');
+    if(popup)popup.props.ref.current={style:{},get scrollHeight(){assert.equal(this.style.width,Math.min((props.onDelete||props.onRename)?Math.max(rect.width,280):rect.width,env.window.innerWidth-16)+'px');return metrics.height ?? props.options.length*44+8;},offsetHeight:100,clientHeight:100};
     tree.props.ref.current={contains:target=>target==='inside',querySelector:selector=>{const match=selector.match(/data-choice-index="(\d+)"/);if(match)return {focus:()=>calls.focus.push(Number(match[1]))};const active=selector.match(/-(\d+)"\]$/);return active?{scrollIntoView:options=>calls.scrolled.push({index:Number(active[1]),options})}:null;}};
     for(const effect of pendingEffects)effect();return tree;
   };
@@ -43,8 +46,17 @@ function selectFixture(onDelete){
   const choose=i=>nodes(tree).filter(node=>node.props.className?.includes('select-option')&&node.type==='button')[i];
   const remove=i=>nodes(tree).filter(node=>node.props.className==='select-delete')[i];
   const rename=i=>nodes(tree).filter(node=>node.props.className==='select-rename')[i];
-  render();return {props,calls,render,open,trigger,menu,choose,remove,rename,rect,viewport:env.window};
+  render();return {props,calls,render,open,trigger,menu,choose,remove,rename,rect,metrics,viewport:env.window};
 }
+
+test('少量换行选项按实际高度展开，同数量文字变化也重新定位',()=>{
+  const f=selectFixture(false);f.metrics.height=176;f.open();f.render();
+  assert.equal(f.menu().props.style.maxHeight,176,'两条换行选项不能被固定96px高度截断');
+  f.metrics.height=230;f.viewport.innerHeight=400;Object.assign(f.rect,{top:210,bottom:246});
+  f.props.options=f.props.options.map(option=>({...option,label:option.label+'新说明'}));f.render();f.render();
+  assert.equal(f.menu().props.style.maxHeight,198);assert.equal(f.menu().props.style.top,8);
+  const selected=nodes(f.trigger()).find(node=>node.type==='span');assert.equal(selected.props.title,f.props.options[0].label);
+});
 
 test('长下拉键盘定位保持可见；选项异步收缩、禁用和移出焦点都不误选',()=>{
   const f=selectFixture(false);f.props.options=Array.from({length:20},(_,i)=>({value:String(i),label:'声音 '+i}));f.props.value='0';f.render();f.open();

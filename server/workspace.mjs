@@ -93,9 +93,15 @@ export function locateDraftChapters(store, ids) {
 }
 export function assertMasterRecipe(master) {
   let cursor=0;
+  // Identity metadata can describe today's plan; only boundaryGapFrames freezes a historical local-gap recipe.
+  const gaps=master.boundaryGapFrames;
+  if(gaps!==undefined&&(!Array.isArray(gaps)||gaps.length!==Math.max(0,(master.mapping?.length || 0)-1)||gaps.some(frames=>!Number.isSafeInteger(frames)||frames<0)))fail(`母版 ${master.path} 的边界配方不完整，历史文件仍保留`,409);
+  if(gaps!==undefined&&master.auditoryBoundaryPlan&&!same(master.auditoryBoundaryPlan.gapFrames,gaps))fail(`母版 ${master.path} 的冻结边界与配方不一致，历史文件仍保留`,409);
   const valid=Array.isArray(master.mapping)&&master.mapping.length>0&&master.mapping.every((m,index)=>{
     if(!m || typeof m.audioId!=='string' || !m.audioId || !Number.isSafeInteger(m.startFrame) || !Number.isSafeInteger(m.endFrame) || m.startFrame!==cursor || m.endFrame<=m.startFrame)return false;
-    cursor=m.endFrame+(index<master.mapping.length-1?master.gapFrames:0);return true;
+    const gap=index<master.mapping.length-1?(gaps?.[index]??master.gapFrames):0;
+    if(m.gapAfterFrames!==undefined&&m.gapAfterFrames!==gap)return false;
+    cursor=m.endFrame+gap;return true;
   });
   if (!valid || !Number.isSafeInteger(master.frames) || master.frames < 1 || cursor!==master.frames || !Number.isSafeInteger(master.gapFrames) || master.gapFrames < 0 || ![LEGACY_RENDER_PROFILE,DEFAULT_RENDER_PROFILE].includes(renderProfileOf(master)) || master.processing !== `pcm_s16le-48000-${renderProfileOf(master)===LEGACY_RENDER_PROFILE?'mono':'stereo'}`)
     fail(`母版 ${master.path} 的本地重建配方不完整，历史文件仍保留`,409);
@@ -116,12 +122,12 @@ export async function historicalMasterRows(store, master, { signal } = {}) {
       range={...source,unitId:m.unitId || m.segmentId,mode:m.mode || 'dry',startFrame:m.clipStartFrame,endFrame:m.clipEndFrame,revision:m.rangeRevision,edgePolicy:m.edgePolicy};
       if (frozen?.a?.id===m.audioId && frozen.range) range={...frozen.range,...range};
     }
-    rows.push({a,...(range?{range}:{}),s:{id:m.unitId || m.segmentId,chapterId:master.chapterId,unitId:m.unitId,members:m.memberIds,kind:m.memberIds?.length>1?'group':'single',mode:m.mode}});
+    rows.push({a,...(range?{range}:{}),...(master.boundaryGapFrames?{gapAfterFrames:master.boundaryGapFrames[index] || 0}:{}),s:{id:m.unitId || m.segmentId,chapterId:master.chapterId,unitId:m.unitId,members:m.memberIds,kind:m.memberIds?.length>1?'group':'single',mode:m.mode}});
   }
   return rows;
 }
 export function verifyRebuiltMaster(master, rebuilt) {
-  if (rebuilt.frames!==master.frames || rebuilt.gapFrames!==master.gapFrames || rebuilt.channels!==(master.channels || (renderProfileOf(master)===LEGACY_RENDER_PROFILE?1:2)) || rebuilt.sampleRate!==(master.sampleRate || 48000) || renderProfileOf(rebuilt)!==renderProfileOf(master) || rebuilt.mapping.length!==master.mapping.length || master.mapping.some((m,i)=>Object.keys(m).some(key=>!same(m[key],rebuilt.mapping[i][key]))))
+  if (rebuilt.frames!==master.frames || rebuilt.gapFrames!==master.gapFrames || master.boundaryGapFrames&&!same(master.boundaryGapFrames,rebuilt.boundaryGapFrames) || rebuilt.channels!==(master.channels || (renderProfileOf(master)===LEGACY_RENDER_PROFILE?1:2)) || rebuilt.sampleRate!==(master.sampleRate || 48000) || renderProfileOf(rebuilt)!==renderProfileOf(master) || rebuilt.mapping.length!==master.mapping.length || master.mapping.some((m,i)=>Object.keys(m).some(key=>!same(m[key],rebuilt.mapping[i][key]))))
     fail(`母版 ${master.path} 的重建配方与原始音频不一致，历史仍保留`,409);
 }
 function mapRecordFiles(item, map) {
@@ -264,7 +270,7 @@ export async function copyWorkspace(store, requested) {
         const { buildMaster } = await import('./audio.mjs');
         for (const master of missingMasters) {
           const rows=await historicalMasterRows(copy,master);
-          const rebuilt = await buildMaster(copy, rows, master.gapFrames / 48000, master.id, renderProfileOf(master));
+          const rebuilt = await buildMaster(copy, rows, master.gapFrames / 48000, master.id, renderProfileOf(master),{boundaryPlan:master.boundaryGapFrames?master.auditoryBoundaryPlan:undefined});
           verifyRebuiltMaster(master,rebuilt);
           copy.put('masters', { ...master, ...rebuilt, mapping:master.mapping, invalid: false, rebuiltAt: new Date().toISOString() }, master.chapterId);
         }

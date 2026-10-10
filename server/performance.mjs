@@ -13,22 +13,30 @@ export function inspectPerformance(value, text, meta = {}) {
   const directives=value.replace(/(?:从|重音(?:落)?在|强调|在)[“「『"']([^”」』"']+)[”」』"']/gu,(quote,words)=>text.includes(words)?' '.repeat(quote.length):quote);
   // ponytail: deterministic directive/negation phrases; ambiguous prose remains non-blocking, add a parser only for demonstrated misses.
   const operations=/(?:添加|加入|插入|补上|发出|增加|伴随)[^，,。；;！？!?]{0,10}?(?:笑声|喘息声?|惊呼|台词|脚步声|衣物声|音效|背景音乐)|(?:播放|添加|加入|关闭|去掉|取消|压低|降低)[^，,。；;！？!?]{0,8}?(?:背景|音乐|音效)|(?:无|不要|禁止)\s*(?:背景音乐|环境声|背景声)|(?:改写|删掉|删除|省略|替换|增加)[^，,。；;！？!?]{0,8}?(?:正文|台词|词句)|(?:换成|改用|切换)[^，,。；;！？!?]{0,8}?(?:音色|声音|角色)|(?:陌生|新|改用).{0,3}口音|(?:停顿?|停留|暂停|持续|时长|延长|压缩|控制在)[^，,。；;！？!?]{0,6}\d+(?:\.\d+)?\s*(?:毫秒|秒钟?)|\d+(?:\.\d+)?\s*(?:毫秒|秒钟?)(?:内|之内|以内)(?:读完|说完|结束|完成)/gu;
-  for(const match of directives.matchAll(operations))if(!/(?:不要|别|无需|禁止|不应|不准|不能|避免|勿|不允许)(?:\s*(?:再|额外|主动|自行|继续|擅自|直接|自动))*\s*$/u.test(directives.slice(0,match.index))){issues.push('表演指导包含额外发声、正文、声音身份、背景或时长操作');break;}
+  for(const match of directives.matchAll(operations))if(!/(?:不要|别|无需|禁止|不应|不准|不能|避免|勿|不允许|不)(?:\s*(?:再|额外|主动|自行|继续|擅自|直接|自动))*\s*$/u.test(directives.slice(0,match.index))){issues.push('表演指导包含额外发声、正文、声音身份、背景或时长操作');break;}
   const anchors = meta.performanceAnchors ?? [];
   if (!Array.isArray(anchors) || anchors.some(a => typeof a !== 'string' || !a || !text.includes(a))) issues.push('表演锚点不属于当前片段');
   for (const match of value.matchAll(/(?:从|重音(?:落)?在|强调|在)[“「『"']([^”」』"']+)[”」』"']/gu)) if (!text.includes(match[1])) issues.push('表演引用的词句不在当前片段');
   return [...new Set(issues)];
 }
 
-export const performanceDependency = s => ({text:s.text,roleId:s.roleId,type:s.type,source:s.source});
+export const performanceDependency = (s,context) => ({text:s.text,roleId:s.roleId,type:s.type,source:s.source,...(context ? {context} : {})});
+export function performanceContext(chapter,segments,refs) {
+  if (!refs?.length) return undefined;
+  const chars=Array.from(chapter.source || '');
+  const blocks=refs.map(({id,start,end})=>({id,start,end,text:chars.slice(start,end).join('')}));
+  const members=segments.filter(eligiblePerformanceSegment).filter(s=>s.source?.spans?.some(span=>blocks.some(b=>span.start<b.end && span.end>b.start))).sort((a,b)=>a.order-b.order).map(s=>({id:s.id,order:s.order,text:s.text,roleId:s.roleId,type:s.type,source:s.source,protectedFields:(s.protectedFields || []).filter(k=>['text','roleId','type','performance'].includes(k)),aiAllowedFields:(s.aiAllowedFields || []).filter(k=>['text','roleId','type','performance'].includes(k))}));
+  return {sourceVersion:chapter.sourceVersion || 1,refs:blocks,members};
+}
 export function performanceRoleFacts(store,chapter,roleId) {
   return (store.maybe('roles',roleId)?.facts || []).filter(f=>(!f.chapterId || (store.maybe('chapters',f.chapterId)?.order ?? Infinity)<=chapter.order) && (!f.sourceQuote || (f.sourceVersion || 1)===(store.maybe('chapters',f.chapterId)?.sourceVersion || 1)));
 }
-export function segmentPerformanceIssues(store,chapter,s) {
+export function segmentPerformanceIssues(store,chapter,s,segments) {
   const decision=s.decisions?.performance;
   if(decision?.waivedBasic===true && !hasReadableText(s.performance))return [];
   const issues=inspectPerformance(s.performance,s.text,decision);
-  if(decision?.dependencies && !same(decision.dependencies,performanceDependency(s)))issues.push('表演依据已改变');
+  const context=decision?.dependencies?.context;
+  if(decision?.dependencies && !same(decision.dependencies,performanceDependency(s,context && performanceContext(chapter,segments ?? store.all('segments',chapter.id),context.refs))))issues.push('表演依据已改变');
   if(decision?.roleFacts && !same(decision.roleFacts,performanceRoleFacts(store,chapter,s.roleId)))issues.push('角色资料已改变');
   return issues;
 }
@@ -39,7 +47,7 @@ export function performanceCoverage(store, chapterId, {ids,analysisId} = {}) {
   for (const s of eligible) {
     const decision = s.decisions?.performance;
     if (decision?.waivedBasic === true && !hasReadableText(s.performance)) {waivedBasicIds.push(s.id);continue;}
-    const issues = segmentPerformanceIssues(store,chapter,s);
+    const issues = segmentPerformanceIssues(store,chapter,s,all);
     if (!issues.length) coveredIds.push(s.id);
     else if (humanPerformance(s) && hasReadableText(s.performance)) reviewRequiredIds.push(s.id);
     else missingIds.push(s.id);

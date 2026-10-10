@@ -4,9 +4,10 @@ import { createHash } from 'node:crypto';
 import { fail, same, text, uid } from './store.mjs';
 import { compile, templateOf, resolveCompiler, sceneContract, validEventDescription, assertQuoteAnchor, sceneIntentConflicts, scenePresenceConflicts, inspectScenePresence } from './templates.mjs';
 import { storedAudioUnavailable } from './audio.mjs';
-import { configurationDecided } from './experience.mjs';
+import { configurationDecided, relatedTarget } from './experience.mjs';
+import { humanPerformance, performanceContext } from './performance.mjs';
 import { hasNewerAttempt } from './scheduler.mjs';
-import { presentationReview, savePresentationReview, assertPresentationReview, rangeContentKey, savedAudioRange } from './audio-range.mjs';
+import { presentationReview, savePresentationReview, assertPresentationReview, rangeContentKey, savedAudioRange, renderIdentity } from './audio-range.mjs';
 
 export const sampleText = '清晨的风吹过窗边，我把桌上的书合上，准备出门。';
 export const defaultFeatures = { voiceCreation: true, groups: true, scenes: true };
@@ -90,6 +91,7 @@ export function createEnhancement(store, d) {
     if (!['dry', 'scene'].includes(mode)) fail('生成类型无效');
     const rows = members(u), first = rows[0];
     const c = chapter || store.get('chapters', u.chapterId);
+    if (automaticBeat(u,mode) && !productionBeatMatches(u.productionBeat, c, rows)) fail('局部演播依据已改变，请核对或更新本组指导；未发送', 409);
     for (const s of rows) d.validate(s, c);
     if (forGeneration && rows.some(s => !configurationDecided(s) || !s.voiceId)) fail('请先完成全部成员的角色和声音身份确认');
     if (rows.some(s => !same(s.config, first.config) || (s.model || 'seed-audio-1.0') !== (first.model || 'seed-audio-1.0'))) fail('成员数值配置或模型不同，请先明确统一设置', 409);
@@ -129,7 +131,8 @@ export function createEnhancement(store, d) {
   function basis(u, mode = u.mode) {
     const rows = members(u);
     if (u.kind === 'single' && mode === 'dry') return d.basisOf(rows[0]);
-    return persisted({ unitId: u.id, mode, membershipRevision: u.membershipRevision, members: rows.map(d.basisOf), guidance: u.variants[mode].guidance ?? (mode === 'dry' ? u.guidance || '' : ''), ...(mode==='scene' && u.variants[mode].backgroundPresence ? {backgroundPresence:u.variants[mode].backgroundPresence} : {}), events: mode === 'scene' ? events(u).filter(e => e.state === 'adopted').map(e => ({ ...eventInput(e), basis: e.basis, validity: e.validity })) : [] });
+    const context=automaticBeat(u,mode) ? {productionBeatContext:performanceContext(store.get('chapters',u.chapterId),d.list(u.chapterId),u.productionBeat.evidenceContext?.refs) || null} : {};
+    return persisted({ unitId: u.id, mode, membershipRevision: u.membershipRevision, members: rows.map(d.basisOf), guidance: u.variants[mode].guidance ?? (mode === 'dry' ? u.guidance || '' : ''), ...context, ...(mode==='scene' && u.variants[mode].backgroundPresence ? {backgroundPresence:u.variants[mode].backgroundPresence} : {}), events: mode === 'scene' ? events(u).filter(e => e.state === 'adopted').map(e => ({ ...eventInput(e), basis: e.basis, validity: e.validity })) : [] });
   }
   function requestIdentity(input, prompt) {
     return [input.model || 'seed-audio-1.0', prompt ?? compile(input), input.referenceVoiceIds || (input.voiceId ? [input.voiceId] : []), rates(input.config)];
@@ -249,7 +252,7 @@ export function createEnhancement(store, d) {
       if (p.confirm) for (const r of rows) if (r.review !== 'passed') setReview(getUnit(r.s.id), r.s.mode, 'passed', r.basis);
       confirmation = { at: stamp(), arrangement: c.arrangement, reviewItems };
     }
-    return { rows, reviewItems, confirmation, ids: rows.map(r => r.s.id), total: rows.length };
+    return { rows, reviewItems, confirmation, renderBoundaryPlan:renderIdentity(store,c.id,rows).auditoryBoundaryPlan, ids: rows.map(r => r.s.id), total: rows.length };
   }
   function groupPlan(p) {
     const c = d.editable(p.chapterId, p.revision);
@@ -262,6 +265,78 @@ export function createEnhancement(store, d) {
     u.variants.dry.guidance = u.guidance;
     const input = buildInput(u, 'dry', undefined, true);
     return { unit: u, members: p.ids.map(id => store.get('segments', id)), input, prompt: compile(input), conflicts: [] };
+  }
+  const beatMemberBasis = s => ({id:s.id,text:s.text,roleId:s.roleId,type:s.type,source:s.source,performance:s.performance});
+  const automaticBeat = (u,mode='dry') => u.productionBeat?.version === 1 && u.variants[mode].guidanceSource?.kind === 'adopted_ai';
+  const canWithdrawBeat = u => automaticBeat(u) && u.mode==='dry' && u.revision===1 && u.membershipRevision===1;
+  function productionBeatMatches(beat, c, rows, relatedSegments = d.list(c.id)) {
+    if (beat.sourceVersion !== (c.sourceVersion || 1)) return false;
+    if (!same(beat.segmentIds, rows.map(s=>s.id)) || !Array.isArray(beat.members) || !same(beat.members.map(beatMemberBasis), rows.map(beatMemberBasis))) return false;
+    if (!beat.evidenceContext || !same(beat.evidenceContext,performanceContext(c,relatedSegments,beat.evidenceContext.refs))) return false;
+    const chars = Array.from(c.source || '');
+    return rows.every(s => s.analysisOrigin?.draftId === beat.analysisId && !s.excluded && !s.deletion && !s.retired && !s.identityPending && !s.editHistory?.length && !humanPerformance(s) && !(s.protectedFields || []).some(field=>['text','type','role','roleId','performance','excluded'].includes(field)) && s.source?.kind === 'original' && s.source.version === beat.sourceVersion && Array.isArray(s.source.spans) && s.source.spans.length && s.source.spans.every(span=>Number.isInteger(span.start) && Number.isInteger(span.end) && span.start>=0 && span.end>span.start && span.end<=chars.length) && s.source.spans.map(span=>chars.slice(span.start,span.end).join('')).join('') === s.text);
+  }
+  function reconcileProductionBeats(chapterId, {ids, mode, unitId, operationId, allowCreate = false} = {}) {
+    return store.transaction(() => {
+      let c = store.get('chapters', chapterId);
+      const result = {groups:[],protectedPending:[],skipped:[],createdUnitIds:[]};
+      if (unitId || mode !== undefined && mode !== 'dry' || !Array.isArray(ids) || !ids.length) return result;
+      if (store.all('jobs',c.id).some(active)) return result;
+      const pending=store.all('units',c.id).filter(u=>u.kind==='group' && u.state==='pending' && u.productionBeat?.version===1 && u.members.some(id=>ids.includes(id)));
+      const conservative=c.auditoryPolicy?.version===1 && c.auditoryPolicy.mode==='conservative';
+      if (!pending.length && (!allowCreate || !features().groups || !conservative)) return result;
+      const analysis = conservative ? store.all('suggestions',c.id).filter(r=>r.kind==='extract' && r.status==='applied' && Array.isArray(r.productionBeats)).at(-1) : undefined;
+      if (!pending.length && !analysis?.productionBeats.length) return result;
+      const rows = d.list(c.id), attempts = store.all('attempts');
+      const sources = (analysis?.productionBeats || []).map(beat=>({...beat,analysisId:analysis.id,version:1}));
+      const sameSource = (a,b) => same([a.analysisId,a.batchId,a.from,a.to,a.segmentIds],[b.analysisId,b.batchId,b.from,b.to,b.segmentIds]);
+      const sent = u => attempts.some(a=>(a.unitId || a.targetId || a.input?.unitId)===u.id && (a.createdAt || ['sending','unknown'].includes(a.status)));
+      for (const u of pending) {
+        if (!u.members.every(id=>ids.includes(id))) {if(sent(u))fail('本范围包含已发送的局部演播请求，请按原一起演绎范围核对或明确解除，不能自动改发单句',409);continue;}
+        if (!canWithdrawBeat(u)) {result.groups.push(u);continue;}
+        const source = sources.find(beat=>sameSource(beat,u.productionBeat));
+        let valid = !!source && productionBeatMatches({...source,analysisId:analysis.id},c,u.members.map(id=>store.maybe('segments',id)).filter(Boolean),rows);
+        if (!sent(u) && u.members.some(id=>{const s=store.maybe('segments',id),single=store.maybe('units',id);return s?.current || single?.mode!=='dry' || single?.revision!==1;})) valid=false;
+        if (!features().groups) valid=false;
+        try { if (valid) buildInput(u,'dry',undefined,true); } catch { valid=false; }
+        if (valid) { result.groups.push(u); continue; }
+        if (sent(u)) { result.protectedPending.push({...u,productionBeatReason:'已发送的局部演播请求仍须沿原范围处理，不能自动再发单句兜底'}); continue; }
+        if (!allowCreate || !features().groups) continue;
+        mutate('unit.dissolve',{chapterId:c.id,revision:c.revision,id:u.id,entityRevision:u.revision});
+        const retired=store.get('units',u.id);retired.productionBeat.retiredAutomatically=true;store.put('units',retired,c.id);
+        c=store.get('chapters',c.id);
+      }
+      if (!allowCreate || !features().groups || c.auditoryPolicy?.version !== 1 || c.auditoryPolicy.mode !== 'conservative') return result;
+      for (const source of sources) {
+        const selected=source.segmentIds;
+        if (!Array.isArray(selected) || selected.length<2 || new Set(selected).size!==selected.length || !selected.every(id=>ids.includes(id))) continue;
+        if ([...result.groups,...result.protectedPending].some(u=>sameSource(u.productionBeat,source))) continue;
+        const reject = reason => result.skipped.push({analysisId:source.analysisId,from:source.from,to:source.to,segmentIds:selected,reason});
+        const members = selected.map(id=>store.maybe('segments',id));
+        if (store.all('units',c.id).some(u=>u.kind==='group' && u.state==='active' && u.members.some(id=>selected.includes(id)))) {reject('当前组编排保持；自动指导依据若已变化，请核对或更新本组指导');continue;}
+        if (members.some(s=>!s) || !productionBeatMatches(source,c,members,rows)) {reject('原文、成员或人工保护已变化，保留现有单句');continue;}
+        const start=rows.findIndex(s=>s.id===selected[0]);
+        if (!same(rows.slice(start,start+selected.length).map(s=>s.id),selected)) {reject('成员顺序或连续范围已变化');continue;}
+        if (store.all('units',c.id).some(u=>u.kind==='group' && (['active','pending'].includes(u.state) && u.members.some(id=>selected.includes(id)) || u.productionBeat && sameSource(u.productionBeat,source) && ['dissolved','retired'].includes(u.state) && !u.productionBeat.retiredAutomatically))) {reject('已有一起演绎设置优先');continue;}
+        const singles=members.map(s=>syncLegacySegment(s));
+        if (members.some(s=>s.current) || singles.some(u=>u.mode!=='dry' || u.revision!==1 || Object.values(u.variants).some(v=>v.current || ['user','inherited_user'].includes(v.guidanceSource?.kind) || ['user','inherited_user'].includes(v.backgroundPresenceSource?.kind)))) {reject('已有音频或人工制作设置优先');continue;}
+        const target={targetKind:'unit',targetId:selected[0],input:{members:selected.map(id=>({id}))}};
+        if (attempts.some(a=>a.status==='unknown' && relatedTarget(store,a,target))) {reject('相关请求结果不明，保留原请求范围');continue;}
+        if (typeof source.guidance!=='string' || !source.guidance.trim() || Array.from(source.guidance).length>100) {reject('局部演播指导缺失或过长');continue;}
+        if (members.some(s=>!configurationDecided(s) || !s.voiceId || store.maybe('roles',s.roleId)?.identityPending)) {reject('先保留候选，配声和身份确认后重新检查');continue;}
+        if (members.some(s=>{const v=store.maybe('voices',s.voiceId);return !v || !['active','archived'].includes(v.state) || v.deletePending || !v.path || !existsSync(join(store.directory,v.path));})) {reject('参考声音缺失，保留候选');continue;}
+        let plan;
+        try { plan=groupPlan({chapterId:c.id,revision:c.revision,ids:selected,guidance:source.guidance}); }
+        catch (error) {reject(/3000|三份/.test(error.message)?`${error.message}；未提供可独立使用整体指导的安全子范围，保留单句`:error.message);continue;}
+        const u=plan.unit;
+        u.productionBeat=persisted({...source,...(operationId?{operationId}:{}),members:members.map(beatMemberBasis)});
+        u.creationSource={kind:'policy_ai',analysisId:source.analysisId,...(operationId?{operationId}:{})};
+        u.variants.dry.guidanceSource={kind:'adopted_ai',analysisId:source.analysisId};
+        store.put('units',u,c.id);d.touch(c,true,false);c=store.get('chapters',c.id);
+        result.groups.push(u);result.createdUnitIds.push(u.id);
+      }
+      return result;
+    });
   }
   function assertStructural(action, p) {
     const ids = p.ids || (p.id ? [p.id] : []);
@@ -373,6 +448,7 @@ export function createEnhancement(store, d) {
     const u = getUnit(a.unitId || a.targetId), c = store.get('chapters', u.chapterId);
     const later = hasNewerAttempt(store.all('attempts'), a, v => v.targetKind === 'unit' && (v.unitId || v.targetId) === u.id && v.mode === a.mode);
     if (!active(job) || ['dissolved','retired'].includes(u.state) || later || c.revision !== job.revision || u.revision !== a.unitRevision || !same(basis(u, a.mode), a.basis)) return false;
+    if (automaticBeat(u,a.mode) && !productionBeatMatches(u.productionBeat,c,members(u))) return false;
     const v = u.variants[a.mode], old = v.current;
     if (a.mode === 'scene' && !v.template && !v.resolvedCompilerId && ['scene-v4-presence-1','scene-v5-relations-1'].includes(a.input.template)) v.template = a.input.template;
     if (old !== audio.id) v.previous = old;
@@ -532,5 +608,5 @@ export function createEnhancement(store, d) {
   function compilerCompatibility() {
     return store.all('audios').filter(a=>a.input?.template==='scene-v3-native').map(a=>({audioId:a.id,unitId:a.input.unitId,oldTemplateId:a.input.template,promptSha256:createHash('sha256').update(a.prompt || '').digest('hex'),resolvedCompilerId:resolveCompiler(a.input,a.prompt),affectedModes:[a.input.mode || 'scene'],readOnly:true}));
   }
-  return { invalidateEvents, history, compilerCompatibility, restorePlan, assertLegacyGeneration, syncLegacy, syncLegacySegment, features, getUnit, members, input: buildInput, basis, status, view, resolve, inspectArrangement, events, eventBasis, assertEventRange, validateEvent, addEvents, snapshot, prepare, prepareRender, validateDispatch, register, setAttemptStatus, preview, dissolvePlan, mutate, assertStructural };
+  return { invalidateEvents, history, compilerCompatibility, restorePlan, assertLegacyGeneration, syncLegacy, syncLegacySegment, features, getUnit, members, input: buildInput, basis, status, view, resolve, inspectArrangement, events, eventBasis, assertEventRange, validateEvent, addEvents, snapshot, prepare, prepareRender, validateDispatch, register, setAttemptStatus, preview, dissolvePlan, reconcileProductionBeats, mutate, assertStructural };
 }

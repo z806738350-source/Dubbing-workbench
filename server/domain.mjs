@@ -15,6 +15,11 @@ import { inspectFidelity } from './fidelity.mjs';
 
 export const defaultConfig = templateOf("dry-v1").defaults;
 export const active = (j) => ["queued", "running"].includes(j.status);
+export function validateAuditoryPolicy(policy) {
+  if (policy === undefined) return undefined;
+  if (!policy || policy.version !== 1 || !['legacy','conservative'].includes(policy.mode) || Object.keys(policy).some(key => !['version','mode'].includes(key))) fail('听觉处理方式无效');
+  return {version:1,mode:policy.mode};
+}
 export function checkEntityRevision(entity, expected) {
   if (expected !== (entity.revision ?? 1))
     fail("资料已在其他页面更新，当前草稿未覆盖。请核对最新资料后重新编辑", 409);
@@ -582,6 +587,7 @@ export function createDomain(store) {
             title: p.title,
             source,
             sourceVersion: 1,
+            ...(p.auditoryPolicy !== undefined ? {auditoryPolicy:validateAuditoryPolicy(p.auditoryPolicy)} : {}),
             importedSource:
               typeof p.importedSource === "string" ? p.importedSource : source,
             sourceFilename:
@@ -827,6 +833,8 @@ export function createDomain(store) {
         if (action === "chapter.update") {
           const oldGap = c.gap;
           const oldTitle = c.title;
+          const oldPolicy = c.auditoryPolicy;
+          if (p.auditoryPolicy !== undefined) c.auditoryPolicy = validateAuditoryPolicy(p.auditoryPolicy);
           if (p.title !== undefined) c.title = text(p.title, "章节名称", 150);
           if (p.gap !== undefined) {
             if (!Number.isFinite(p.gap) || p.gap < 0 || p.gap > 10)
@@ -835,7 +843,8 @@ export function createDomain(store) {
           }
           if (c.gap !== oldGap) touch(c);
           else {
-            if (c.title !== oldTitle) c.revision++;
+            if (c.title !== oldTitle || !same(c.auditoryPolicy,oldPolicy)) c.revision++;
+            if (!same(c.auditoryPolicy,oldPolicy)) c.renderRevision = (c.renderRevision || 0) + 1;
             store.put("chapters", c, c.projectId);
           }
           return c;
@@ -1320,7 +1329,8 @@ export function createDomain(store) {
   api.chapter = id => {
     enhancement.syncLegacy(id);
     const result = originalChapter(id), { rows, issues: arrangementIssues } = enhancement.inspectArrangement(id,result), identity=renderIdentity(store,id,rows), reviewItems = rows.map(r => {const rangeKey=rangeContentKey(savedAudioRange(store,r.s.id,r.s.mode,r.a?.id));return {id:r.s.id,audioId:r.a?.id || null,basis:r.basis,...(rangeKey?{rangeContentKey:rangeKey}:{})};});
-    const exportReady = !arrangementIssues.length && rows.length > 0 && result.coverage.valid && result.segments.filter(s => !s.excluded).every(configurationDecided) && rows.every(r => r.validity === 'matched' && r.review === 'passed');
+    const renderReady = !arrangementIssues.length && rows.length > 0 && rows.every(r => r.validity === 'matched');
+    const exportReady = renderReady && result.coverage.valid && result.segments.filter(s => !s.excluded).every(configurationDecided) && rows.every(r => r.review === 'passed');
     const history=store.all('attempts');
     const units = store.all('units', id).filter(u => u.state !== 'retired').map(u=>{
       const v=enhancement.view(u,result), readiness=api.actionReadiness(u,u.mode,v.status,history);
@@ -1328,7 +1338,7 @@ export function createDomain(store) {
     });
     const playbackItems=rows.map(r=>{const u=units.find(u=>u.id===r.s.id),range=savedAudioRange(store,r.s.id,r.s.mode,r.a?.id);return {id:r.s.id,unitId:r.s.id,members:r.s.members,mode:r.s.mode,audioId:r.a?.id || null,basis:r.basis,validity:r.validity,review:r.review,latest:u?.outstandingAttemptIds.length?'unknown':u?.variants[r.s.mode].latest,outstandingAttemptIds:u?.outstandingAttemptIds || [],readiness:u?.readiness,...(range?{sourceHash:range.sourceHash,decodeProfile:range.decodeProfile,sourceFrames:range.sourceFrames,clipStartFrame:range.startFrame,clipEndFrame:range.endFrame,rangeRevision:range.revision,edgePolicy:range.edgePolicy,rangeContentKey:rangeContentKey(range)}:{rangeRevision:0})};});
     const segments=result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, configurationDecided:configurationDecided(s), ...(group ? {groupId:group.id} : {}) }; });
-    return { ...result,...identity, performanceCoverage:performanceCoverage(store,id), arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems, segments:segments.filter(s=>!s.deletion), deletedSegments:segments.filter(s=>s.deletion), masters:result.masters.map(m=>({...m,current:!m.superseded&&m.arrangement===result.arrangement&&renderMatches(m,identity)})),exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && renderMatches(e,identity) && same(e.confirmation?.reviewItems, reviewItems) })) };
+    return { ...result,...identity, performanceCoverage:performanceCoverage(store,id), arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems, segments:segments.filter(s=>!s.deletion), deletedSegments:segments.filter(s=>s.deletion), masters:result.masters.map(m=>({...m,current:renderReady&&!m.superseded&&m.arrangement===result.arrangement&&renderMatches(m,identity)})),exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && renderMatches(e,identity) && same(e.confirmation?.reviewItems, reviewItems) })) };
   };
   api.fidelity = p => {
     const chapter=store.get('chapters',p.chapterId);

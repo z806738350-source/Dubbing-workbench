@@ -56,6 +56,36 @@ test('complete output whose record registration failed recovers the same file an
  await f.next().recover();const recovered=f.store.get('jobs',job.id);assert.equal(recovered.status,'success');assert.equal(recovered.exportId,job.exportId);assert.equal(f.store.all('exports').length,1);assert.deepEqual(readFileSync(path),before);assert.equal(statSync(path).mtimeMs,mtime);
  const stable=f.store.get('jobs',job.id);await f.next().recover();assert.deepEqual(f.store.get('jobs',job.id),stable);
 });
+test('同签名但当前朗读失配时queued母版和导出不能构建或复用为当前，旧声音与文件保留',async t=>{
+ for(const kind of ['master','export'])for(const cached of [false,true])await t.test(kind+' '+(cached?'cached':'new'),async t=>{
+  const f=setup(t),old=cached?await f.submit('master'):null,c=f.domain.chapter(f.chapter.id),audios=f.store.all('audios'),previous=old&&f.store.get('masters',old.masterId),bytes=previous&&readFileSync(join(f.directory,previous.path));
+  const job=await f.worker.submit({kind,chapterId:c.id,revision:c.revision,arrangement:c.arrangement,commandId:uid(),...(kind==='export'?{format:'wav',reviewItems:c.reviewItems,confirm:false}:{})});
+  const target=f.domain.list(c.id)[0];f.store.put('segments',{...target,performance:'按改变后的语境自然读出。'},c.id);const changed=f.domain.chapter(c.id);
+  assert.equal(changed.revision,c.revision);assert.equal(changed.renderSignature,c.renderSignature);assert.equal(changed.playbackItems[0].validity,'stale');if(previous)assert.equal(changed.masters.find(m=>m.id===previous.id).current,false);
+  await f.worker.tick();assert.equal(f.store.get('jobs',job.id).status,'failed');assert.equal(f.store.all('exports').length,0);assert.equal(f.store.all('masters').length,cached?1:0);assert.deepEqual(f.store.all('audios'),audios);assert.equal(f.store.get('segments',target.id).current,target.current);assert.equal(f.store.all('attempts').length,0);
+  if(previous){assert.deepEqual(readFileSync(join(f.directory,previous.path)),bytes);assert.equal(f.domain.outputs({chapterId:c.id}).items.find(item=>item.id===previous.id).current,false);}
+ });
+});
+test('本地成品登记中断后语境失效，同签名恢复只留历史且不再渲染或请求',async t=>{
+ const f=setup(t),put=f.store.put;let interrupted=false;f.store.put=(table,...args)=>{if(table==='exports'&&!interrupted){interrupted=true;throw Error('fixture registry interruption');}return put(table,...args);};
+ const job=await f.submit('export','wav');f.store.put=put;assert.equal(job.localOutputPending,true);const path=join(f.directory,job.outputRecords.export.path),bytes=readFileSync(path),mtime=statSync(path).mtimeMs,target=f.domain.list(f.chapter.id)[0];f.store.put('segments',{...target,performance:'引用语境已经变化。'},f.chapter.id);
+ await f.next().recover();const recovered=f.store.get('jobs',job.id);assert.equal(recovered.status,'stopped');assert.equal(recovered.exportId,job.exportId);assert.equal(f.store.get('masters',recovered.masterId).superseded,true);assert.equal(f.store.get('exports',recovered.exportId).superseded,true);assert.deepEqual(readFileSync(path),bytes);assert.equal(statSync(path).mtimeMs,mtime);assert.equal(f.store.all('attempts').length,0);assert.ok(f.domain.outputs({chapterId:f.chapter.id}).items.every(item=>!item.current&&item.available));
+});
+test('只改标题或听评不使声音失配，queued本地成品继续复用原母版',async t=>{
+ for(const kind of ['master','export'])await t.test(kind,async t=>{
+  const f=setup(t),old=await f.submit('master'),c=f.domain.chapter(f.chapter.id),job=await f.worker.submit({kind,chapterId:c.id,revision:c.revision,arrangement:c.arrangement,commandId:uid(),...(kind==='export'?{format:'wav',reviewItems:c.reviewItems,confirm:false}:{})});
+  f.store.put('chapters',{...f.store.get('chapters',c.id),title:'只改标题',revision:c.revision+1},c.projectId);const target=f.domain.list(c.id)[0];f.store.put('segments',{...target,review:{...target.review,state:'pending'}},c.id);assert.ok(f.domain.chapter(c.id).playbackItems.every(item=>item.validity==='matched'));
+  await f.worker.tick();const done=f.store.get('jobs',job.id);assert.equal(done.status,'success',done.error);assert.equal(done.masterId,old.masterId);assert.equal(f.store.all('attempts').length,0);
+ });
+});
+test('legacy null签名与旧单句fallback也要求当前有可听行，空章不复用或恢复旧母版',async t=>{
+ const f=setup(t),chapter=f.store.get('chapters',f.chapter.id);f.store.put('chapters',{...chapter,renderProfile:'legacy-mono-v1'},chapter.projectId);
+ const worker=createWorker(f.store,{...f.domain,enhancement:undefined},{key:''});try{
+ const submit=()=>worker.submit({kind:'master',chapterId:chapter.id,revision:chapter.revision,commandId:uid()});const first=await submit();await worker.tick();const complete=f.store.get('jobs',first.id);assert.equal(complete.status,'success',complete.error);assert.equal(complete.renderSignature,null);const old=f.store.get('masters',complete.masterId),bytes=readFileSync(join(f.directory,old.path)),queued=await submit();
+ for(const s of f.domain.list(chapter.id))f.store.put('segments',{...s,excluded:true},chapter.id);const empty=f.domain.chapter(chapter.id);assert.equal(empty.playbackItems.length,0);assert.equal(empty.renderSignature,null);assert.equal(empty.masters.find(m=>m.id===old.id).current,false);await worker.tick();assert.equal(f.store.get('jobs',queued.id).status,'failed');
+ f.store.put('jobs',{...complete,status:'running',localOutputPending:true},chapter.id);await worker.recover();assert.equal(f.store.get('jobs',first.id).status,'stopped');assert.equal(f.store.get('masters',old.id).superseded,true);assert.deepEqual(readFileSync(join(f.directory,old.path)),bytes);assert.equal(f.store.all('attempts').length,0);
+ }finally{worker.close();await worker.drain();}
+});
 test('historical unique receipts restore missing fields, ambiguity never guesses, and missing files stay unavailable',async t=>{
  const f=setup(t),master=await f.submit('master'),reused=await f.submit('master'),strip=job=>{for(const key of ['masterId','result','outputRecords','localOutputPending'])delete job[key];f.store.put('jobs',job,f.chapter.id);};strip({...reused});await f.next().recover();assert.equal(f.store.get('jobs',reused.id).masterId,master.masterId);
  const same=f.store.get('masters',master.masterId);f.store.put('masters',{...same,id:uid(),jobId:uid()},f.chapter.id);strip(f.store.get('jobs',reused.id));await f.next().recover();assert.equal(f.store.get('jobs',reused.id).masterId,undefined);

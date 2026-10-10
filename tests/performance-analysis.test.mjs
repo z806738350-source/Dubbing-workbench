@@ -8,7 +8,7 @@ import {createDomain,inputOf,basisOf} from '../server/domain.mjs';
 import {createAnalysis} from '../server/analysis.mjs';
 import {createExperience} from '../server/experience.mjs';
 import {createWorker} from '../server/worker.mjs';
-import {inspectPerformance,performanceCoverage,performanceContract,hasReadableText} from '../server/performance.mjs';
+import {inspectPerformance,performanceCoverage,performanceContract,hasReadableText,segmentPerformanceIssues} from '../server/performance.mjs';
 
 function fixture(t,{source='沈栀展开信纸。\n“先别开门。等我数到三。”',segmented=false,limit=20}={}) {
   const dir=mkdtempSync(join(tmpdir(),'pg-analysis-')),store=openStore(dir),d=createDomain(store);
@@ -33,9 +33,46 @@ test('PG指导合同：UTF16硬上限、占位与真实锚点、明确越界操�
   assert.deepEqual(inspectPerformance('从“等等”开始压低声音。','等等，先别走。',{performanceAnchors:['等等']}),[]);
 });
 
+test('邻句引述语refs与目标anchors独立，语气来源冻结并因邻句人工改文失效',async t=>{
+  const f=fixture(t,{source:'“祝贺😀。”\n陈文轩淡淡道。\n“回头再见。”'});
+  f.mock((input,request)=>{assert.match(request.messages[0].content,/淡淡不变厌恶/);return f.base(input).map((x,i)=>i?x:{...x,type:'dialogue',performance:'语气平淡、克制，句尾自然轻收。',performanceEvidence:{kind:'原文明示',refs:[1]},performanceAnchors:['祝贺😀']});});
+  const r=await f.run({auditoryPolicy:{version:1,mode:'conservative'}}),[target,neighbor,last]=f.rows();
+  assert.equal(r.status,'applied',r.automation?.error);assert.equal(f.calls.length,1);assert.equal(r.performanceReceipt.coverage.coveredCount,3);
+  const nativeAll=f.store.all;let reads=0;t.mock.method(f.store,'all',(table,...args)=>{if(table==='segments')reads++;return nativeAll.call(f.store,table,...args);});
+  assert.equal(performanceCoverage(f.store,f.c.id).coveredCount,3);assert.equal(reads,1,'覆盖检查复用一次全章读取，不按目标重复解码');
+  assert.deepEqual(target.decisions.performance.evidence.refs,[1]);assert.deepEqual(target.decisions.performance.performanceAnchors,['祝贺😀']);assert.equal(target.decisions.performance.dependencies.context.refs[0].text,neighbor.text);
+  assert.deepEqual(segmentPerformanceIssues(f.store,f.store.get('chapters',f.c.id),target),[]);
+  f.edit(last.id,{text:'“新的无关末句。”'});assert.deepEqual(segmentPerformanceIssues(f.store,f.store.get('chapters',f.c.id),f.store.get('segments',target.id)),[]);
+  f.edit(neighbor.id,{text:'陈文轩热切道。'});assert.match(segmentPerformanceIssues(f.store,f.store.get('chapters',f.c.id),f.store.get('segments',target.id)).join(),/依据已改变/);
+  assert.ok(f.a.coverage(f.c.id).missingIds.includes(target.id));assert.equal(f.calls.length,1);
+  assert.match(inspectPerformance('从“淡淡”开始轻收。',target.text,{performanceAnchors:['淡淡']}).join(),/锚点|不在当前片段/);
+});
+
+test('导演等待时未选邻句变化跳过相关指导，仍保留候选且不补发模型',async t=>{
+  const f=fixture(t,{source:'“祝贺😀。”\n陈文轩淡淡道。\n“回头再见。”',segmented:true}),[target,neighbor]=f.rows();let release;const waiting=new Promise(resolve=>release=resolve);
+  f.mock(async input=>{await waiting;return input.segments.map(s=>({segmentId:s.id,performance:'语气平淡、克制，句尾自然轻收。',performanceEvidence:{kind:'原文明示',refs:[1]},performanceAnchors:['祝贺😀'],evidence:'原文明示',evidenceRefs:[0],uncertain:false}));});
+  const started=await f.a.start({chapterId:f.c.id,revision:f.rev(),kind:'director',ids:[target.id],performanceMode:'fillMissing',autoApply:true,grantId:f.grant.grantId,auditoryPolicy:{version:1,mode:'conservative'}});
+  f.edit(neighbor.id,{text:'陈文轩热切道。'});release();await f.a.close();const r=f.store.get('suggestions',started.id);
+  assert.equal(r.status,'applied');assert.deepEqual(r.performanceReceipt.writtenIds,[]);assert.deepEqual(r.performanceReceipt.skippedChangedIds,[target.id]);assert.equal(f.store.get('segments',target.id).performance,'');assert.equal(f.calls.length,1);assert.equal(r.items[0].performance,'语气平淡、克制，句尾自然轻收。');
+});
+
+test('保守extract的未知表演补齐重放保持beat稳定成员及已落库邻句refs基准',async t=>{
+  const f=fixture(t,{source:'“祝贺😀。”\n陈文轩淡淡道。\n“回头再见。”'});let lost=true;
+  t.mock.method(globalThis,'fetch',async(url,init)=>{
+    const input=JSON.parse(JSON.parse(init.body).messages[1].content);f.calls.push(input);
+    if(input.targets && lost)throw Error('lost');
+    const output=input.targets ? {items:input.targets.map(s=>({targetId:s.targetId,performance:'语气平淡、克制，句尾自然轻收。',performanceEvidence:{kind:'原文明示',refs:[1]},performanceAnchors:['祝贺😀']}))} : {items:f.base(input).map((s,i)=>i?s:{...s,performance:''}),productionBeats:[{from:0,to:2,viewpoint:'',change:'',requiredRefs:[1],guidance:'两段对白按原文顺序保持克制语气，中间旁白完整交代后自然接续。',evidenceRefs:[1]}]};
+    return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify(output)}}]});
+  });
+  const r=await f.run({auditoryPolicy:{version:1,mode:'conservative'}}),before=structuredClone(r.productionBeats),ids=f.rows().map(s=>s.id);
+  assert.equal(r.status,'applied');assert.equal(r.performanceRepairs[0].status,'unknown');assert.deepEqual(before[0].segmentIds,ids);
+  lost=false;f.a.resume({id:r.id,draftVersion:r.draftVersion,repairIds:[r.performanceRepairs[0].id],retryUnknown:true,grantId:f.grant.grantId});await f.a.close();const final=f.store.get('suggestions',r.id);
+  assert.equal(f.calls.length,3);assert.deepEqual(final.productionBeats.map(b=>b.segmentIds),before.map(b=>b.segmentIds));assert.equal(final.productionBeats[0].members[0].performance,'语气平淡、克制，句尾自然轻收。');assert.equal(final.productionBeats[0].members[0].decisions.performance.analysisId,r.id);assert.deepEqual(final.productionBeats[0].members.slice(1),before[0].members.slice(1));assert.deepEqual(f.rows().map(s=>s.id),ids);assert.deepEqual(final.performanceReceipt.writtenIds,[ids[0]]);assert.equal(final.performanceReceipt.coverage.coveredCount,3);
+});
+
 test('合法否定与原文重音不会制造表演缺口，肯定越权及后半冲突仍阻断',t=>{
-  for(const value of ['带一点笑意，不要添加笑声。','保持平静，不要删除台词。','强调“3秒”，语气干脆。','重音落在“3秒”，随后自然收句。'])assert.deepEqual(inspectPerformance(value,'3秒后出发。'),[],value);
-  for(const value of ['加入笑声。','删掉台词。','播放背景音乐。','停顿3秒。','在3秒内读完。','不要添加笑声，但最后加入笑声。','不要添加笑声但最后加入笑声。'])assert.ok(inspectPerformance(value,'3秒后出发。').length,value);
+  for(const value of ['按原文顺序读出，不添加笑声。','带一点笑意，不要添加笑声。','保持平静，不要删除台词。','强调“3秒”，语气干脆。','重音落在“3秒”，随后自然收句。'])assert.deepEqual(inspectPerformance(value,'3秒后出发。'),[],value);
+  for(const value of ['加入笑声。','删掉台词。','播放背景音乐。','停顿3秒。','在3秒内读完。','不要添加笑声，但最后加入笑声。','不要添加笑声但最后加入笑声。','不添加笑声，但最后加入笑声。'])assert.ok(inspectPerformance(value,'3秒后出发。').length,value);
   assert.ok(inspectPerformance('强调“4秒”。','3秒后出发。').length);
   assert.ok(inspectPerformance('平静。','3秒后出发。',{performanceAnchors:['4秒']}).length);
   const f=fixture(t,{source:'3秒后出发。\n3秒后出发。',segmented:true}),rows=f.rows();

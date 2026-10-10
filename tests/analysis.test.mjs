@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {openStore} from '../server/store.mjs';
 import {createDomain} from '../server/domain.mjs';
 import {createAnalysis, sourceBlocks} from '../server/analysis.mjs';
+import {performanceContext} from '../server/performance.mjs';
 
 function setup(t, source='  他停步。\n\n“你好。”\n\n她回头。😀') {
   const dir=mkdtempSync(join(tmpdir(),'dubbing-analysis-')), store=openStore(dir), domain=createDomain(store);
@@ -21,6 +22,64 @@ function setup(t, source='  他停步。\n\n“你好。”\n\n她回头。😀'
 }
 const input=init=>JSON.parse(JSON.parse(init.body).messages[1].content);
 const longSource=Array.from({length:130},(_,i)=>`${i} ${'章节原文'.repeat(50)}。\n`).join('');
+
+test('保守编剧一次提取保存beat及稳定成员，Unicode原文完整；同操作重放不重复',async t=>{
+  const {a,get,rows,store,domain,c}=setup(t,'“祝贺😀。”\n陈文轩淡淡道。\n“回头再见。”');let calls=0;
+  global.fetch=async(_,init)=>{
+    calls++;const request=JSON.parse(init.body),data=input(init);
+    assert.match(request.messages[0].content,/高保真有声剧编剧/);assert.match(request.messages[0].content,/邻句.*只能作为来源refs/);
+    const beats=[{from:data.blocks[0].id,to:data.blocks.at(-1).id,viewpoint:'第三人称',change:'平淡道别',requiredRefs:[1],guidance:'两段对白保持原文平淡的语气，中间旁白完整交代后自然接回对白。',evidenceRefs:[1]}];
+    return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({items:rows(data),productionBeats:beats})}}]});
+  };
+  const policy={version:1,mode:'conservative'},r=await a.start({chapterId:c.id,revision:c.revision,auditoryPolicy:policy});await a.close();
+  let d=get(r.id);assert.equal(d.status,'ready');assert.equal(d.productionBeats.length,1);assert.equal(store.get('chapters',c.id).auditoryPolicy,undefined);
+  const command={id:d.id,draftVersion:d.draftVersion,revision:c.revision,replaceConfirmed:true,operationId:'one-beat-apply'};
+  const applied=a.apply(command);d=get(r.id);const segments=domain.list(c.id),beat=d.productionBeats[0];
+  assert.deepEqual(beat.segmentIds,segments.map(s=>s.id));assert.equal(beat.sourceVersion,1);assert.deepEqual(beat.members.map(s=>s.source),segments.map(s=>s.source));assert.ok(beat.members.every(s=>!Object.hasOwn(s,'voiceId')));
+  assert.equal(segments.map(s=>s.text).join(''),c.source);assert.deepEqual(store.get('chapters',c.id).auditoryPolicy,policy);assert.equal(calls,1);
+  const revision=store.get('chapters',c.id).revision;assert.deepEqual(a.apply(command),applied);assert.equal(store.get('chapters',c.id).revision,revision);assert.equal(get(r.id).productionBeats.length,1);
+});
+
+test('非法或冲突beat只放弃建议，不丢合法items、不增加提取请求',async t=>{
+  const cases=[null,{},[{from:999,to:999}],[{guidance:'😀'.repeat(101)}],[{guidance:'添加笑声，接回对白。'}],[{evidenceRefs:[999]}],[{from:0,to:1},{from:1,to:2}],[{from:2,to:2},{from:0,to:0}]];
+  for(const [index,invalid] of cases.entries())await t.test(String(index),async t=>{
+    const {a,get,rows,domain,c}=setup(t,'甲说。\n第一句😀。\n第二句。');let calls=0;
+    global.fetch=async(_,init)=>{calls++;const data=input(init),base={from:0,to:2,viewpoint:'',change:'',requiredRefs:[0],guidance:'按原文顺序连续叙述，中间动作完整交代。',evidenceRefs:[0]};return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({items:rows(data),productionBeats:Array.isArray(invalid)?invalid.map(x=>({...base,...x})):invalid})}}]});};
+    const r=await a.start({chapterId:c.id,revision:c.revision,auditoryPolicy:{version:1,mode:'conservative'}});await a.close();const d=get(r.id);
+    assert.equal(d.status,'ready');assert.ok(d.productionBeatIssues.length);if(index!==7)assert.equal(d.productionBeats.length,0);
+    a.apply({id:d.id,draftVersion:d.draftVersion,revision:c.revision,replaceConfirmed:true});assert.equal(domain.list(c.id).map(s=>s.text).join(''),c.source);assert.equal(calls,1);
+  });
+});
+
+test('legacy与明确基础朗读忽略模型beat，保守请求恢复免费重解析顶层beat',async t=>{
+  for(const mode of ['legacy','basic','recover'])await t.test(mode,async t=>{
+    const {a,get,rows,store,domain,c}=setup(t,'第一句😀。\n第二句。');let calls=0;
+    global.fetch=async(_,init)=>{calls++;const request=JSON.parse(init.body),data=input(init);if(mode!=='recover')assert.doesNotMatch(request.messages[0].content,/productionBeats/);return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({items:rows(data),productionBeats:[{from:0,to:1,viewpoint:'',change:'',requiredRefs:[0],guidance:'前后两句延续原有叙述语势，完整按序读出。',evidenceRefs:[0]}]})}}]});};
+    const r=await a.start({chapterId:c.id,revision:c.revision,...(mode==='legacy'?{}:{auditoryPolicy:{version:1,mode:'conservative'}}),...(mode==='basic'?{includePerformance:false}: {})},mode==='basic'?{actorKind:'human_direct',performanceBasic:{source:{kind:'ui',id:'basic-choice'}}}:undefined);await a.close();let d=get(r.id);
+    if(mode==='recover') {d.status='running';d.batches[0].status='sending';d.batches[0].items=[];delete d.batches[0].rawProductionBeats;store.put('suggestions',d,c.id);a.recover();d=get(r.id);assert.equal(d.productionBeats.length,1);assert.equal(d.batches[0].rawProductionBeats.length,1);}
+    else assert.equal(d.productionBeats,undefined);
+    a.apply({id:d.id,draftVersion:d.draftVersion,revision:c.revision,replaceConfirmed:true});assert.equal(domain.list(c.id).map(s=>s.text).join(''),c.source);if(mode==='basic')assert.ok(domain.list(c.id).every(s=>s.performance===''));if(mode==='legacy')assert.equal(store.get('chapters',c.id).auditoryPolicy,undefined);assert.equal(calls,1);
+  });
+});
+
+test('保守章节scene建议保留原场景合同，不拼干声编剧任务或采用beat',async t=>{
+  const {a,get,store,domain,c}=setup(t,'门外响起两下敲门声。'),segment=domain.mutate('segment.create',{chapterId:c.id,revision:c.revision,text:c.source}),unit=domain.enhancement.getUnit(segment.id);let calls=0;
+  global.fetch=async(_,init)=>{calls++;const request=JSON.parse(init.body);assert.match(request.messages[0].content,/场景声音建议员/);assert.doesNotMatch(request.messages[0].content,/productionBeats|高保真有声剧编剧/);return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({items:[],productionBeats:[{from:0,to:0,guidance:'随意合并'}]})}}]});};
+  const r=await a.start({chapterId:c.id,revision:store.get('chapters',c.id).revision,kind:'scene',sceneEnabled:true,unitId:unit.id,unitRevision:unit.revision,auditoryPolicy:{version:1,mode:'conservative'}});await a.close();const d=get(r.id);
+  assert.equal(d.status,'ready');assert.equal(d.productionBeats,undefined);assert.equal(calls,1);assert.equal(store.all('events',unit.id).length,0);
+});
+
+test('beat保存成员外实际引用邻句；后配声保护不改变来源，邻句人工改文依赖失配',async t=>{
+  const {a,get,rows,store,domain,c}=setup(t,'第一句😀。\n第二句。\n邻近说明。');
+  global.fetch=async(_,init)=>{const data=input(init);return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({items:rows(data),productionBeats:[{from:0,to:1,viewpoint:'',change:'',requiredRefs:[0,1],guidance:'前两句沿原有叙述语势按序读出，保持说明完整。',evidenceRefs:[2]}]})}}]});};
+  const r=await a.start({chapterId:c.id,revision:c.revision,auditoryPolicy:{version:1,mode:'conservative'}});await a.close();const draft=get(r.id);
+  a.apply({id:r.id,draftVersion:draft.draftVersion,revision:c.revision,replaceConfirmed:true});const applied=get(r.id),beat=applied.productionBeats[0],[first,second,neighbor]=domain.list(c.id);
+  assert.deepEqual(beat.segmentIds,[first.id,second.id]);assert.deepEqual(beat.evidenceContext.refs.map(b=>b.id),[0,1,2]);assert.ok(beat.evidenceContext.members.some(s=>s.id===neighbor.id));
+  first.protectedFields=[...(first.protectedFields || []),'voiceId'];store.put('segments',first,c.id);
+  assert.deepEqual(performanceContext(store.get('chapters',c.id),domain.list(c.id),beat.evidenceContext.refs),beat.evidenceContext);
+  domain.mutate('segment.update',{chapterId:c.id,revision:store.get('chapters',c.id).revision,id:neighbor.id,text:'邻近的新说明。'});
+  assert.notDeepEqual(performanceContext(store.get('chapters',c.id),domain.list(c.id),beat.evidenceContext.refs),beat.evidenceContext);
+});
 
 test('空白不独立成块，Unicode 正文和偏移逐字保留',()=>{
   const source='  \n他😀停步。\n\n“你好。”\n  ', blocks=sourceBlocks(source);

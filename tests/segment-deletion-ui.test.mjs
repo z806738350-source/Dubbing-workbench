@@ -107,7 +107,7 @@ test('保存或核对版本期间切章、换工作区或新意图，不向迟�
 
 test('实际多选栏删除绑定checked，不改绑、生成或发送写入',async()=>{
   const bar=find(node=>ts.isJsxElement(node)&&node.openingElement.attributes.properties.some(attr=>ts.isJsxAttribute(attr)&&attr.name.getText(file)==='className'&&attr.initializer?.getText(file)==='"selection-bar"'));
-  const sent=[],env={React,checked:['one','two'],locked:false,busy:false,connectionReady:true,state:{settings:{}},openUnit(){assert.fail('不能创建组');},setRebindOpen(){assert.fail('不能改绑');},generate(){assert.fail('不能生成');},mutate(){assert.fail('不能写入');},setChecked(){assert.fail('不能清选择');},run:fn=>fn(),onDeleteSegments:ids=>sent.push(ids),Users:'Users',AudioLines:'AudioLines',CheckCheck:'CheckCheck',Trash2:'Trash2',X:'X'};
+  const sent=[],env={React,checked:['one','two'],locked:false,busy:false,connectionReady:true,state:{settings:{}},openUnit(){assert.fail('不能创建组');},setRebindOpen(){assert.fail('不能改绑');},generate(){assert.fail('不能生成');},mutate(){assert.fail('不能写入');},setChecked(){assert.fail('不能清选择');},run:fn=>fn(),onDeleteSegments:ids=>sent.push(ids),Users:'Users',MicVocal:'MicVocal',AudioLines:'AudioLines',CheckCheck:'CheckCheck',Trash2:'Trash2',X:'X'};
   button(projected(bar,env),'删除所选').props.onClick();assert.deepEqual(sent,[['one','two']]);
   env.busy=true;assert.equal(button(projected(bar,env),'删除所选').props.disabled,true);
 });

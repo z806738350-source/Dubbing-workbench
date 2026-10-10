@@ -258,6 +258,8 @@ export function GeneratePlan({plan,chapter,model,concurrency,unknown,routeBlocke
     {!invalid&&!!changes.length&&<div className="task-outcome" role="status"><h3>本次制作有具体变化</h3><ul>{changes.map((change,index)=><li key={index}>{change}</li>)}</ul><p>只提交下面列出的当前范围；关闭窗口不会发送。</p></div>}
     <p className="task-panel-summary">{invalid?'之前核对的范围：':'本次覆盖 '}{plan.memberIds.length} 条台词，其中 {plan.units.filter(u=>u.reuse).length} 个已有声音直接复用；实际发送 {plan.audioRequests} 次音频请求。</p>
     <div className="task-member-list">{plan.units.map(unit=><p key={unit.unitId}>{unit.members.length>1?'一起演绎':'单句'} · 第 {unit.members.map(id=>{const segment=chapter.segments.find(s=>s.id===id);return segment?segment.order+1:'已移除';}).join('、')} 条 · {unit.mode==='scene'?'声音背景':'纯人声'} · {unit.reuse?'复用已有声音':'生成新声音'}</p>)}</div>
+    {plan.units.filter(unit=>unit.productionBeat).map(unit=><div className="hint" key={unit.unitId}><p>局部演播关系：{unit.guidance}</p>{unit.productionBeatReason&&<p role="alert">{unit.productionBeatReason}</p>}<details><summary>实际朗读正文</summary>{unit.members.map(id=><p key={id}>{chapter.segments.find(s=>s.id===id)?.text}</p>)}</details></div>)}
+    {!!plan.productionBeatSkips?.length&&<details><summary>未采用的局部演播关系</summary>{plan.productionBeatSkips.map((item,index)=><p key={index}>{item.reason}</p>)}</details>}
     {!invalid&&plan.units.filter(unit=>!unit.reuse).map(unit=>{
       const members=chapter.segments.filter(s=>unit.members.includes(s.id)),length=members.reduce((total,s)=>total+Array.from(s.text||'').length,0);
       if(length<=350*(1+(members[0]?.config?.speech_rate||0)/100))return null;
