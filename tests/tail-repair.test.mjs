@@ -1,13 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, existsSync } from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { openStore, uid } from '../server/store.mjs';
 import { createDomain, inputOf, basisOf } from '../server/domain.mjs';
 import { compile } from '../server/templates.mjs';
-import { repairProjectTails } from '../server/tail-repair.mjs';
+import { repairProjectTails, repairTailUnit } from '../server/tail-repair.mjs';
+import { audioDigest } from '../server/audio-delivery.mjs';
+import { diskStatus, DISK_SAFETY_BYTES } from '../server/disk-space.mjs';
 import { analyzeTail } from '../server/tail-audio.mjs';
 import { buildMaster, inspect } from '../server/audio.mjs';
 
@@ -139,6 +143,16 @@ test('事务失败回滚采用记录，删除新文件并保留原音频', async
   await assert.rejects(repairProjectTails(store, domain, project.id), /injected failure/);
   assert.deepEqual(['audios', 'units', 'segments', 'chapters'].map(table => store.all(table)), before);
   assert.deepEqual(readdirSync(join(directory, 'audio')), files); assert.ok(existsSync(join(directory, source.path)));
+  assert.equal(diskStatus(directory).reservedBytes,0);
+});
+
+test('已识别尾部后按精确输出帧预留，低空间不新建声音且原件回执逐字节不变',async t=>{
+  const f=setup(t),source=f.singleAudio(0,true,true),original=readFileSync(join(f.directory,source.path)),digest=await audioDigest(join(f.directory,source.path)),manifestPath=source.path+'.delivery.json',receipt=Buffer.from(JSON.stringify({version:1,fixture:true,raw:digest}));
+  writeFileSync(join(f.directory,manifestPath),receipt);source.delivery={rawPath:source.path,manifestPath,rawSha256:digest.sha256};f.store.put('audios',source,f.chapter.id);
+  const analysis=await analyzeTail(join(f.directory,source.path));assert.equal(analysis.detected,true);const required=44+analysis.cutFrame*analysis.channels*2,before=['audios','units','segments','chapters'].map(table=>f.store.all(table)),files=readdirSync(join(f.directory,'audio')).sort();
+  const mock=t.mock.method(fs,'statfsSync',()=>({bavail:DISK_SAFETY_BYTES+required-1,bsize:1}));syncBuiltinESMExports();t.after(()=>{mock.mock.restore();syncBuiltinESMExports();});
+  await assert.rejects(repairTailUnit(f.store,f.domain,f.chapter.id,source.targetId),error=>error.status===507&&error.code==='disk-space-low'&&error.requiredBytes===required);
+  assert.equal(diskStatus(f.directory).reservedBytes,0);assert.deepEqual(['audios','units','segments','chapters'].map(table=>f.store.all(table)),before);assert.deepEqual(readdirSync(join(f.directory,'audio')).sort(),files);assert.deepEqual(readFileSync(join(f.directory,source.path)),original);assert.deepEqual(readFileSync(join(f.directory,manifestPath)),receipt);assert.equal(f.store.all('attempts').length,0);
 });
 
 test('处理开始前拒绝活动任务，异步处理期间更换声音也不覆盖新选择', async t => {

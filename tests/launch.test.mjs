@@ -40,7 +40,15 @@ test('双击启动入口：新建服务、重复打开复用、安全停止，�
   assert.match(repeated, /无需重复启动/);
   assert.equal(JSON.parse(await readFile(join(data, 'runtime.json'), 'utf8')).pid, child.pid);
   assert.equal((await readFile(opened, 'utf8')).trim().split('\n').length, 2);
-  assert.deepEqual(await (await fetch(url + 'api/state')).json(), before);
+  const after = await (await fetch(url + 'api/state')).json();
+  for (const state of [before, after]) {
+    assert.ok(Number.isSafeInteger(state.settings.storage.freeBytes) && state.settings.storage.freeBytes >= 0);
+    assert.ok(state.settings.storage.availableBytes >= 0 && state.settings.storage.availableBytes <= state.settings.storage.freeBytes);
+    assert.equal(state.settings.storage.reservedBytes, 0);
+  }
+  assert.equal(after.settings.storage.safetyBytes, before.settings.storage.safetyBytes);
+  // Other processes can write to the same volume between the two reads.
+  assert.deepEqual({...after, settings: {...after.settings, storage: before.settings.storage}}, before);
   child.kill('SIGINT');
   assert.equal((await closed)[0], 0);
   assert.equal(existsSync(join(data, 'runtime.json')), false);

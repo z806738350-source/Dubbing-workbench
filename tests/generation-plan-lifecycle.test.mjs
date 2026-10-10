@@ -14,18 +14,22 @@ const file=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.S
 function find(predicate){let result;function visit(node){if(!result&&predicate(node))result=node;if(!result)ts.forEachChild(node,visit);}visit(file);assert.ok(result,'所测 App 回调仍应存在');return result;}
 function project(node,env){const code=ts.transpileModule('const projected=('+node.getText(file)+');',{compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText;return new Function(...Object.keys(env),code+'\nreturn projected;')(...Object.values(env));}
 const declaration=name=>find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file)===name).initializer;
+const workspaceSource=readFileSync(new URL('../src/WorkspaceExperience.tsx',import.meta.url),'utf8'),workspaceFile=ts.createSourceFile('WorkspaceExperience.tsx',workspaceSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+const changesNode=workspaceFile.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='generationPlanChanges');
+const changesCode=ts.transpileModule(changesNode.getText(workspaceFile).replace(/^export /,''),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+const generationPlanChanges=new Function(changesCode+';return generationPlanChanges;')();
 const panel=find(node=>ts.isJsxSelfClosingElement(node)&&node.tagName.getText(file)==='GeneratePlan');
 const callback=name=>panel.attributes.properties.find(node=>ts.isJsxAttribute(node)&&node.name.getText(file)===name).initializer.expression;
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const chapter=(revision=4,id='chapter')=>({id,projectId:'project',revision,arrangement:1,events:[],units:[],segments:['one','two'].map((id,order)=>({id,order,text:'自拟台词'+order}))});
-const plan=(revision=4,ids=['one'])=>({chapterId:'chapter',revision,arrangement:1,unitIds:ids,memberIds:ids,units:ids.map(id=>({unitId:id,members:[id],mode:'dry',reuse:false,audioId:null})),textRequests:0,audioRequests:ids.length});
+const plan=(revision=4,ids=['one'])=>({chapterId:'chapter',revision,arrangement:1,unitIds:ids,memberIds:ids,units:ids.map(id=>({unitId:id,members:[id],mode:'dry',model:'fixture-audio',referenceVoices:[{voiceId:'voice',revision:1,fileVersion:'reference-v1'}],reuse:false,audioId:null})),model:'fixture-audio',textRequests:0,audioRequests:ids.length});
 
 function fixture(){
   const calls={api:[],paid:[],grants:[],chapters:[],plans:[],errors:[],notices:[],refresh:0};
   const waiting=new Map();
   const env={chapter:chapter(),chapterRef:{current:'chapter'},generationIntent:{current:0},generationPlan:{plan:plan(),ids:['one'],regenerate:true,retryUnknown:true,resumeRoute:true},grantId:'old-grant',state:{jobs:[],settings:{model:'fixture-audio',routeBlocked:true}},
     playIntent:{current:0},segmentDeletionIntent:{current:0},pendingPlay:{current:null},pendingPlaySnapshot:{current:null},audio:{current:{pause(){}}},
-    withSavedDrafts:async(_scope,_dependencies,next)=>{const pending=waiting.get('save')?.shift();if(pending)await pending.promise;return next();},hasDraft:()=>false,unitHasDraft:()=>false,draftScopeRevision:(_scope,revision)=>revision,
+    generationPlanChanges,withSavedDrafts:async(_scope,_dependencies,next)=>{const pending=waiting.get('save')?.shift();if(pending)await pending.promise;return next();},hasDraft:()=>false,unitHasDraft:()=>false,draftScopeRevision:(_scope,revision)=>revision,
     api:async(path,payload)=>{calls.api.push({path,payload});const pending=waiting.get(path)?.shift();if(pending)return pending.promise;return path.startsWith('/chapters/')?chapter(7):plan(payload.revision,payload.ids);},
     submitOperation:async(...args)=>{calls.paid.push(args);const pending=waiting.get('submit')?.shift();return pending?pending.promise:{outcome:'completed',jobIds:['mock-job']};},
     ensureTaskGrant:async intent=>{calls.grants.push(intent);const pending=waiting.get('grant')?.shift();return pending?pending.promise:'automatic-grant';},
@@ -35,7 +39,8 @@ function fixture(){
     setGrantId:value=>{env.grantId=value;},setError:value=>calls.errors.push(value),setNotice:value=>calls.notices.push(value),
     setDeleteTarget(){},setRenameTarget(){},setSegmentDeletion(){},setInspectorOpen(){},setVoiceTarget(){},setUnitPanelId(){},setUnitInitialMode(){},setPlayer(){},setNavOpen(){},
   };
-  function render(){env.closeGeneration=project(declaration('closeGeneration'),env);env.submitGeneration=project(declaration('submitGeneration'),env);env.generate=project(declaration('generate'),env);return {generate:env.generate,recheck:project(callback('onRecheck'),env),close:project(callback('onClose'),env),pick:project(declaration('pickChapter'),env),submit:env.submitGeneration};}
+  env.stateRef={current:env.state};
+  function render(){env.closeGeneration=project(declaration('closeGeneration'),env);env.submitGeneration=(...args)=>project(declaration('submitGeneration'),env)(...args);env.generate=project(declaration('generate'),env);return {generate:env.generate,recheck:project(callback('onRecheck'),env),close:project(callback('onClose'),env),pick:project(declaration('pickChapter'),env),submit:env.submitGeneration};}
   function defer(path){let resolve,reject;const pending={promise:new Promise((yes,no)=>{resolve=yes;reject=no;}),resolve:value=>resolve(value),reject:error=>reject(error)};waiting.set(path,[...(waiting.get(path)||[]),pending]);return pending;}
   return {env,calls,render,defer};
 }
@@ -62,14 +67,12 @@ test('关闭后同章第二次计划先完成，旧第一次核对迟到不能�
   assert.equal(f.calls.api.filter(call=>call.path==='/operations/plan').length,1);assert.equal(f.calls.paid.length,0);
 });
 
-test('变化后重新核对使用新章版本，只有明确开始生成才提交一次',async()=>{
+test('同范围版本变化自动重新核对并继续，只提交当前版本一次',async()=>{
   const f=fixture();await f.render().recheck();
-  assert.equal(f.env.chapter.revision,7);assert.equal(f.env.generationPlan.plan.revision,7);
-  assert.deepEqual(f.env.generationPlan.ids,['one']);assert.equal(f.env.generationPlan.regenerate,true);
-  assert.equal(f.env.generationPlan.retryUnknown,false);assert.equal(f.env.generationPlan.resumeRoute,false);assert.equal(f.calls.grants.length,0);
-  assert.equal(f.calls.paid.length,0);assert.deepEqual(f.calls.api.map(call=>call.path),['/chapters/chapter','/operations/plan']);
-  await f.render().submit();
-  assert.equal(f.calls.paid.length,1);assert.equal(f.calls.paid[0][1].revision,7);assert.equal('grantId' in f.calls.paid[0][1],false);assert.equal(f.env.generationPlan,null);
+  assert.equal(f.env.chapter.revision,7);assert.equal(f.env.generationPlan,null);
+  assert.equal(f.calls.grants.length,0);assert.deepEqual(f.calls.api.map(call=>call.path),['/chapters/chapter','/operations/plan']);
+  assert.equal(f.calls.paid.length,1);assert.equal(f.calls.paid[0][1].revision,7);assert.deepEqual(f.calls.paid[0][1].ids,['one']);assert.equal(f.calls.paid[0][1].regenerate,true);assert.equal('grantId' in f.calls.paid[0][1],false);
+  assert.equal(f.calls.paid[0][1].expectedModel,'fixture-audio');assert.deepEqual(f.calls.paid[0][1].expectedReferenceVoices,[{voiceId:'voice',revision:1,fileVersion:'reference-v1'}]);
 });
 
 test('真实按钮同一调用直接携带unknown及恢复决定，仍绑定确切attempt IDs',async()=>{
@@ -138,10 +141,10 @@ test('普通入口等待计划期间有新范围，迟到旧计划不再发送�
   await unknown.render().generate(['one']);assert.equal(unknown.calls.paid.length,0);assert.deepEqual(unknown.env.generationPlan.plan.outstandingAttemptIds,['real-unknown-attempt']);
 });
 
-test('直接提交前范围失效，不自动扩大或再发，显示免费重新核对的具体卡',async()=>{
+test('连续版本冲突至多重核一次，保留原选择而不自动扩大范围',async()=>{
   const f=fixture();f.env.state.settings.routeBlocked=false;
   f.env.submitOperation=async(...args)=>{f.calls.paid.push(args);return{error:'本次内容已变化',errorStatus:409,jobIds:[]};};
-  await f.render().generate(['two']);assert.equal(f.calls.paid.length,1);assert.equal(f.env.generationPlan.invalidated,true);assert.deepEqual(f.env.generationPlan.ids,['two']);
+  await f.render().generate(['two']);assert.equal(f.calls.paid.length,2);assert.equal(f.env.generationPlan.invalidated,true);assert.deepEqual(f.env.generationPlan.ids,['two']);
   assert.equal(f.calls.grants.length,0);
 });
 
@@ -168,4 +171,46 @@ test('已有匹配待检查声音的生成所选明确重做两条，普通生�
   assert.equal(f.calls.paid.length,1);assert.equal(f.calls.paid[0][1].actionKind,'forceRegenerate');assert.deepEqual(f.calls.paid[0][1].ids,ids);assert.equal('grantId' in f.calls.paid[0][1],false);
   const job=store.all('jobs',chapterRow.id).at(-1);assert.equal(job.kind,'unit-generate');assert.deepEqual(job.unitIds,ids);assert.equal(store.all('attempts',job.id).length,2);
   await worker.tick();assert.equal(calls,4,'两条已匹配但待检查的声音均收到一次新的Mock生成请求');assert.equal(store.get('jobs',job.id).status,'success');
+});
+
+test('已知未入队409在同目标与参考身份内自动重核，最终只创建一份任务',async()=>{
+  const f=fixture();f.env.state.settings.routeBlocked=false;let accepted=0;
+  f.env.submitOperation=async(...args)=>{f.calls.paid.push(args);if(f.calls.paid.length===1)return{outcome:'needsInput',error:'版本已更新',errorStatus:409,jobIds:[],createdObjectIds:[]};accepted++;return{outcome:'processing',jobIds:['one-job']};};
+  await f.render().generate(['one']);assert.equal(f.calls.paid.length,2,'第一次仅有拒绝回执，第二次才入队');assert.equal(accepted,1);assert.equal(f.env.generationPlan,null);
+  assert.equal(f.calls.paid[1][1].revision,7);assert.deepEqual(f.calls.paid[1][1].ids,['one']);assert.deepEqual(f.calls.paid[1][1].expectedReferenceVoices,[{voiceId:'voice',revision:1,fileVersion:'reference-v1'}]);
+});
+
+test('同目标的模式、成员、参考或模型改变以及新增unknown集中留一张当前决定卡',async()=>{
+  const cases=[
+    ['模式',next=>{next.units[0].mode='scene';}],
+    ['成员',next=>{next.memberIds=['one','two'];next.units[0].members=['one','two'];}],
+    ['参考',next=>{next.units[0].referenceVoices[0].voiceId='different-voice';}],
+    ['录音版本',next=>{next.units[0].referenceVoices[0].fileVersion='reference-v2';}],
+    ['模型',next=>{next.model='another-model';next.units[0].model='another-model';}],
+    ['请求数量',next=>{next.audioRequests=2;}],
+    ['未确认请求',next=>{next.outstandingAttemptIds=['new-unknown-attempt'];}],
+  ];
+  for(const [label,change] of cases){
+    const f=fixture();f.env.state.settings.routeBlocked=false;
+    f.env.api=async(path,payload)=>{f.calls.api.push({path,payload});if(path.startsWith('/chapters/'))return chapter(7);const next=plan(payload.revision,payload.ids);change(next);return next;};
+    await f.render().recheck();assert.equal(f.calls.paid.length,0,label);assert.ok(f.env.generationPlan.changes.length,label);assert.equal(f.env.generationPlan.invalidated,false,label);assert.equal(f.env.generationPlan.retryUnknown,false,label);assert.equal(f.env.generationPlan.resumeRoute,false,label);
+    assert.ok(f.env.generationPlan.changes.some(detail=>detail.includes(label==='录音版本'?'参考':label)),label);
+  }
+});
+
+test('已明确决定的同一unknown可继续；未决定的unknown只展示原请求ID不自动发送',async()=>{
+  for(const approved of [true,false]){
+    const f=fixture();f.env.state.settings.routeBlocked=false;f.env.generationPlan.plan.outstandingAttemptIds=['original-unknown'];f.env.generationPlan.retryUnknown=approved;
+    const request=f.env.api;f.env.api=async(path,payload)=>path==='/operations/plan'?{...plan(payload.revision,payload.ids),outstandingAttemptIds:['original-unknown']}:request(path,payload);
+    await f.render().recheck();assert.equal(f.calls.paid.length,approved?1:0);
+    if(approved)assert.deepEqual(f.calls.paid[0][1].acknowledgedAttemptIds,['original-unknown']);
+    else{assert.deepEqual(f.env.generationPlan.plan.outstandingAttemptIds,['original-unknown']);assert.equal(f.env.generationPlan.retryUnknown,false);}
+  }
+});
+
+test('有已建任务、部分效果或unknown回执的409不自动改ID重新发送',async()=>{
+  for(const receipt of [{outcome:'processing',jobIds:['already-enqueued']},{outcome:'prepared',createdObjectIds:['created-effect']},{outcome:'unknown',jobIds:[]}]){
+    const f=fixture();f.env.state.settings.routeBlocked=false;f.env.submitOperation=async(...args)=>{f.calls.paid.push(args);return{...receipt,error:'请核对原操作',errorStatus:409};};
+    await assert.rejects(f.render().generate(['one']),error=>error.retryClass==='check-existing-operation');assert.equal(f.calls.paid.length,1);assert.equal(f.calls.api.filter(call=>call.path==='/operations/plan').length,1);assert.equal(f.env.generationPlan,null);
+  }
 });

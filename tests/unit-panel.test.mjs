@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 
 const source=readFileSync(new URL('../src/UnitPanel.tsx',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
-const compiled=ts.transpileModule(source+'\nexport {UnitDetails};',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.React}}).outputText;
+const compiled=ts.transpileModule(source+'\nexport {UnitDetails,EventEditor};',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.React}}).outputText;
 const nodes=node=>!node||typeof node!=='object'?[]:[node,...(node.props?.children||[]).flat(Infinity).flatMap(nodes)];
 const text=node=>node==null||typeof node==='boolean'?'':typeof node!=='object'?String(node):[...(node.props?.children||[]),node.props?.footer].flat(Infinity).map(text).join('');
 const button=(tree,label)=>nodes(tree).find(node=>node.type==='button'&&text(node)===label);
@@ -23,13 +23,13 @@ async function setup(api=async()=>[],operation=async()=>({outcome:'processing'})
     ChevronRight:'ChevronRight',CircleHelp:'CircleHelp',Dialog:'Dialog',Field:'Field',Select:'Select',Status:'Status',ObjectDraftTools:'ObjectDraftTools',SceneSuggestions:'SceneSuggestions',AudioProvenance:'AudioProvenance'};
   globalThis.unitPanelTest=runtime;
   const header='const {React,useEffect,useRef,useState,api,action,hasDraft,objectDraftId,useObjectDraft,saveAction,withSavedDrafts,draftScopeRevision,submitOperation,ChevronRight,CircleHelp,Dialog,Field,Select,Status,ObjectDraftTools,SceneSuggestions,AudioProvenance}=globalThis.unitPanelTest;\n';
-  const {UnitDetails,CreateGroup}=await import('data:text/javascript;base64,'+Buffer.from(header+compiled+'\n// test '+sequence++).toString('base64'));
+  const {UnitDetails,CreateGroup,EventEditor}=await import('data:text/javascript;base64,'+Buffer.from(header+compiled+'\n// test '+sequence++).toString('base64'));
   const status=()=>({validity:'matched',review:'passed',prompt:'',promptIssues:[],basis:{}});
   const variant=(current,latest)=>({current,previous:'previous',approved:null,latest,revision:1,guidance:'保留要求',backgroundPresence:'unspecified',status:status(),history:[]});
   const unit={id:'group',chapterId:'chapter',kind:'group',state:'active',members:['one','two'],mode:'dry',revision:1,variants:{dry:variant('old-dry','success'),scene:variant(null,'unknown')}};
   const props={unit,chapter:{id:'chapter',projectId:'project',revision:1,segments:[{id:'one',order:0,text:'第一句',roleId:'role',voiceId:'voice'},{id:'two',order:1,text:'第二句',roleId:'role',voiceId:'voice'}],events:[],playbackItems:[]},roles:[{id:'role',name:'角色'}],state:{jobs:[],voices:[],projects:[],settings:{configured:true,audioTools:true,features:{},model:'audio',routeBlocked:false}},locked:false,connected:true,mode:'scene',setMode(){},refresh:async()=>{},close(){},open(){},play:(...args)=>played.push(args),onTask:(...args)=>tasks.push(args)};
   const groups=[];const groupProps={chapter:props.chapter,ids:['one','two'],roles:props.roles,enabled:true,state:props.state,refresh:props.refresh,close:props.close,open:props.open,created:(...args)=>groups.push(args)};
-  return {props,groupProps,groups,sent,played,tasks,actions,reads,runtime,render:()=>{index=0;return UnitDetails(props);},renderGroup:()=>{index=0;return CreateGroup(groupProps);}};
+  return {props,groupProps,groups,sent,played,tasks,actions,reads,runtime,render:()=>{index=0;return UnitDetails(props);},renderGroup:()=>{index=0;return CreateGroup(groupProps);},renderEvent:(overrides={})=>{index=0;return EventEditor({unit:props.unit,chapter:props.chapter,locked:false,refresh:props.refresh,close:props.close,created(){},onSaved(){},...overrides});}};
 }
 
 test('SVG说明只开关嵌套弹窗；原面板、编辑与生成范围保留，零读取、变更或生成',async()=>{
@@ -449,4 +449,30 @@ test('新建对戏点击一次直接创建并生成所选成员，保留保存�
   const f=await setup(undefined,async()=>({outcome:'processing',result:{unit:{id:'created-group',members:['one','two'],revision:1,chapterRevision:2,variants:{dry:{guidance:''}}}}}));
   const tree=f.renderGroup(),submit=button(tree.props.footer,'生成这段对话');assert.equal(submit.props.disabled,false);assert.ok(!nodes(tree).some(node=>node.type==='TaskAuthorization'));
   submit.props.onClick();await tick();assert.equal(f.sent.length,1);assert.deepEqual(f.sent[0][1].ids,['one','two']);assert.equal(f.sent[0][1].kind,'groupAndGenerate');assert.ok(!Object.hasOwn(f.sent[0][1],'grantId'));assert.equal(f.groups.length,1);assert.equal(button(f.renderGroup().props.footer,'生成这段对话').props.disabled,true);
+});
+
+test('默认恢复v4且历史v5仍支持存在感、试听和手动选择，不自动迁移或推广v5',async()=>{
+  for(const template of ['scene-v4-presence-1','scene-v5-relations-1']){
+    const f=await setup();f.props.state.sceneContract={defaultTemplate:'scene-v4-presence-1'};
+    f.props.state.enhancementTemplates=[{id:'scene-v4-presence-1',name:'场景 v4',mode:'scene',scope:'unit'},{id:'scene-v5-relations-1',name:'场景 v5 · 试验',mode:'scene',scope:'unit'}];
+    Object.assign(f.props.unit.variants.scene,{template,backgroundPresence:'clear',latest:'success',current:'retained-audio'});
+    const before=JSON.stringify(f.props.unit),tree=f.render(),select=nodes(tree).find(node=>node.type==='Select'&&node.props.label==='提示模板');assert.equal(select.props.value,template);assert.match(select.props.options.find(option=>option.value==='scene-v4-presence-1').label,/默认/);assert.doesNotMatch(select.props.options.find(option=>option.value==='scene-v5-relations-1').label,/默认/);
+    assert.equal(button(tree.props.footer,'再做一版').props.disabled,false);assert.equal(button(tree.props.footer,'查看并切换到 v4'),undefined,'历史v5无需先换模板才能生成');assert.doesNotMatch(text(tree),/新声景模板/);
+    button(tree,'试听这份声音').props.onClick();assert.equal(f.played.at(-1)[0],'retained-audio');assert.equal(f.sent.length,0);assert.equal(f.actions.length,0);assert.equal(JSON.stringify(f.props.unit),before);
+    if(template==='scene-v5-relations-1'){button(tree,'查看并切换到 v4').props.onClick();await tick();assert.equal(f.reads.at(-1)[1].template,'scene-v4-presence-1');assert.equal(f.sent.length,0);assert.equal(f.actions.length,0);assert.equal(f.props.unit.variants.scene.template,template);}
+    else{select.props.onChange('scene-v5-relations-1');assert.equal(f.sent.length,0);assert.equal(f.actions.length,0);assert.equal(f.props.unit.variants.scene.template,template);}
+  }
+});
+
+test('默认为v4时历史v5环境与音效仍按真实引文保存，v4仍拒绝非音乐转折',async()=>{
+  for(const kind of ['environment','effect']){
+    const f=await setup();f.props.state.sceneContract={defaultTemplate:'scene-v4-presence-1'};f.props.unit.variants.scene.template='scene-v5-relations-1';
+    const tree=f.renderEvent(),controller=nodes(tree).find(node=>node.type==='ObjectDraftTools').props.controller;
+    const transition={memberId:'one',quote:'第一句',occurrence:1,development:'在这个动作触发，随后余响消散。',volumeChange:''};
+    const data={...controller.draft,kind,description:'已采用声音',transitionEnabled:true,transition};assert.equal(controller.options.validate(data),null);assert.match(text(tree),/声音发展与触发/);
+    let request;f.runtime.persistSave=async(name,payload)=>{request={name,payload};return{...payload,id:'event',revision:1,chapterRevision:2,unitRevision:2};};
+    await controller.options.persist(data,0,{chapterRevision:1,operationId:'save-event'});assert.deepEqual(request.payload.transition,transition);assert.equal(request.payload.kind,kind);assert.equal(request.name,'event.create');assert.equal(f.sent.length,0);
+    const old=await setup();old.props.state.sceneContract={defaultTemplate:'scene-v4-presence-1'};old.props.unit.variants.scene.template='scene-v4-presence-1';const previous=nodes(old.renderEvent()).find(node=>node.type==='ObjectDraftTools').props.controller;
+    assert.match(previous.options.validate({...previous.draft,...data}),/真实短引文/);assert.doesNotMatch(text(old.renderEvent()),/声音发展与触发/);assert.equal(old.sent.length,0);
+  }
 });

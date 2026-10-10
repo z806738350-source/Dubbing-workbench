@@ -17,14 +17,16 @@ import {
   checkEntityRevision,
 } from "./domain.mjs";
 import { buildMaster, exportMaster, inspect, validateStoredAudio } from "./audio.mjs";
-import { savedAudioRange, renderIdentity } from './audio-range.mjs';
+import { savedAudioRange, renderIdentity, renderProfileOf } from './audio-range.mjs';
 import { sealAudioDelivery, prepareAudioDelivery, hasAudioDelivery, saveAudioAttempt } from './audio-delivery.mjs';
 import { fail, same, uid } from "./store.mjs";
+import { reserveDiskSpace, assertDiskSpace, PAID_AUDIO_DISK_BYTES } from './disk-space.mjs';
 import { templateCatalog, templateOf } from "./templates.mjs";
 import { configurationDecided, attemptScope, relatedTarget, outstandingAttempts, reserveGrant, settleGrant } from './experience.mjs';
 
 export function createWorker(store, domain, config) {
   if (config.callLimit !== undefined && (!Number.isSafeInteger(config.callLimit) || config.callLimit < 1)) fail("本地调用额度应为正整数");
+  const activeJobs = () => store.db.prepare("SELECT data FROM jobs WHERE json_extract(data, '$.status') IN ('queued','running') ORDER BY rowid").all().map(row => JSON.parse(row.data));
   const quotaScope = config.usageScope || "audio-calls-v1";
   if (typeof quotaScope !== "string" || !quotaScope || quotaScope.length > 100) fail("调用额度范围无效");
   for (const [name, max] of [['audioConcurrency',8],['routeConcurrencyCap',8],['localAudioConcurrency',2]])
@@ -38,7 +40,7 @@ export function createWorker(store, domain, config) {
   const audioKinds = new Set(['generate','voice-test','voice-create','unit-generate']);
   const responseLimit = 100 * 1024 * 1024, pendingLimit = config.maxPendingAudio || 8, pendingBytesLimit = config.maxPendingAudioBytes || 800 * 1024 * 1024;
   if (!Number.isSafeInteger(pendingLimit) || pendingLimit < 1 || !Number.isSafeInteger(pendingBytesLimit) || pendingBytesLimit < responseLimit) fail('音频积压上限无效');
-  let closing = false, localRecovery = false, admissionStopped = false, storageBlocked = false, schedulingError = "", pumping = false, nextSendAt = 0, timer;
+  let closing = false, localRecovery = false, admissionStopped = false, storageBlocked = false, storagePressure = false, schedulingError = "", pumping = false, nextSendAt = 0, timer;
   const desiredConcurrency = () => store.maybe('settings','scheduler')?.desiredAudioConcurrency ?? config.audioConcurrency ?? 1;
   const concurrency = () => Math.min(Number.isSafeInteger(desiredConcurrency()) ? Math.max(1, Math.min(8, desiredConcurrency())) : 1, config.routeConcurrencyCap || 1, pendingLimit, Math.floor(pendingBytesLimit / responseLimit));
   const networkActive = () => [...executing.values()].filter(item => item.network).length;
@@ -48,7 +50,8 @@ export function createWorker(store, domain, config) {
   const requestOf = p => JSON.parse(JSON.stringify({ ...p, kind: p.kind || "generate" }));
   const existingCommand = p => {
     if (typeof p?.commandId !== "string" || !p.commandId || p.commandId.length > 100) fail("生成命令标识缺失");
-    const existing = store.all("jobs").find(j => j.commandId === p.commandId);
+    const row=store.db.prepare("SELECT data FROM jobs WHERE json_extract(data, '$.commandId')=? ORDER BY rowid LIMIT 1").get(p.commandId);
+    const existing = row ? JSON.parse(row.data) : undefined;
     if (existing?.request && !same(existing.request, requestOf(p))) fail("相同命令标识的请求内容不同，请核对后使用新命令", 409);
     if (existing && !existing.request) {
       const kind = p.kind || "generate", attempt = store.all("attempts", existing.id)[0];
@@ -160,7 +163,7 @@ export function createWorker(store, domain, config) {
   function renderChapter(p) {
     const c=store.get('chapters',p.chapterId);
     if(p.revision!==c.revision)fail('本章已在其他页面更新，请按当前版本准备',409);
-    if(store.all('jobs',c.id).some(j=>active(j)&&j.kind!=='master'))fail('本章正在处理任务，请等待完成后准备成品',409);
+    if(activeJobs().some(j=>j.chapterId===c.id&&j.kind!=='master'))fail('本章正在处理任务，请等待完成后准备成品',409);
     return c;
   }
   function enqueue(p, checked) {
@@ -173,7 +176,7 @@ export function createWorker(store, domain, config) {
         if (routeBlocked() && !p.resumeRoute) fail("接口已暂停，请核对配置后重新启用");
         const prepared = prepareEnhancement(p);
         if (checked && !same(prepared, checked)) fail("生成范围、声音版本或设置在预检期间已变化，本批尚未入队", 409);
-        const job = { ...prepared.job, id: uid(), commandId: p.commandId, request: requestOf(p), kind: p.kind, chapterId: prepared.job.chapterId || "", status: "queued", done: 0, total: prepared.attempts.length, stop: false, createdAt: new Date().toISOString() };
+        const job = { ...prepared.job, ...(prepared.job.chapterId?{sourceVersion:store.get('chapters',prepared.job.chapterId).sourceVersion || 1}:{}), id: uid(), commandId: p.commandId, request: requestOf(p), kind: p.kind, chapterId: prepared.job.chapterId || "", status: "queued", done: 0, total: prepared.attempts.length, stop: false, createdAt: new Date().toISOString() };
         const attempts = prepared.attempts.map(a => ({ ...a, id: uid(), jobId: job.id, status: "queued", prompt: compile(a.input), model: a.input.model }));
         for (const a of attempts) {
           a.path = projectFile(store, job.chapterId, 'audio', `${a.id}.wav`);
@@ -203,7 +206,7 @@ export function createWorker(store, domain, config) {
           Array.from(p.text).length > 300
         )
           fail("试音正文应为 1～300 字符");
-        if (store.all("jobs").some((j) => j.voiceId === v.id && active(j)))
+        if (activeJobs().some((j) => j.voiceId === v.id))
           fail("该音色已有试音任务");
         setRouteBlocked(false);
         const input = {
@@ -319,6 +322,7 @@ export function createWorker(store, domain, config) {
         kind,
         status: "queued",
         revision: c.revision,
+        sourceVersion: c.sourceVersion || 1,
         arrangement: c.arrangement,
         ids: selected.map((s) => s.id),
         format: p.format || "wav",
@@ -333,7 +337,7 @@ export function createWorker(store, domain, config) {
         const identity = renderIdentity(store, c.id, rows);
         if (p.renderSignature !== undefined && p.renderSignature !== identity.renderSignature) fail('声音范围已变化，请按当前范围继续', 409);
         Object.assign(job, identity, { renderGap: c.gap, renderRows: rows.map(({s,a}) => ({s,a,range:savedAudioRange(store,s.unitId || s.id,s.mode || 'dry',a.id)})) });
-        for (const queued of store.all('jobs', c.id).filter(j => kind === 'master' && j.kind === 'master' && j.status === 'queued')) {
+        for (const queued of activeJobs().filter(j => j.chapterId === c.id && kind === 'master' && j.kind === 'master' && j.status === 'queued')) {
           if (queued.arrangement === c.arrangement && (queued.renderSignature ?? null) === identity.renderSignature && (queued.renderRevision || 0) === identity.renderRevision) return queued;
           setJob({ ...queued, status:'stopped', stop:true, error:'已合并到更新的试听范围' });
         }
@@ -384,6 +388,9 @@ export function createWorker(store, domain, config) {
         basis: attempt.basis,
         prompt: attempt.prompt,
         model: attempt.model,
+        referenceAssets: attempt.referenceAssets,
+        sourceVersion: j.sourceVersion ?? null,
+        sourceRevision: j.revision ?? null,
         targetKind: attempt.targetKind || (s ? "single" : "voice-test"),
         targetId: attempt.targetId || s?.id || attempt.input.voiceId,
         ...(attempt.input.slots ? { slots: attempt.input.slots, memberIds: attempt.input.members.map(m => m.id), mode: attempt.mode } : {}),
@@ -446,7 +453,7 @@ export function createWorker(store, domain, config) {
       const a = store.get('attempts', id), j = store.get('jobs', a.jobId);
       if (!active(j) || a.status !== 'queued' || a.ownerToken) return null;
       a.ownerToken = uid(); a.claimedAt = new Date().toISOString(); a.phase = 'preparing';
-      saveAudioAttempt(store, a, j.id); j.status = 'running'; setJob(j); return a;
+      saveAudioAttempt(store, a, j.id); j.status = 'running'; delete j.error; setJob(j); return a;
     });
   }
   function updateCounts(job, attempts) {
@@ -535,7 +542,10 @@ export function createWorker(store, domain, config) {
             const voice = store.get('voices', asset.voiceId);
             if (voice.path !== asset.path || referenceVersion(statSync(join(store.directory, voice.path))) !== asset.fileVersion)
               fail('参考素材在发送前已变化，本条未发送', 409);
+            const expected=latest.request?.expectedReferenceVoices?.find(v=>v.voiceId===asset.voiceId);
+            if(latest.request?.expectedReferenceVoices && (!expected || expected.fileVersion!==asset.fileVersion || expected.revision!==(voice.revision ?? 1)))fail('参考素材与本次发起时不同，本条未发送',409);
           }
+          if(latest.request?.expectedModel!==undefined && latest.request.expectedModel!==a.input.model)fail('模型与本次发起时不同，本条未发送',409);
           a.status = "sending";
           a.deliveryVersion = 1;
           a.phase = "sending";
@@ -685,7 +695,7 @@ export function createWorker(store, domain, config) {
     const before=JSON.stringify(job);
     for(const [kind,record]of Object.entries(job.outputRecords || {})) {
       const table=kind==='master'?'masters':kind==='export'?'exports':null;
-      if(!table || record.chapterId!==job.chapterId || record.arrangement!==job.arrangement || (record.renderSignature ?? null)!==(job.renderSignature ?? null) || !record.id || !record.path || !existsSync(join(store.directory,record.path)))continue;
+      if(!table || record.chapterId!==job.chapterId || record.arrangement!==job.arrangement || renderProfileOf(record)!==renderProfileOf(job) || (record.renderSignature ?? null)!==(job.renderSignature ?? null) || !record.id || !record.path || !existsSync(join(store.directory,record.path)))continue;
       if(!store.maybe(table,record.id)) {
         try {const meta=await inspect(join(store.directory,record.path));if(kind==='master'&&Math.abs(meta.duration*48000-record.frames)>1)continue;}
         catch {continue;}
@@ -697,7 +707,7 @@ export function createWorker(store, domain, config) {
     if(!masters.length&&job.kind==='master'&&job.status==='success')masters=store.all('masters',job.chapterId).filter(m=>m.arrangement===job.arrangement&&(m.renderSignature ?? null)===(job.renderSignature ?? null)&&!m.invalid&&!m.superseded&&existsSync(join(store.directory,m.path)));
     const exported=exports.length===1&&exports[0].format===job.format?exports[0]:null;
     const master=exported?store.maybe('masters',exported.masterId):masters.length===1?masters[0]:null;
-    if(!master || master.arrangement!==job.arrangement || (master.renderSignature ?? null)!==(job.renderSignature ?? null) || master.invalid || !existsSync(join(store.directory,master.path)) || job.kind==='export'&&(!exported || (exported.renderSignature ?? null)!==(job.renderSignature ?? null) || !existsSync(join(store.directory,exported.path))))return false;
+    if(!master || renderProfileOf(master)!==renderProfileOf(job) || master.arrangement!==job.arrangement || (master.renderSignature ?? null)!==(job.renderSignature ?? null) || master.invalid || !existsSync(join(store.directory,master.path)) || job.kind==='export'&&(!exported || renderProfileOf(exported)!==renderProfileOf(job) || (exported.renderSignature ?? null)!==(job.renderSignature ?? null) || !existsSync(join(store.directory,exported.path))))return false;
     job.masterId=master.id;if(exported)job.exportId=exported.id;
     job.result={chapterId:job.chapterId,arrangement:job.arrangement,renderRevision:job.renderRevision || 0,renderSignature:job.renderSignature ?? null,masterId:master.id,...(exported?{exportId:exported.id,format:exported.format}:{})};
     if((active(job)||job.localOutputPending)&&!job.stop&&!master.superseded&&!exported?.superseded) {
@@ -722,7 +732,7 @@ export function createWorker(store, domain, config) {
       .find(
         (m) =>
           !m.invalid && !m.superseded &&
-          m.arrangement === job.arrangement && (m.renderSignature ?? null) === (job.renderSignature ?? null) &&
+          m.arrangement === job.arrangement && renderProfileOf(m)===renderProfileOf(job) && (m.renderSignature ?? null) === (job.renderSignature ?? null) &&
           existsSync(join(store.directory, m.path)),
       );
     if (master) {
@@ -740,7 +750,7 @@ export function createWorker(store, domain, config) {
       if (!isCurrent()) fail('构建任务或编排已失效，请按当前版本重新准备');
       const id = job.masterId || uid();
       job.masterId=id;setJob({...store.get('jobs',job.id),masterId:id});
-      const info = await buildMaster(store, rows, job.renderGap ?? c.gap, id);
+      const info = await buildMaster(store, rows, job.renderGap ?? c.gap, id, renderProfileOf(job));
       master = {
         id,
         jobId: job.id,
@@ -749,6 +759,8 @@ export function createWorker(store, domain, config) {
         arrangement: job.arrangement,
         renderRevision: job.renderRevision || 0,
         renderSignature: job.renderSignature ?? null,
+        sourceVersion: job.sourceVersion ?? null,
+        sourceRevision: job.revision ?? null,
         ...info,
         createdAt: new Date().toISOString(),
       };
@@ -762,7 +774,7 @@ export function createWorker(store, domain, config) {
       const id = job.exportId || uid();job.exportId=id;setJob({...store.get('jobs',job.id),exportId:id});
       const path = await exportMaster(store, master, id, job.format);
       const superseded = !isCurrent();
-      const output={id,jobId:job.id,superseded,path,format:job.format,chapterId:c.id,arrangement:job.arrangement,renderRevision:job.renderRevision || 0,renderSignature:job.renderSignature ?? null,masterId:master.id,confirmation:job.confirmation,createdAt:new Date().toISOString()};
+      const output={id,jobId:job.id,superseded,path,format:job.format,chapterId:c.id,arrangement:job.arrangement,renderRevision:job.renderRevision || 0,renderSignature:job.renderSignature ?? null,renderProfile:renderProfileOf(master),boundaryPolicy:master.boundaryPolicy || 'unit-gap-v1',channels:master.channels,masterId:master.id,confirmation:job.confirmation,createdAt:new Date().toISOString()};
       rememberOutput(job,'export',output);
       store.put(
         "exports",
@@ -792,14 +804,23 @@ export function createWorker(store, domain, config) {
     if (!busy()) for (const wake of idleWaiters.splice(0)) wake();
   }
   function launch(job, queued) {
-    const a = claimAttempt(queued.id);
-    if (!a) return false;
+    let diskLease;
+    try { diskLease = reserveDiskSpace(store.directory, PAID_AUDIO_DISK_BYTES, '音频请求'); }
+    catch (error) {
+      if (!error.diskSpace) throw error;
+      storagePressure = true;
+      schedulingError = error.status === 507 ? '保存位置空间不足，尚未发送的请求仍在队列；整理或迁移后自动继续' : error.message;
+      return false;
+    }
+    let a;
+    try { a = claimAttempt(queued.id); } catch (error) { diskLease.release(); throw error; }
+    if (!a) { diskLease.release(); return false; }
     const latest = store.get('jobs', job.id);
     const item = { jobId: job.id, network: true, bytes: responseLimit }; executing.set(a.id, item);
     item.promise = executeAttempt(latest, a, bytes => { item.network = false; item.bytes = bytes; pump(); })
       .catch(() => { storageBlocked = true; schedulingError = '本地任务登记未完成，请核对存储后恢复'; })
       .finally(() => {
-        executing.delete(a.id);
+        executing.delete(a.id); diskLease.release();
         try { summarize(job.id, pendingJob(job.id)); }
         catch { storageBlocked = true; schedulingError = '本地任务汇总未完成，请核对存储后恢复'; }
         pump(); wakeIdle();
@@ -810,16 +831,19 @@ export function createWorker(store, domain, config) {
     if (pumping || localRecovery) return;
     pumping = true;
     try {
-      let jobs = store.all('jobs').filter(active);
+      if (storagePressure) {
+        try { assertDiskSpace(store.directory, PAID_AUDIO_DISK_BYTES, '音频请求'); storagePressure = false; if (!storageBlocked) schedulingError = ''; } catch {}
+      }
+      let jobs = activeJobs();
       if (closing || admissionStopped) for (const job of jobs.filter(j => j.status === 'queued' && !audioKinds.has(j.kind))) {
         job.status = 'stopped'; job.finishedAt = new Date().toISOString(); setJob(job);
       }
       for (const job of jobs.filter(j => audioKinds.has(j.kind)))
         if (job.stop || routeBlocked() || closing || admissionStopped || storageBlocked) stopQueued(job);
-      if (!closing && !admissionStopped && !storageBlocked && !routeBlocked()) {
+      if (!closing && !admissionStopped && !storageBlocked && !storagePressure && !routeBlocked()) {
         while (networkActive() < concurrency() && executing.size < pendingLimit &&
           [...executing.values()].reduce((sum, item) => sum + item.bytes, 0) + responseLimit <= pendingBytesLimit) {
-          jobs = store.all('jobs').filter(j => active(j) && !j.stop && audioKinds.has(j.kind)).map(j => ({ ...j,
+          jobs = activeJobs().filter(j => !j.stop && audioKinds.has(j.kind)).map(j => ({ ...j,
             inFlight: pendingJob(j.id), next: store.all('attempts', j.id).find(a => a.status === 'queued' && !a.ownerToken) })).filter(j => j.next);
           const job = picker(jobs); if (!job) break;
           const wait = nextSendAt - performance.now();
@@ -828,8 +852,11 @@ export function createWorker(store, domain, config) {
           nextSendAt = performance.now() + (config.audioStartIntervalMs ?? 100);
         }
       }
+      if (storagePressure) for (const job of activeJobs().filter(j => audioKinds.has(j.kind) && !j.stop && !pendingJob(j.id))) {
+        if (job.status === 'running' || job.error !== schedulingError) { job.status = 'queued'; job.error = schedulingError; setJob(job); }
+      }
       if (!closing && !admissionStopped) {
-        const job = store.all('jobs').find(j => j.status === 'queued' && !audioKinds.has(j.kind) && !renders.has(j.id));
+        const job = activeJobs().find(j => j.status === 'queued' && !audioKinds.has(j.kind) && !renders.has(j.id));
         if (job && !renders.size) {
           job.status = 'running'; setJob(job);
           const promise = local.run(async () => {
@@ -942,16 +969,20 @@ export function createWorker(store, domain, config) {
     tick,
     recover,
     getActivity() {
-      return { active: busy(), storageBlocked, schedulingError, routeBlocked: routeBlocked(), accepting: !closing && !admissionStopped && !storageBlocked && !routeBlocked(), desiredAudioConcurrency: desiredConcurrency(),
+      const queuedAttempts=store.db.prepare("SELECT COUNT(*) AS count FROM attempts a JOIN jobs j ON j.id=json_extract(a.data,'$.jobId') WHERE json_extract(a.data,'$.status')='queued' AND json_extract(a.data,'$.phase') IS NOT 'preparing' AND json_extract(j.data,'$.status') IN ('queued','running')").get().count;
+      const phases=executing.size?store.db.prepare("SELECT data -> '$.phase' AS phase FROM attempts WHERE id IN (SELECT value FROM json_each(?)) ORDER BY rowid").all(JSON.stringify([...executing.keys()])):[];
+      const phaseCounts=phases.reduce((counts,row)=>{const phase=row.phase===null?undefined:JSON.parse(row.phase);return {...counts,[phase]:(counts[phase]||0)+1};},{});
+      return { active: busy(), storageBlocked, storagePressure, schedulingError, routeBlocked: routeBlocked(), accepting: !closing && !admissionStopped && !storageBlocked && !storagePressure && !routeBlocked(), desiredAudioConcurrency: desiredConcurrency(),
         effectiveAudioConcurrency: concurrency(), routeConcurrencyCap: config.routeConcurrencyCap || 1,
-        queuedAttempts: store.all('attempts').filter(a => a.status === 'queued' && a.phase !== 'preparing' && active(store.maybe('jobs', a.jobId) || {})).length,
+        queuedAttempts,
         networkActive: networkActive(), attemptsActive: executing.size, localActive: local.active, localQueued: local.queued, localPeak: local.peak,
         rendersActive: renders.size, localRecovery, pendingAudioBytes: [...executing.values()].reduce((sum,item) => sum + item.bytes,0),
         referenceCacheBytes: referenceCache.bytes, referenceCachePeakBytes: referenceCache.peak,
-        phaseCounts: store.all('attempts').filter(a => executing.has(a.id)).reduce((counts,a) => ({...counts,[a.phase]:(counts[a.phase] || 0)+1}),{}) };
+        phaseCounts };
     },
     stopAdmission() { admissionStopped = true; if (timer) { clearTimeout(timer); timer = undefined; } pump(); wakeIdle(); },
     drain,
+    get storagePressure() { return storagePressure; },
     get referenceReads() { return referenceCache.reading; },
     async recoverLocal(attemptId) {
       if (busy() || localRecovery || closing) fail('本地工作正在进行，请稍后恢复', 409);
@@ -972,7 +1003,7 @@ export function createWorker(store, domain, config) {
     close() {
       closing = true;
       if (timer) { clearTimeout(timer); timer = undefined; }
-      for (const j of store.all("jobs").filter((j) => j.status === "queued")) {
+      for (const j of activeJobs().filter((j) => j.status === "queued")) {
         for (const a of store.all("attempts", j.id)) {
           a.status = "stopped";
           saveAttempt(a, j.id);

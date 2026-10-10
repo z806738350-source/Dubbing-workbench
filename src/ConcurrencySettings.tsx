@@ -13,6 +13,8 @@ export interface SchedulerStatus {
   attemptsActive: number;
   accepting: boolean;
   storageBlocked?: boolean;
+  storagePressure?: boolean;
+  schedulingError?: string;
   routeBlocked?: boolean;
   queuedAttempts?: number;
   phaseCounts?: Record<string, number>;
@@ -23,7 +25,7 @@ export function ConcurrencyStatus({ status }: { status?: SchedulerStatus }) {
   const phases = status.phaseCounts || {}, preparing = phases.preparing || 0;
   const upstream = (phases.sending || 0) + (phases.receiving || 0), local = (phases.rawSealed || 0) + (phases.processing || 0);
   return <p className="hint concurrency-status" role="status" aria-label="全局制作状态">
-    {status.storageBlocked ? '本地整理需要处理，已停止后续发送' : status.routeBlocked ? '音频接口已暂停，请核对连接或额度' : !status.accepting ? '后续发送已停止，正在收尾' : status.attemptsActive || status.queuedAttempts ? '全局制作中' : '全局制作空闲'}
+    {status.storageBlocked ? '本地整理需要处理，已停止后续发送' : status.storagePressure ? '保存空间不足，未发送请求仍在队列；整理后自动继续' : status.routeBlocked ? '音频接口已暂停，请核对连接或额度' : !status.accepting ? '后续发送已停止，正在收尾' : status.attemptsActive || status.queuedAttempts ? '全局制作中' : '全局制作空闲'}
     {(status.attemptsActive > 0 || !!status.queuedAttempts) && <> · {status.queuedAttempts || 0} 段等待 · {preparing} 段准备 · {upstream} 段生成或接收 · {local} 段整理</>}
   </p>;
 }

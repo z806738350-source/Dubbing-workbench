@@ -10,7 +10,8 @@ import { configurationDecided, decide, humanChanges, assistantActor, assistantCh
 import { shortRanges } from './semantic.mjs';
 import { importProblems } from './import-validation.mjs';
 import { performanceCoverage, eligiblePerformanceSegment, hasReadableText, performanceDependency } from './performance.mjs';
-import { savedAudioRange, presentationReview, savePresentationReview, assertPresentationReview, rangeContentKey, renderIdentity, renderMatches } from './audio-range.mjs';
+import { savedAudioRange, presentationReview, savePresentationReview, assertPresentationReview, rangeContentKey, renderIdentity, renderMatches, renderProfileOf } from './audio-range.mjs';
+import { inspectFidelity } from './fidelity.mjs';
 
 export const defaultConfig = templateOf("dry-v1").defaults;
 export const active = (j) => ["queued", "running"].includes(j.status);
@@ -414,27 +415,25 @@ export function createDomain(store) {
       };
     },
     snapshot() {
-      const usedVoices = new Set(
-        store.all("audios").map((a) => a.input.voiceId),
-      );
-      const jobs = store.all("jobs");
+      const usedVoices = new Set(store.db.prepare("SELECT DISTINCT json_extract(data,'$.input.voiceId') AS voiceId FROM audios").all().map(row=>row.voiceId));
+      // Polling needs progress and identity, not the saved renderer/recovery payloads.
+      const jobs = store.db.prepare("SELECT json_remove(data, '$.renderRows', '$.outputRecords', '$.request', '$.confirmation', '$.items', '$.targetScopes') AS data FROM jobs WHERE rowid IN (SELECT rowid FROM jobs WHERE COALESCE(json_extract(data,'$.status'),'') NOT IN ('queued','running','unknown') ORDER BY rowid DESC LIMIT 100) OR json_extract(data,'$.status') IN ('queued','running','unknown') OR json_extract(data,'$.localOutputPending')=1 OR EXISTS (SELECT 1 FROM attempts a WHERE a.parent=jobs.id AND (json_extract(a.data,'$.status')='unknown' OR json_extract(a.data,'$.phase')='localRecoveryPending')) ORDER BY rowid").all().map(row=>JSON.parse(row.data));
+      const chapterTasks = new Map();
+      for(const task of store.db.prepare("SELECT json_extract(data,'$.chapterId') AS chapterId,json_extract(data,'$.status') AS status FROM jobs WHERE json_extract(data,'$.status') IN ('queued','running') ORDER BY rowid").all())if(!chapterTasks.has(task.chapterId))chapterTasks.set(task.chapterId,task);
+      const chapterSource=store.db.prepare("SELECT json_extract(data,'$.source') AS source FROM chapters WHERE id=?");
       return {
         templates: listTemplates(),
         projects: store.all("projects"),
-        chapters: store.all("chapters").map(c => {
+        chapters: store.db.prepare("SELECT json_remove(data,'$.source','$.importedSource') AS data FROM chapters ORDER BY rowid").all().map(row => {
+          const metadata=JSON.parse(row.data),c={...metadata,...chapterSource.get(metadata.id)};
           const rows = list(c.id), included = rows.filter(s => !s.excluded);
-          const task = jobs.find(j => j.chapterId === c.id && active(j));
-          const statuses = included.map(s => segmentStatus(store, s));
+          const task = chapterTasks.get(c.id);
           const productionStatus = task ? (task.status === "queued" ? "排队中" : "制作中")
             : !rows.length ? "待整理" : !included.length ? "全已排除"
             : !coverage(c, rows).valid ? "待校对"
             : included.some(s => !configurationDecided(s) || !s.voiceId) ? "待确认"
-            : included.some(s => s.latest === "unknown") ? "结果待核对"
-            : statuses.some(s => s.validity === "missing") ? "待生成"
-            : statuses.some(s => s.validity !== "matched") ? "待更新"
-            : statuses.some(s => s.review === "rework") ? "需返工"
-            : statuses.every(s => s.review === "passed") ? "已检查" : "待检查";
-          return { ...c, productionStatus };
+            : "待检查"; // The unit wrapper supplies the selected audio/review status.
+          return { ...metadata, productionStatus };
         }),
         roles: store.all("roles").map(r => ({...r, aliasValidity:Object.fromEntries((r.aliasSources || []).map(a => [a.name, validAliasSource(store, a, r.projectId)]))})),
         voices: store
@@ -442,7 +441,7 @@ export function createDomain(store) {
           .map((v) => ({ ...v, tested: usedVoices.has(v.id), inspectionCurrent: !!v.inspection?.checked &&
             (v.inspection.target === "reference" ? !!v.path && existsSync(join(store.directory,v.path)) :
               v.inspection.audioId === v.sampleAudioId && !!store.maybe("audios",v.sampleAudioId) && !storedAudioUnavailable(store,store.get("audios",v.sampleAudioId))) })),
-        jobs: jobs.slice(-100).reverse().map(j => {
+        jobs: jobs.reverse().map(j => {
           const attempts = store.all("attempts", j.id);
           const sample = j.kind === "voice-test" ? attempts.find(a => a.status === "success" && store.maybe("audios", a.id)) : null;
           return { ...j, ...(sample ? { resultAudioId: sample.id, resultNotSelected: sample.selectedAsSample === false } : {}), ...(attempts.length ? {
@@ -463,7 +462,8 @@ export function createDomain(store) {
     },
     chapter(id) {
       const c = store.get("chapters", id);
-      const segments = list(id);
+      const allSegments=store.all('segments',id),segments=allSegments.filter(s=>!s.retired).sort((a,b)=>a.order-b.order);
+      const {items,total,nextCursor,...fidelity}=inspectFidelity(store,c,allSegments,coverage);
       const included = segments.filter(s => !s.excluded);
       const reviewItems = included.map(s => ({id:s.id, audioId:s.current, basis:basisOf(s)}));
       const exportReady = included.length > 0 && coverage(c, segments).valid && included.every(s => {
@@ -472,6 +472,7 @@ export function createDomain(store) {
       });
       return {
         ...c,
+        fidelity,
         outputDirectory: join(store.directory, projectFile(store, id, 'output', '')),
         segments: segments.map((s) => ({ ...s, ...segmentStatus(store, s) })),
         playbackItems: segments.filter(s => !s.excluded).map(s => ({id:s.id, audioId:s.current, basis:basisOf(s), validity:segmentStatus(store,s).validity})),
@@ -904,6 +905,25 @@ export function createDomain(store) {
           touch(c, true, false);
           return c;
         }
+        if (action === 'segment.voice') {
+          if (!Array.isArray(p.ids) || !p.ids.length || p.ids.some(id => typeof id !== 'string' || !id) || new Set(p.ids).size !== p.ids.length)
+            fail('请选择有效的台词');
+          const rows = p.ids.map(id => store.get('segments', id));
+          if (rows.some(s => s.chapterId !== c.id || s.retired || s.deletion || s.excluded || !s.text.trim()))
+            fail('所选台词已改变、删除或不参与朗读，请刷新后核对', 409);
+          const voice = store.get('voices', text(p.voiceId, '声音标识', 100));
+          if (voice.state !== 'active' || voice.deletePending || !voice.path || !existsSync(join(store.directory, voice.path)))
+            fail('请选择当前可用的声音');
+          for (const s of rows) {
+            s.voiceId = voice.id;
+            s.voiceSource = 'override';
+            s.identityConfirmed = true;
+            validate(s, c);
+          }
+          for (const s of rows) store.put('segments', s, c.id);
+          touch(c, true, false);
+          return {chapterId:c.id,chapterRevision:c.revision,ids:p.ids};
+        }
         if (action === "segment.confirm") {
           if (
             !Array.isArray(p.ids) ||
@@ -1290,7 +1310,7 @@ export function createDomain(store) {
     enhancement.syncLegacy();
     const result = originalSnapshot();
     return { ...result, ...enhancement.snapshot(), enhancementTemplates:listUnitTemplates(), jobs: result.jobs.map(j => { if (!['voice-create','unit-generate'].includes(j.kind)) return j; const a=store.all('attempts',j.id).find(a=>a.status==='success' && store.maybe('audios',a.id)); return {...j,...(a?{resultAudioId:a.id,resultNotSelected:a.adopted===false}:{})}; }), chapters: result.chapters.map(c => {
-      const task = result.jobs.find(j => j.chapterId === c.id && active(j));
+      const task = ['排队中','制作中'].includes(c.productionStatus);
       const { rows, issues: arrangementIssues } = enhancement.inspectArrangement(c.id);
       const base = ['待整理','全已排除','待校对','待确认'].includes(c.productionStatus);
       const unknown = rows.some(r => enhancement.getUnit(r.s.id).variants[r.s.mode].latest === 'unknown');
@@ -1298,7 +1318,7 @@ export function createDomain(store) {
     }) };
   };
   api.chapter = id => {
-    enhancement.syncLegacy();
+    enhancement.syncLegacy(id);
     const result = originalChapter(id), { rows, issues: arrangementIssues } = enhancement.inspectArrangement(id,result), identity=renderIdentity(store,id,rows), reviewItems = rows.map(r => {const rangeKey=rangeContentKey(savedAudioRange(store,r.s.id,r.s.mode,r.a?.id));return {id:r.s.id,audioId:r.a?.id || null,basis:r.basis,...(rangeKey?{rangeContentKey:rangeKey}:{})};});
     const exportReady = !arrangementIssues.length && rows.length > 0 && result.coverage.valid && result.segments.filter(s => !s.excluded).every(configurationDecided) && rows.every(r => r.validity === 'matched' && r.review === 'passed');
     const history=store.all('attempts');
@@ -1308,7 +1328,12 @@ export function createDomain(store) {
     });
     const playbackItems=rows.map(r=>{const u=units.find(u=>u.id===r.s.id),range=savedAudioRange(store,r.s.id,r.s.mode,r.a?.id);return {id:r.s.id,unitId:r.s.id,members:r.s.members,mode:r.s.mode,audioId:r.a?.id || null,basis:r.basis,validity:r.validity,review:r.review,latest:u?.outstandingAttemptIds.length?'unknown':u?.variants[r.s.mode].latest,outstandingAttemptIds:u?.outstandingAttemptIds || [],readiness:u?.readiness,...(range?{sourceHash:range.sourceHash,decodeProfile:range.decodeProfile,sourceFrames:range.sourceFrames,clipStartFrame:range.startFrame,clipEndFrame:range.endFrame,rangeRevision:range.revision,edgePolicy:range.edgePolicy,rangeContentKey:rangeContentKey(range)}:{rangeRevision:0})};});
     const segments=result.segments.map(s => { const group = units.find(u => u.kind === 'group' && u.state === 'active' && u.members.includes(s.id)); return { ...s, configurationDecided:configurationDecided(s), ...(group ? {groupId:group.id} : {}) }; });
-    return { ...result,renderRevision:identity.renderRevision,renderSignature:identity.renderSignature,renderContentKey:identity.renderContentKey, performanceCoverage:performanceCoverage(store,id), arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems, segments:segments.filter(s=>!s.deletion), deletedSegments:segments.filter(s=>s.deletion), masters:result.masters.map(m=>({...m,current:!m.superseded&&m.arrangement===result.arrangement&&renderMatches(m,identity)})),exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && renderMatches(e,identity) && same(e.confirmation?.reviewItems, reviewItems) })) };
+    return { ...result,...identity, performanceCoverage:performanceCoverage(store,id), arrangementIssues, units, events: units.flatMap(u => u.events), reviewItems, playbackItems, segments:segments.filter(s=>!s.deletion), deletedSegments:segments.filter(s=>s.deletion), masters:result.masters.map(m=>({...m,current:!m.superseded&&m.arrangement===result.arrangement&&renderMatches(m,identity)})),exports: result.exports.map(e => ({ ...e, current: e.fileExists && !e.superseded && exportReady && e.arrangement === result.arrangement && renderMatches(e,identity) && same(e.confirmation?.reviewItems, reviewItems) })) };
+  };
+  api.fidelity = p => {
+    const chapter=store.get('chapters',p.chapterId);
+    if(p.projectId && p.projectId!==chapter.projectId)fail('保真记录不属于当前项目',403);
+    return inspectFidelity(store,chapter,store.all('segments',chapter.id),coverage,p);
   };
   api.outputs = (p) => {
     const chapter=api.chapter(p.chapterId);
@@ -1323,8 +1348,10 @@ export function createDomain(store) {
       const job=selected.find(j=>j.id===row.jobId || j.masterId===row.id || j.exportId===row.id || j.result?.masterId===row.id || j.result?.exportId===row.id);
       let available=false;try {available=!!row.path&&!row.invalid&&statSync(deletionPath(store,row.path)).isFile();}catch{}
       const kind=table==='masters'?'master':'export',format=kind==='master'?'wav':row.format;
-      const current=available&&!row.superseded&&row.arrangement===chapter.arrangement&&renderMatches(row,chapter)&&(kind==='master'?chapter.playbackItems.length>0&&chapter.playbackItems.every(item=>item.validity==='matched'):chapter.exports.find(e=>e.id===row.id)?.current===true);
-      return {id:row.id,kind,...(kind==='master'?{masterId:row.id}:{exportId:row.id,masterId:row.masterId}),projectId:chapter.projectId,chapterId:chapter.id,jobId:job?.id || row.jobId,operationId:job?.commandId || null,format,arrangement:row.arrangement,renderRevision:row.renderRevision || 0,renderSignature:row.renderSignature || null,current,available,filename:basename(row.path || ''),createdAt:row.createdAt,...((p.jobId||p.operationId)&&!job?{outsideQuery:true}:{})};
+      const cached=available,locallyRecoverable=kind==='master'&&!row.invalid&&!!row.fileReclaimedAt;
+      available ||= locallyRecoverable;
+      const current=cached&&!row.superseded&&row.arrangement===chapter.arrangement&&renderMatches(row,chapter)&&(kind==='master'?chapter.playbackItems.length>0&&chapter.playbackItems.every(item=>item.validity==='matched'):chapter.exports.find(e=>e.id===row.id)?.current===true);
+      return {id:row.id,kind,...(kind==='master'?{masterId:row.id}:{exportId:row.id,masterId:row.masterId}),projectId:chapter.projectId,chapterId:chapter.id,jobId:job?.id || row.jobId,operationId:job?.commandId || null,format,arrangement:row.arrangement,renderProfile:renderProfileOf(row),boundaryPolicy:row.boundaryPolicy || 'unit-gap-v1',channels:row.channels,renderRevision:row.renderRevision || 0,renderSignature:row.renderSignature || null,current,available,...(locallyRecoverable?{cached,locallyRecoverable}:{}),filename:basename(row.path || ''),createdAt:row.createdAt,...((p.jobId||p.operationId)&&!job?{outsideQuery:true}:{})};
     })).filter(row=>!row.outsideQuery&&(!p.format || row.format===p.format)&&(p.arrangement===undefined || row.arrangement===p.arrangement)).sort((a,b)=>(b.createdAt || '').localeCompare(a.createdAt || '')||a.id.localeCompare(b.id));
     return {items:items.slice(offset,offset+limit),total:items.length,nextCursor:offset+limit<items.length?String(offset+limit):null};
   };

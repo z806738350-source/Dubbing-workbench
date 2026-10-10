@@ -170,10 +170,10 @@ export function useObjectDraft<T extends object>(type: string, id: string, value
   const hasTransferredDraft=()=>{if(!current.current.transferredKey)return false;try{return !!readDraft(current.current.transferredKey,workspaceIdentity);}catch{return true;}};
   useEffect(()=>registerDraftSave(key,{scope:options.scope || key,dependencies:options.dependencies || [key],deferUnmounted:()=>{if(!current.current.options.deferUnmounted || current.current.targetId || pending.current || activeDraftSave(key))return false;try{return !pendingSaveOperation(key,workspaceIdentity);}catch{return false;}},state:()=>hasTransferredDraft()?"local":current.current.status,dirty:()=>current.current.dirty || hasTransferredDraft(),flush,freeze}),[key,options.scope,JSON.stringify(options.dependencies)]);
   useEffect(()=>{
-    if(!dirty || !options.persist || composing || options.locked || status === "conflict" || status === "unreliable")return;
+    if(saving || !dirty || !options.persist || composing || options.locked || status === "conflict" || status === "unreliable")return;
     if(options.validate?.(draft))return;
     scheduleDraftSave(key,flush,options.delay);
-  },[key,dirty,savedText,JSON.stringify(draft),composing,options.locked,status,options.delay]);
+  },[key,dirty,savedText,JSON.stringify(draft),composing,options.locked,status,options.delay,saving]);
   useEffect(()=>{const reconnect=()=>{if(current.current.dirty && current.current.options.persist && current.current.status !== "conflict")scheduleDraftSave(key,flush,0);};window.addEventListener("online",reconnect);return()=>window.removeEventListener("online",reconnect);},[key]);
   return {key,type,draft,base,dirty,saving,cacheError,error,status,composing,frozen,targetId,workspaceValue:value,workspaceRevision:revision,edit,save,flush,discard,rebase,recover,compositionStart,compositionEnd,valid:validValue,unwrap,label:saveStateLabels[status]};
 }

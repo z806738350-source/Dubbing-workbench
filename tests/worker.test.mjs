@@ -363,7 +363,7 @@ test("正式导出预检损坏源音频，不提前通过检查；修复后保�
   assert.equal(result.confirmation.arrangement,p.arrangement);
   assert.equal((await inspect(join(dir,result.path))).format,"mp3");
   assert.equal(calls,2);
-  const master=store.all("masters",c.id)[0];assert.equal(master.gapFrames,24000);assert.equal(master.processing,"pcm_s16le-48000-mono");
+  const master=store.all("masters",c.id)[0];assert.equal(master.gapFrames,24000);assert.equal(master.processing,"pcm_s16le-48000-stereo");assert.equal(master.renderProfile,"source-stereo-v1");assert.equal(master.channels,2);
 });
 test("上传参考严格检查 30 秒和 10 MB，边界不擅自放宽", async t => {
   const {store}=setup(t);

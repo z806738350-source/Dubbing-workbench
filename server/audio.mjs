@@ -12,12 +12,14 @@ import {
 } from "node:fs/promises";
 import { constants, existsSync, rmSync, statSync, renameSync, readFileSync, createReadStream, createWriteStream } from "node:fs";
 import { pipeline } from 'node:stream/promises';
-import { renderRangeResource } from './audio-range.mjs';
+import { Transform } from 'node:stream';
+import { renderRangeResource,DEFAULT_RENDER_PROFILE,LEGACY_RENDER_PROFILE,BOUNDARY_POLICY } from './audio-range.mjs';
 import { pcmWave } from './tail-audio.mjs';
 import { join, dirname } from "node:path";
 import { projectFile, projectExportFile } from './workspace.mjs';
 import { fail, uid, text } from "./store.mjs";
 import { createLocalPool } from './scheduler.mjs';
+import { reserveDiskSpace, assertDiskSpace } from './disk-space.mjs';
 const nativeExec = promisify(execFile), mediaProcesses = createLocalPool(1);
 // ponytail: one native media process per server keeps uploads and background
 // rendering within the same CPU ceiling; raise only after measured headroom.
@@ -26,7 +28,7 @@ export function runMediaProcess(file, args, options = {}) {
   if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 2147483647) return Promise.reject(new Error('媒体处理时限应为有效的正整数毫秒数'));
   // The timeout starts after admission, so waiting behind another local task is
   // not counted as a stalled child. Kill a stalled child before releasing its slot.
-  return mediaProcesses.run(() => nativeExec(file, args, { ...options, timeout, killSignal: 'SIGKILL' }));
+  return mediaProcesses.run(() => { options.signal?.throwIfAborted(); return nativeExec(file, args, { ...options, timeout, killSignal: 'SIGKILL' }); });
 }
 export const mediaProcessActivity = () => ({ active: mediaProcesses.active, queued: mediaProcesses.queued, peak: mediaProcesses.peak, limit: 1 });
 const exec = runMediaProcess;
@@ -37,7 +39,7 @@ export const ffmpeg =
     : "ffmpeg");
 export const ffprobe =
   process.env.FFPROBE_PATH || ffmpeg.replace(/ffmpeg$/, "ffprobe");
-export async function inspect(file) {
+export async function inspect(file, { signal } = {}) {
   const { stdout } = await exec(
     ffprobe,
     [
@@ -49,7 +51,7 @@ export async function inspect(file) {
       "json",
       file,
     ],
-    { maxBuffer: 1024 * 1024, timeout: 30000 },
+    { maxBuffer: 1024 * 1024, timeout: 30000, signal },
   );
   const meta = JSON.parse(stdout);
   const stream = meta.streams.find((s) => s.codec_type === "audio");
@@ -62,7 +64,7 @@ export async function inspect(file) {
   await exec(
     ffmpeg,
     ["-v", "error", "-xerror", "-i", file, "-f", "null", "-"],
-    { maxBuffer: 1024 * 1024, timeout: 120000 },
+    { maxBuffer: 1024 * 1024, timeout: 120000, signal },
   );
   return {
     duration: Number(meta.format.duration),
@@ -83,12 +85,13 @@ export function storedAudioUnavailable(store, a) {
   const check = audioChecks.get(store)?.get(a.id);
   return !version || !!a.invalid || !!(check && (check.path !== a.path || check.version !== version || check.pending || !check.valid));
 }
-export async function validateStoredAudio(store, a) {
+export async function validateStoredAudio(store, a, { signal } = {}) {
+  signal?.throwIfAborted();
   let checks = audioChecks.get(store);
   if (!checks) { checks = new Map(); audioChecks.set(store, checks); }
   const file = join(store.directory, a.path), version = fileVersion(file);
   const previous = checks.get(a.id);
-  if (previous?.path === a.path && previous.version === version) return previous.promise;
+  if (previous?.path === a.path && previous.version === version) { const result = await previous.promise; signal?.throwIfAborted(); return result; }
   const retained = store.maybe('audios', a.id), cacheId = 'audio-file-check:' + a.id;
   const cached = retained?.path === a.path ? store.maybe('settings', cacheId) : null;
   const check = {path:a.path, version, pending:true, valid:false};
@@ -97,14 +100,16 @@ export async function validateStoredAudio(store, a) {
     let valid = false;
     try {
       if (cached?.path === a.path && cached.version === version && typeof cached.valid === 'boolean' && cached.valid === !retained.invalid) valid = cached.valid;
-      else if (version) { await inspect(file); valid = true; }
+      else if (version) { await inspect(file,{signal}); valid = true; }
     }
     catch (e) {
+      if (signal?.aborted || e.name === 'AbortError') { if (checks.get(a.id) === check) checks.delete(a.id); throw e; }
       // A missing decoder is a setup failure, not evidence that the file is bad.
       if (['ENOENT','EACCES'].includes(e.code) && [ffmpeg,ffprobe].includes(e.path)) {
-        checks.delete(a.id); throw e;
+        if (checks.get(a.id) === check) checks.delete(a.id); throw e;
       }
     }
+    if (signal?.aborted) { if (checks.get(a.id) === check) checks.delete(a.id); signal.throwIfAborted(); }
     if (fileVersion(file) !== version) return false;
     check.pending = false; check.valid = valid;
     const current = store.maybe('audios', a.id);
@@ -148,8 +153,9 @@ export async function uploadVoice(store, p) {
   if (previous) return previous;
   const file = join(store.directory, path);
   const temp = file + `.${uid()}.part`;
-  await mkdir(join(store.directory, "voices"), { recursive: true });
+  const lease = reserveDiskSpace(store.directory, bytes.length + 1024 * 1024, "参考声音上传");
   try {
+    await mkdir(join(store.directory, "voices"), { recursive: true });
     await writeFile(temp, bytes);
     const info = await inspect(temp);
     if (info.duration > 30) fail("参考声音超过 30 秒，请先截取一段");
@@ -170,7 +176,7 @@ export async function uploadVoice(store, p) {
       if (existing) return existing;
       renameSync(temp,file);store.put("voices",voice);return voice;
     });
-  } finally { await rm(temp,{force:true}); }
+  } finally { try { await rm(temp,{force:true}); } finally { lease.release(); } }
 }
 // Candidate and reference have separate paths: deleting either resource cannot
 // remove the other. The source audio primary key makes save retries idempotent.
@@ -191,9 +197,10 @@ export async function saveCandidateVoice(store, p) {
   const info = await inspect(source);
   if (info.duration > 30 || !/^(wav|mp3)$/.test(info.format)) fail("候选不符合 WAV/MP3、最长 30 秒参考规格；原候选已保留");
   const path = `voices/${audio.id}.${info.format === "mp3" ? "mp3" : "wav"}`;
-  await mkdir(join(store.directory, "voices"), { recursive: true });
   const temp = join(store.directory, path + `.${uid()}.part`);
+  const lease = reserveDiskSpace(store.directory, bytes + 1024 * 1024, "候选声音保存");
   try {
+    await mkdir(join(store.directory, "voices"), { recursive: true });
     await copyFile(source, temp);
     if (fileVersion(source) !== sourceVersion || statSync(temp).size !== bytes) fail("候选文件已变化，请重新核对", 409);
     await inspect(temp);
@@ -211,32 +218,46 @@ export async function saveCandidateVoice(store, p) {
       return store.put("voices", { id: audio.id, name, path, state: "active", revision: 1, tested: false, ...info, bytes, sourceAudioId: audio.id, sourceSessionId: audio.input.sessionId || latest.targetId, source: { description: audio.input.description, text: audio.input.text, prompt: audio.prompt, model: audio.model || audio.input.model, template: audio.input.template, input: audio.input }, createdAt: new Date().toISOString() });
     });
   } finally {
-    await rm(temp, { force: true });
+    try { await rm(temp, { force: true }); } finally { lease.release(); }
   }
 }
-export async function buildMaster(store, segments, gap, id) {
+export async function buildMaster(store, segments, gap, id, renderProfile=DEFAULT_RENDER_PROFILE, { signal } = {}) {
+  signal?.throwIfAborted();
+  assertDiskSpace(store.directory, 0, "试听准备");
+  if(![LEGACY_RENDER_PROFILE,DEFAULT_RENDER_PROFILE].includes(renderProfile))fail('渲染声道版本不受支持');
+  const preserve=renderProfile===DEFAULT_RENDER_PROFILE;
   const path = projectFile(store, segments[0]?.s.chapterId, 'masters', `${id}.wav`);
   const base = join(store.directory, path.slice(0, -4));
-  await mkdir(dirname(base), { recursive: true });
   const pcm = base + ".pcm.part";
-  await writeFile(pcm, Buffer.alloc(0));
+  let lease;
   let cursor = 0;
   const mapping = [];
   const gapFrames = Math.round(gap * 48000);
   try {
     const inputs=[];
     for(const {s,a,range} of segments){
-      const source=range ? await renderRangeResource(store,s.unitId || s.id,s.mode || 'dry',a.id,range.startFrame,range.endFrame,range) : null;
+      signal?.throwIfAborted();
+      const source=range ? await renderRangeResource(store,s.unitId || s.id,s.mode || 'dry',a.id,range.startFrame,range.endFrame,range,{signal}) : null;
       const input=source ? source.path : join(store.directory,a.path);
-      const wave=await pcmWave(input,w=>w.sampleRate===48000?{offset:w.offset,length:w.length,channels:w.channels}:null);
-      inputs.push({input,wave});
+      const wave=await pcmWave(input,w=>({offset:w.offset,length:w.length,channels:w.channels,sampleRate:w.sampleRate,frames:w.frames}));
+      const seconds=wave?wave.frames/wave.sampleRate:a.duration || (await inspect(input,{signal})).duration;
+      inputs.push({input,wave,frames:Math.ceil(seconds*48000)});
     }
-    const channels=inputs.length&&inputs.every(({wave})=>wave?.channels===2)?2:1;
+    signal?.throwIfAborted();
+    const projected=inputs.reduce((sum,input)=>sum+input.frames,0)+gapFrames*Math.max(0,segments.length-1);
+    lease=reserveDiskSpace(store.directory,projected*8+Math.max(0,...inputs.map(input=>input.frames))*4+1024*1024,"整章试听构建");
+    await mkdir(dirname(base), { recursive: true });
+    await writeFile(pcm, Buffer.alloc(0));
+    const channels=preserve?2:inputs.length&&inputs.every(({wave})=>wave?.sampleRate===48000&&wave.channels===2)?2:1;
     for (let i = 0; i < segments.length; i++) {
+      signal?.throwIfAborted();
       const { s, a, range } = segments[i];
-      const {input,wave}=inputs[i],direct=wave?.channels===channels?wave:null;
+      const {input,wave}=inputs[i],direct=wave?.sampleRate===48000&&(wave.channels===channels || preserve&&wave.channels===1)?wave:null;
       const temp = base + `-${i}.pcm.part`;
       try {
+        const sourceChannels=direct?.channels || (preserve?(wave?.channels || (await inspect(input,{signal})).channels):channels);
+        if(preserve&&![1,2].includes(sourceChannels))fail('新渲染版本只支持单声道或双声道源音频');
+        const pcmChannels=direct?.channels || (preserve?sourceChannels:channels);
         if (!direct) await exec(ffmpeg, [
           "-v",
           "error",
@@ -246,20 +267,27 @@ export async function buildMaster(store, segments, gap, id) {
           "-ar",
           "48000",
           "-ac",
-          String(channels),
+          String(pcmChannels),
           "-f",
           "s16le",
           "-y",
           temp,
-        ]);
+        ], {signal});
         const bytes = direct ? direct.length : statSync(temp).size;
-        if (!bytes || bytes % (channels*2)) fail("音频采样帧不完整");
-        const frames = bytes / (channels*2);
-        await pipeline(createReadStream(direct ? input : temp,direct ? {start:direct.offset,end:direct.offset+bytes-1} : undefined), createWriteStream(pcm, { flags: 'a' }));
+        const frameBytes=pcmChannels*2;
+        if (!bytes || bytes % frameBytes) fail("音频采样帧不完整");
+        const frames = bytes / frameBytes;
+        const streams=[createReadStream(direct ? input : temp,direct ? {start:direct.offset,end:direct.offset+bytes-1} : undefined)];
+        if(pcmChannels===1&&channels===2){
+          let carry=null;
+          streams.push(new Transform({transform(chunk,_encoding,done){const raw=carry?Buffer.concat([carry,chunk]):chunk,length=raw.length-raw.length%2,stereo=Buffer.alloc(length*2);carry=raw.length%2?raw.subarray(length):null;for(let at=0;at<length;at+=2){stereo[at*2]=stereo[at*2+2]=raw[at];stereo[at*2+1]=stereo[at*2+3]=raw[at+1];}done(null,stereo);},flush(done){done(carry?new Error('单声道采样帧不完整'):null);}}));
+        }
+        await pipeline(...streams,createWriteStream(pcm, { flags: 'a' }),{signal});
         mapping.push({
           ...(s.kind === "group" ? {} : {segmentId: s.members?.[0] || s.id}),
           ...(s.unitId ? { unitId: s.unitId, memberIds: s.members, mode: s.mode } : {}),
           audioId: a.id,
+          ...(preserve?{renderProfile,boundaryPolicy:BOUNDARY_POLICY}:{}),
           ...(range ? { sourceHash: range.sourceHash, clipStartFrame: range.startFrame, clipEndFrame: range.endFrame, rangeRevision: range.revision, decodeProfile: range.decodeProfile, edgePolicy: range.edgePolicy } : { clipStartFrame: 0, clipEndFrame: frames }),
           startFrame: cursor,
           endFrame: cursor + frames,
@@ -285,40 +313,43 @@ export async function buildMaster(store, segments, gap, id) {
       "-i",
       pcm,
       "-ac",
-      "1",
+      preserve?"2":"1",
       "-c:a",
       "pcm_s16le",
       "-f",
       "wav",
       "-y",
       base + ".wav.part",
-    ]);
-    const info = await inspect(base + ".wav.part");
-    if (Math.abs(info.duration * 48000 - cursor) > 1) fail("母版帧数校验失败");
+    ], {signal});
+    const info = await inspect(base + ".wav.part",{signal});
+    signal?.throwIfAborted();
+    if (Math.abs(info.duration * 48000 - cursor) > 1 || info.channels!==(preserve?2:1) || info.sampleRate!==48000) fail("母版帧数或声道校验失败");
     await rename(base + ".wav.part", base + ".wav");
     return {
       path,
       frames: cursor,
       mapping,
       sampleRate: 48000,
-      channels: 1,
+      channels: preserve?2:1,
+      renderProfile,boundaryPolicy:BOUNDARY_POLICY,
       gapFrames,
-      processing: "pcm_s16le-48000-mono",
+      processing: preserve?"pcm_s16le-48000-stereo":"pcm_s16le-48000-mono",
       duration: cursor / 48000,
     };
   } finally {
-    await rm(pcm, { force: true });
+    try { await rm(pcm, { force: true }); await rm(base + ".wav.part", {force:true}); } finally { lease?.release(); }
   }
 }
 export async function exportMaster(store, master, id, format) {
   const path = projectExportFile(store, { chapterId: master.chapterId, arrangement: master.arrangement, id, format }),
     file = join(store.directory, path);
+  const source=join(store.directory,master.path);
+  const bytes=format==="wav"?statSync(source).size:Math.ceil((master.duration || (await inspect(source)).duration)*24000)+1024*1024;
+  const lease=reserveDiskSpace(store.directory,bytes+1024*1024,"音频导出");
+  try {
   await mkdir(dirname(file), { recursive: true });
   if (format === "wav")
-    await writeFile(
-      file + ".part",
-      await readFile(join(store.directory, master.path)),
-    );
+    await copyFile(join(store.directory, master.path),file + ".part");
   else
     await exec(ffmpeg, [
       "-v",
@@ -337,6 +368,7 @@ export async function exportMaster(store, master, id, format) {
   await inspect(file + ".part");
   await rename(file + ".part", file);
   return path;
+  } finally { try { await rm(file + ".part",{force:true}); } finally { lease.release(); } }
 }
 export async function toolsAvailable() {
   try {

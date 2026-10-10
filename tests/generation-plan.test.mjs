@@ -8,24 +8,25 @@ const component=source.slice(source.indexOf('export function GeneratePlan('),sou
 const runtime=`const React={Fragment:'Fragment',createElement:(type,props,...children)=>({type,props:{...props,children}})},Dialog='Dialog',TaskAuthorization='TaskAuthorization';
 const state=[];let cursor=0;const useState=value=>{const index=cursor++;if(!(index in state))state[index]=value;return[state[index],value=>{state[index]=typeof value==='function'?value(state[index]):value;}];};
 export const render=props=>{cursor=0;return GeneratePlan(props);};`;
-const compiled=ts.transpileModule(runtime+component,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.React}}).outputText;
+const fidelity=source.slice(source.indexOf('export function FidelitySummary('),source.indexOf('export type WorkspaceIssue'));
+const compiled=ts.transpileModule(runtime+fidelity+component,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.React}}).outputText;
 const nodes=node=>!node||typeof node!=='object'?[]:[node,...nodes(node.props?.footer),...(node.props?.children||[]).flat(Infinity).flatMap(nodes)];
 const words=node=>typeof node==='string'||typeof node==='number'?String(node):node&&typeof node==='object'?(node.props?.children||[]).flat(Infinity).map(words).join(''):'';
 const button=(tree,label)=>nodes(tree).find(node=>node.type==='button'&&words(node).includes(label));
 async function press(tree,label){const target=button(tree,label);assert.ok(target,label);assert.equal(!!target.props.disabled,false);target.props.onClick();await new Promise(resolve=>setImmediate(resolve));}
 async function setup(overrides={}){
-  const {render}=await import('data:text/javascript;base64,'+Buffer.from(compiled+'\n//'+crypto.randomUUID()).toString('base64'));
+  const {render,FidelitySummary}=await import('data:text/javascript;base64,'+Buffer.from(compiled+'\n//'+crypto.randomUUID()).toString('base64'));
   const plan={chapterId:'chapter',revision:1,arrangement:1,unitIds:['one'],memberIds:['one'],units:[{unitId:'one',members:['one'],mode:'dry',reuse:false,audioId:null}],textRequests:0,audioRequests:1};
   let props={plan,chapter:{id:'chapter',projectId:'project',segments:[{id:'one',order:0,voiceId:'voice'},{id:'two',order:1,voiceId:'voice'}]},grantId:'grant',unknown:false,routeBlocked:false,retryUnknown:false,resumeRoute:false,busy:false,onGrant(){},onRetryUnknown(){},onResumeRoute(){},onGenerate:async()=>{},onRecheck:async()=>{},onEdit(){},onClose(){},...overrides};
-  return {tree:()=>render(props),update:value=>{props={...props,...value};},plan};
+  return {audit:value=>FidelitySummary({audit:value}),tree:()=>render(props),update:value=>{props={...props,...value};},plan};
 }
 
 test('409 replaces the old start action; free recheck shows changed scope and requires a second explicit generation',async()=>{
   let submissions=0,rechecks=0,paid=0;
-  const f=await setup({onGenerate:async()=>{submissions++;if(submissions===1)throw Object.assign(new Error('编排已变化'),{status:409});paid++;},onRecheck:async()=>{rechecks++;f.update({plan:{...f.plan,revision:2,arrangement:3,memberIds:['one','two'],units:[{unitId:'group',members:['one','two'],mode:'scene',reuse:false,audioId:null}]}});}});
+  const f=await setup({onGenerate:async()=>{submissions++;if(submissions===1)throw Object.assign(new Error('编排已变化'),{status:409});paid++;},onRecheck:async()=>{rechecks++;f.update({changes:['成员范围由 1 条变为 2 条，模式变为场景。'],plan:{...f.plan,revision:2,arrangement:3,memberIds:['one','two'],units:[{unitId:'group',members:['one','two'],mode:'scene',reuse:false,audioId:null}]}});}});
   await press(f.tree(),'开始生成');let tree=f.tree();assert.match(words(tree),/内容已变化，本次未发送/);assert.equal(button(tree,'开始生成'),undefined);assert.equal(nodes(tree).some(node=>node.type==='TaskAuthorization'),false);assert.equal(submissions,1);assert.equal(paid,0);
-  await press(tree,'重新核对生成范围');tree=f.tree();assert.equal(rechecks,1);assert.equal(submissions,1);assert.equal(paid,0);assert.match(words(tree),/已按当前内容重新核对/);assert.match(words(tree),/2 条台词/);assert.match(words(tree),/第 1、2 条 · 声音背景/);assert.ok(button(tree,'开始生成'));
-  await press(tree,'开始生成');assert.equal(submissions,2);assert.equal(paid,1);
+  await press(tree,'重新核对生成范围');tree=f.tree();assert.equal(rechecks,1);assert.equal(submissions,1);assert.equal(paid,0);assert.match(words(tree),/已按当前内容重新核对/);assert.match(words(tree),/2 条台词/);assert.match(words(tree),/第 1、2 条 · 声音背景/);assert.ok(button(tree,'按更新范围生成'));assert.match(words(tree),/本次制作有具体变化/);
+  await press(tree,'按更新范围生成');assert.equal(submissions,2);assert.equal(paid,1);
 });
 test('failed recheck keeps the old plan blocked and its error local without any new generation',async()=>{
   let submissions=0,rechecks=0;
@@ -50,10 +51,10 @@ test('具体决定卡一击按当前范围提交，无次数或24小时授权；
   assert.deepEqual(calls,[[undefined,{retryUnknown:true,resumeRoute:true}]]);
 });
 
-test('直接生成遇409初次打开失效卡，免费重核对后才允许当前范围的明确提交',async()=>{
-  let submissions=0,rechecks=0;const f=await setup({invalidated:true,onGenerate:async()=>{submissions++;},onRecheck:async()=>{rechecks++;}});
+test('同范围失效只调用一次重核并继续回调，不强制第二次开始',async()=>{
+  let submissions=0,rechecks=0;const f=await setup({invalidated:true,onGenerate:async()=>{submissions++;},onRecheck:async()=>{rechecks++;submissions++;}});
   assert.equal(button(f.tree(),'开始生成'),undefined);assert.ok(button(f.tree(),'重新核对生成范围'));assert.match(words(f.tree()),/内容已变化，本次未发送/);
-  await press(f.tree(),'重新核对生成范围');assert.equal(rechecks,1);assert.equal(submissions,0);await press(f.tree(),'开始生成');assert.equal(submissions,1);
+  await press(f.tree(),'重新核对生成范围');assert.equal(rechecks,1);assert.equal(submissions,1);
 });
 test('rechecked all-reuse scope finishes with no paid start or authorization controls',async()=>{
   let submissions=0,closed=0;
@@ -104,4 +105,11 @@ test('生成确认范围内显示共用并发入口，纯复用与失效计划�
  const concurrency={type:'ConcurrencySettings',props:{children:['同时制作：3 段']}},f=await setup({concurrency,onGenerate:async()=>{throw Object.assign(Error('旧计划'),{status:409});}});
  assert.ok(nodes(f.tree()).includes(concurrency));await press(f.tree(),'开始生成');assert.ok(!nodes(f.tree()).includes(concurrency));
  const reused=await setup({concurrency});reused.update({plan:{...reused.plan,audioRequests:0}});assert.ok(!nodes(reused.tree()).includes(concurrency));
+});
+
+test('只读审计摘要区分字面、冻结依据和听评，不将匹配冒充念全或声景达标',async()=>{
+  const f=await setup(),audit={chapterId:'chapter',projectId:'project',scope:{kind:'current',arrangement:3,sourceVersion:2},sourceCoverage:{valid:true,gaps:0,overlaps:0},textFidelity:{status:'edited',exact:2,punctuationEdits:1,wordEdits:1,unknown:1},participation:{active:5,excluded:1,deleted:2,retired:1,gaps:1,overlaps:0},spokenPayload:{status:'unknown',matched:2,missing:1,mismatches:1},audioProvenance:{originalAvailable:1,originalNotSaved:1,originalUnknown:2,referenceFrozen:1,referenceUnknown:3},listening:{reviewed:1,pending:4,quality:'not-assessed'}};
+  const tree=f.audit(audit);assert.equal(tree.type,'details');assert.equal(!!tree.props.open,false);assert.equal(nodes(tree).some(node=>node.type==='button'),false);
+  assert.match(words(tree),/存在编辑差异/);assert.match(words(tree),/字词编辑 1 段/);assert.match(words(tree),/原件.*未保存 1 份.*依据未知 2 份/);assert.match(words(tree),/缺少请求依据 1 段/);assert.match(words(tree),/不能证明声音念全/);assert.match(words(tree),/声景质量未由本核对评定/);
+  assert.equal(f.audit(undefined),null);
 });

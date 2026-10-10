@@ -3,6 +3,9 @@ import { saveCandidateVoice } from './audio.mjs';
 import { scenePresenceConflicts } from './templates.mjs';
 import { assertCreationScope, recordCreated } from './assistant/scope.mjs';
 import { performanceDependency, segmentPerformanceIssues } from './performance.mjs';
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
+import { referenceVersion } from './scheduler.mjs';
 
 const now = () => new Date().toISOString();
 const recordId = (kind, id) => `ux-${kind}:${id}`;
@@ -302,16 +305,23 @@ export function createExperience(store, domain, worker, analysis, config) {
         if (conflicts.length) fail(conflicts.join('；')+'；请修改背景描述或共同要求后再生成，本次未发送',409);
       }
       const outstandingAttemptIds=outstandingAttempts(store,[{targetKind:'unit',targetId:row.s.id,mode}],history,true).map(a=>a.id);
-      return {unitId:row.s.id,members:row.s.members,mode,reuse:!request,rejected,audioId:st.audio?.id || null,outstandingAttemptIds};
+      const input=domain.enhancement.input(unit,mode,undefined,false,false,c);
+      const referenceVoices=(input.referenceVoiceIds || []).map(voiceId=>{
+        const voice=store.get('voices',voiceId);let fileVersion=null;
+        try {fileVersion=referenceVersion(statSync(join(store.directory,voice.path)));}catch{}
+        return {voiceId,revision:voice.revision ?? 1,fileVersion};
+      });
+      return {unitId:row.s.id,members:row.s.members,mode,model:input.model,referenceVoices,reuse:!request,rejected,audioId:st.audio?.id || null,outstandingAttemptIds};
     });
-    return {chapterId:c.id,revision:c.revision,arrangement:c.arrangement,actionKind,unitIds:units.filter(u => !u.reuse).map(u => u.unitId),memberIds:units.flatMap(u => u.members),units,rejectedUnits:units.filter(u=>u.rejected).map(u=>u.unitId),outstandingAttemptIds:[...new Set(units.filter(u=>!u.reuse).flatMap(u=>u.outstandingAttemptIds))],textRequests:0,audioRequests:units.filter(u => !u.reuse).length};
+    return {chapterId:c.id,revision:c.revision,arrangement:c.arrangement,model:config.model,actionKind,unitIds:units.filter(u => !u.reuse).map(u => u.unitId),memberIds:units.flatMap(u => u.members),units,rejectedUnits:units.filter(u=>u.rejected).map(u=>u.unitId),outstandingAttemptIds:[...new Set(units.filter(u=>!u.reuse).flatMap(u=>u.outstandingAttemptIds))],textRequests:0,audioRequests:units.filter(u => !u.reuse).length};
   }
   function view(op) {
     const result = {...op}; delete result.request;
     if (op.result?.analysis?.id) {
       const a = store.get('suggestions',op.result.analysis.id);
       const performanceCoverage=a.performancePolicy?.enabled ? analysis.coverage(a.chapterId,{analysisId:a.id}) : undefined;
-      result.result = {...op.result,analysis:a,applied:a.automation?.applied || 0,needsDecision:a.automation?.needsDecision || a.items.filter(i => i.uncertain || i.issues?.length).length,...(performanceCoverage ? {performanceCoverage,performanceReceipt:a.performanceReceipt,changeSetId:a.performanceReceipt?.changeSetId} : {})};
+      const {items,total,nextCursor,...fidelity}=domain.fidelity({chapterId:a.chapterId});
+      result.result = {...op.result,fidelity,analysis:a,applied:a.automation?.applied || 0,needsDecision:a.automation?.needsDecision || a.items.filter(i => i.uncertain || i.issues?.length).length,...(performanceCoverage ? {performanceCoverage,performanceReceipt:a.performanceReceipt,changeSetId:a.performanceReceipt?.changeSetId} : {})};
       result.outcome = a.status === 'running' ? 'processing' : a.batches?.some(b => b.status === 'unknown') || a.performanceRepairs?.some(b=>b.status==='unknown') ? 'unknown' : a.status === 'applied' && (!performanceCoverage || (a.performanceReceipt?.scopeCoverage || performanceCoverage).phase==='ready') ? 'completed' : 'needsInput';
     }
     if (op.jobIds.length) {
@@ -333,6 +343,11 @@ export function createExperience(store, domain, worker, analysis, config) {
   async function execute(p, executionContext) {
     const actor = assistantActor(executionContext);
     const mutationContext = actor ? {...executionContext,receiptOwner:'experience'} : executionContext;
+    if (p.kind === 'useVoice' && (p.segmentIds !== undefined || p.scope === 'selected')) {
+      if (p.audioId) fail('批量台词请选择声音库中已有的声音');
+      if (p.scope === 'library') fail('批量台词声音需要明确应用到所选台词');
+      if (p.apply === false) fail('批量台词声音需要明确应用到所选台词');
+    }
     if (p.kind === 'save' && p.action === 'project.delete') fail('删除项目请使用项目列表中的删除操作');
     const chapterId = chapterOf(p), projectId = projectOf(p);
     if (chapterId) store.get('chapters',chapterId);
@@ -367,9 +382,10 @@ export function createExperience(store, domain, worker, analysis, config) {
         let voice = op.steps.voice ? store.get('voices',op.steps.voice) : p.audioId ? await saveCandidateVoice(store,{audioId:p.audioId,name:p.name || '新声音'}) : store.get('voices',p.voiceId);
         op.steps.voice = voice.id; op.createdObjectIds = [voice.id]; op.result = {voice}; save(op);
         if (p.scope !== 'library') step('bound',() => {
-          if (!p.chapterId || (!p.segmentId && !p.roleId)) fail('请选择这次使用声音的章节与角色或台词');
+          const selected = p.segmentIds !== undefined || p.scope === 'selected';
+          if (!p.chapterId || (!selected && !p.segmentId && !p.roleId)) fail('请选择这次使用声音的章节与角色或台词');
           if (voice.state !== 'active' || voice.deletePending) fail('请选择当前可用的声音');
-          const target = domain.mutate(p.segmentId ? 'segment.update' : 'role.update',p.segmentId ? {chapterId:p.chapterId,revision:p.revision,id:p.segmentId,voiceId:voice.id,identityChosen:true} : {chapterId:p.chapterId,revision:p.revision,id:p.roleId,entityRevision:p.entityRevision,voiceId:voice.id,apply:p.apply !== false,chapterOnly:p.updateDefault !== true,identityChosen:true},mutationContext);
+          const target = selected ? domain.mutate('segment.voice',{chapterId:p.chapterId,revision:p.revision,ids:p.segmentIds,voiceId:voice.id,identityChosen:true},mutationContext) : domain.mutate(p.segmentId ? 'segment.update' : 'role.update',p.segmentId ? {chapterId:p.chapterId,revision:p.revision,id:p.segmentId,voiceId:voice.id,identityChosen:true} : {chapterId:p.chapterId,revision:p.revision,id:p.roleId,entityRevision:p.entityRevision,voiceId:voice.id,apply:p.apply !== false,chapterOnly:p.updateDefault !== true,identityChosen:true},mutationContext);
           op.result = {voice,target:{...target,chapterRevision:store.get('chapters',p.chapterId).revision}}; return op.result.target;
         });
         op.steps.completed = true; op.outcome = 'completed';
@@ -394,8 +410,13 @@ export function createExperience(store, domain, worker, analysis, config) {
           payload = {...payload,kind:'unit-generate',revision:adopted.revision,unitIds:[p.unitId],mode:'scene'};
         } else if (p.kind === 'generateSelection') {
           const selected = plan(p); op.result = {plan:selected};
+          if(p.expectedModel!==undefined && (typeof p.expectedModel!=='string' || selected.units.filter(u=>!u.reuse).some(u=>u.model!==p.expectedModel)))fail('模型在发起后已变化，请核对当前范围',409);
+          if(p.expectedReferenceVoices!==undefined) {
+            const refs=[...new Map(selected.units.filter(u=>!u.reuse).flatMap(u=>u.referenceVoices).map(v=>[v.voiceId,v])).values()].sort((a,b)=>a.voiceId.localeCompare(b.voiceId));
+            if(!Array.isArray(p.expectedReferenceVoices)||!same([...p.expectedReferenceVoices].sort((a,b)=>String(a.voiceId).localeCompare(String(b.voiceId))),refs))fail('参考素材在发起后已变化，请核对当前范围',409);
+          }
           if (!selected.audioRequests) { op.steps.completed = true; op.outcome = 'completed'; save(op); return view(op); }
-          payload = {...payload,kind:'unit-generate',revision:selected.revision,arrangement:selected.arrangement,unitIds:selected.unitIds,...(p.mode ? {mode:p.mode} : {})};
+          payload = {...payload,kind:'unit-generate',revision:selected.revision,arrangement:selected.arrangement,unitIds:selected.unitIds,...(p.expectedModel!==undefined?{expectedModel:p.expectedModel}:{}),...(p.expectedReferenceVoices!==undefined?{expectedReferenceVoices:p.expectedReferenceVoices}:{}),...(p.mode ? {mode:p.mode} : {})};
         } else if (p.kind === 'voiceCandidate') payload = {...payload,kind:'voice-create',sessionId:p.sessionId,entityRevision:p.entityRevision};
         else if (p.kind === 'export') payload = {...payload,requireGrant:false,kind:'export',arrangement:p.arrangement,renderSignature:p.renderSignature,reviewItems:p.reviewItems,confirm:actor ? false : p.confirm === true,format:p.format};
         else fail('组合操作类型无效');

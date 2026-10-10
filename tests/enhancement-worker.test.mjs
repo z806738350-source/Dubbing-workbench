@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { openStore, uid } from "../server/store.mjs";
 import { createDomain, basisOf, inputOf } from "../server/domain.mjs";
 import { createWorker } from "../server/worker.mjs";
-import { compile, listTemplates, listUnitTemplates } from "../server/templates.mjs";
+import { compile, listTemplates, listUnitTemplates, sceneContract } from "../server/templates.mjs";
 import { saveCandidateVoice, drainReferenceDeletes, inspect, ffmpeg } from "../server/audio.mjs";
 import { createAnalysis } from "../server/analysis.mjs";
 
@@ -114,6 +114,14 @@ function chapterFixture(domain, store, voices) {
   const payload = mode => ({ kind: "unit-generate", chapterId: chapter.id, revision: store.get("chapters", chapter.id).revision, unitId: group.id, mode, commandId: uid() });
   return { chapter, group, payload };
 }
+
+test('S2 新scene默认v4，明确选择v5后冻结事件与参考顺序，Mock不扩成员或改数字参数',async t=>{
+  const {store,domain,voices,worker}=setup(t),{chapter,group,payload}=chapterFixture(domain,store,voices),unit=store.get('units',group.id),members=[...unit.members];assert.equal(unit.mode,'dry');assert.equal(unit.variants.scene.template,sceneContract.defaultTemplate);assert.equal(sceneContract.defaultTemplate,'scene-v4-presence-1');
+  unit.variants.scene.template='scene-v5-relations-1';store.put('units',unit,chapter.id);
+  const events=domain.enhancement.addEvents(unit.id,[{kind:'environment',description:'门外安静的空气与空间',memberId:members[0],position:'during',state:'adopted',transition:{memberId:members[0],quote:'小林',occurrence:1,development:'远处空气保持既有空间层次'}},{kind:'effect',description:'单声开门回响',memberId:members[1],position:'before',state:'adopted',transition:{memberId:members[1],quote:'门外',occurrence:1,development:'保留这一次动作的空间回响'}}],unit.revision);
+  let calls=0;const configBefore=domain.list(chapter.id).map(s=>s.config);t.mock.method(globalThis,'fetch',async(_url,init)=>{calls++;const sent=JSON.parse(init.body);assert.match(sent.text_prompt,new RegExp(`事件 ${events[0].id}`));assert.match(sent.text_prompt,new RegExp(`事件 ${events[1].id}`));assert.doesNotMatch(sent.text_prompt,/音乐在采用范围|旋律和明确存在感/);return new Response(wav(),{headers:{'content-type':'audio/wav'}});});
+  const job=await worker.submit(payload('scene'));await worker.tick();assert.equal(store.get('jobs',job.id).status,'success');assert.equal(calls,1);const attempt=store.all('attempts',job.id)[0];assert.equal(attempt.input.template,'scene-v5-relations-1');assert.deepEqual(attempt.input.members.map(s=>s.id),members);assert.deepEqual(attempt.input.referenceVoiceIds,voices.map(v=>v.id));assert.deepEqual(attempt.input.events.map(event=>event.id),events.map(event=>event.id));assert.deepEqual(domain.list(chapter.id).map(s=>s.config),configBefore);assert.equal(attempt.prompt,compile(attempt.input));
+});
 
 test("存在感生成资格：旧场景模板拒绝选择，明确切换v4后按选择发送", async t => {
   for (const presence of ['clear', 'natural', 'subtle', 'unspecified']) await t.test(presence, async t => {

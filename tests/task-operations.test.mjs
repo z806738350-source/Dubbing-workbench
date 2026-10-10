@@ -116,7 +116,7 @@ test('HTTP-success needsInput stays explicit, and failed durable storage sends z
   const result = await submitOperation('scene', { kind: 'sceneAndGenerate' });
   assert.equal(result.outcome, 'needsInput'); assert.equal(result.error, 'grant revoked');
   localStorage.setItem = () => { throw new Error('quota'); };
-  await assert.rejects(submitOperation('new', { kind: 'sceneAndGenerate' }), /quota/); assert.equal(calls, 1);
+  await assert.rejects(submitOperation('new', { kind: 'sceneAndGenerate' }), /浏览器.*存储.*空间/); assert.equal(calls, 1);
 });
 
 test('an unknown paid result requires explicit retry; ordinary retries cannot force route recovery', async () => {
@@ -161,4 +161,101 @@ test('rechecked generation keeps the same key, confirms its failed 409 receipt, 
   const renewed=await submitOperation('generate:chapter',{...payload,arrangement:plan.arrangement});
   assert.notEqual(renewed.operationId,failed.operationId);assert.deepEqual(calls.map(call=>call.path),['/operations','/operations/plan','/operations/'+failed.operationId,'/operations']);
   assert.equal(calls[2].body,undefined);assert.equal(calls[3].body.arrangement,2);
+});
+
+async function setupFetch(t,fetchImpl){
+  t.mock.method(globalThis,'fetch',fetchImpl);
+  const source=readFileSync(new URL('../src/api.ts',import.meta.url),'utf8'),compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+  const {api}=await import('data:text/javascript;base64,'+Buffer.from(compiled+'\n//'+crypto.randomUUID()).toString('base64'));
+  return {...await setup(api),api};
+}
+const conflictResponse=()=>Response.json({error:'夹具仅章修订变化，本次尚未入队',code:'conflict',retryClass:'refresh'},{status:409});
+const absentResponse=()=>Response.json({error:'原操作不存在'},{status:404});
+const operationRecord=key=>'workbench-operation//test-page/'+key;
+
+test('actual API: known HTTP409 plus same-operation 404 clears only the unsent guard before a corrected revision',async t=>{
+  const calls=[],ids=[];let enqueued=0;
+  const {submitOperation}=await setupFetch(t,async(path,options)=>{
+    const body=options?JSON.parse(options.body):undefined;calls.push({path,body});
+    if(!body)return absentResponse();ids.push(body.operationId);
+    if(ids.length===1)return conflictResponse();enqueued++;return Response.json(receipt(body));
+  });
+  const payload={kind:'generateSelection',chapterId:'chapter',revision:1,ids:['one']};
+  await assert.rejects(submitOperation('generation',payload),error=>error.status===409&&error.retryClass==='refresh');assert.equal(localStorage.getItem(operationRecord('generation')),null);
+  await submitOperation('generation',{...payload,revision:2});assert.equal(enqueued,1);assert.equal(ids.length,2);assert.notEqual(ids[0],ids[1]);assert.equal(calls[1].path,'/api/operations/'+ids[0]);
+});
+
+test('actual App replan with actual submitOperation/API: before-run HTTP409 leads to one corrected task, not a second user start',async t=>{
+  let revision=1,enqueued=0;const posts=[],reads=[];
+  const chapter=()=>({id:'chapter',projectId:'project',revision,arrangement:1,segments:[{id:'one',order:0,text:'自拟台词'}],units:[],events:[]});
+  const plan=()=>({chapterId:'chapter',revision,arrangement:1,model:'fixture-audio',memberIds:['one'],unitIds:['one'],units:[{unitId:'one',members:['one'],mode:'dry',reuse:false,audioId:null,model:'fixture-audio',referenceVoices:[{voiceId:'voice',revision:1,fileVersion:'reference-v1'}]}],audioRequests:1,textRequests:0});
+  const client=await setupFetch(t,async(path,options)=>{
+    const body=options?JSON.parse(options.body):undefined;
+    if(path==='/api/operations/plan')return Response.json(plan());
+    if(path.startsWith('/api/chapters/'))return Response.json(chapter());
+    if(!body){reads.push(path);return absentResponse();}
+    posts.push(body);if(posts.length===1){revision=2;return conflictResponse();}
+    enqueued++;return Response.json(receipt(body,{steps:{enqueued:'job-one'}}));
+  });
+  const source=readFileSync(new URL('../src/App.tsx',import.meta.url),'utf8'),file=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let submit;
+  const visit=node=>{if(ts.isVariableDeclaration(node)&&node.name.getText(file)==='submitGeneration')submit=node.initializer;ts.forEachChild(node,visit);};visit(file);assert.ok(submit);
+  const workspaceSource=readFileSync(new URL('../src/WorkspaceExperience.tsx',import.meta.url),'utf8'),workspaceFile=ts.createSourceFile('WorkspaceExperience.tsx',workspaceSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),scope=workspaceFile.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='generationPlanChanges');
+  const scopeCode=ts.transpileModule(scope.getText(workspaceFile).replace(/^export /,''),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,generationPlanChanges=new Function(scopeCode+';return generationPlanChanges;')();
+  const initial=chapter(),request={plan:plan(),ids:['one'],regenerate:true,retryUnknown:false,resumeRoute:false};let current=request;
+  const state={jobs:[],voices:[],settings:{routeBlocked:false}};
+  const env={api:client.api,submitOperation:client.submitOperation,generationPlan:request,chapter:initial,generationIntent:{current:1},chapterRef:{current:'chapter'},state,stateRef:{current:state},generationPlanChanges,withSavedDrafts:async(_scope,_deps,next)=>next(),hasDraft:()=>false,unitHasDraft:()=>false,draftScopeRevision:(_scope,value)=>value,playIntent:{current:0},pendingPlay:{current:null},pendingPlaySnapshot:{current:null},audio:{current:{pause(){}}},setPlayer(){},setChapter(){},setNotice(){},setGenerationPlan:value=>current=value,refresh:async()=>{}};
+  const code=ts.transpileModule('const projected=('+submit.getText(file)+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  env.submitGeneration=(...args)=>new Function(...Object.keys(env),code+';return projected;')(...Object.values(env))(...args);
+  await env.submitGeneration(undefined,undefined,request,initial,1);
+  assert.equal(enqueued,1);assert.equal(posts.length,2);assert.notEqual(posts[0].operationId,posts[1].operationId);assert.equal(posts[1].revision,2);assert.deepEqual(posts[1].ids,['one']);assert.equal(posts[1].expectedModel,'fixture-audio');assert.equal(current,null);assert.deepEqual(reads,['/api/operations/'+posts[0].operationId]);
+});
+
+test('actual API: ambiguous writes, unreadable conflict receipts and failed lookups retain their original guard',async t=>{
+  for(const mode of ['lost-write','unreadable-409','conflict-lookup-unavailable']){
+    let posts=0;
+    const {submitOperation}=await setupFetch(t,async(_path,options)=>{
+      if(options){posts++;if(mode==='lost-write')return Response.json({error:'未知写入故障',retryClass:'check-existing-operation'},{status:500});if(mode==='unreadable-409')return new Response('{unreadable',{status:409});return conflictResponse();}
+      return mode==='conflict-lookup-unavailable'?Response.json({error:'查询暂时不可用'},{status:503}):absentResponse();
+    });
+    const payload={kind:'generateSelection',chapterId:'chapter',revision:1,ids:['one']};
+    await assert.rejects(submitOperation('guarded',payload),error=>error.retryClass==='check-existing-operation');const original=localStorage.getItem(operationRecord('guarded'));assert.ok(original,mode);
+    await assert.rejects(submitOperation('guarded',{...payload,revision:2}),/回执尚未确认/);assert.equal(posts,1,mode);assert.equal(localStorage.getItem(operationRecord('guarded')),original,mode);
+  }
+});
+
+test('actual API: definitive failed-no-effect receipt may renew, but unknown/jobs/prepared effects never clear the guard',async t=>{
+  for(const [kind,extra,safe] of [
+    ['generateSelection',{outcome:'needsInput',error:'确定未入队',errorStatus:409,jobIds:[],result:{plan:{}}},true],
+    ['generateSelection',{outcome:'unknown'},false],
+    ['generateSelection',{outcome:'processing'},false],
+    ['groupAndGenerate',{outcome:'prepared',jobIds:[],createdObjectIds:['created-group'],result:{unit:{id:'created-group'}}},false],
+    ['generateSelection',{outcome:'needsInput',error:'仍有已创建步骤',errorStatus:409,jobIds:[],steps:{effect:'already-created'}},false],
+  ]){
+    let submitted,posts=0;
+    const {submitOperation}=await setupFetch(t,async(_path,options)=>{if(options){posts++;submitted=JSON.parse(options.body);return conflictResponse();}return Response.json(receipt(submitted,extra));});
+    const result=await submitOperation('recover',{kind,chapterId:'chapter',revision:1,ids:['one']});assert.equal(result.outcome,extra.outcome);assert.equal(posts,1);assert.equal(localStorage.getItem(operationRecord('recover'))===null,safe);
+    if(!safe){const record=JSON.parse(localStorage.getItem(operationRecord('recover')));assert.equal(record.receipt.operationId,submitted.operationId);assert.equal(record.receipt.outcome,extra.outcome);}
+  }
+});
+
+test('actual API: conflict lookup cannot clear a newer local guard or a guard from another workspace',async t=>{
+  for(const changed of ['workspace','newer-guard']){
+    let release,posts=0;
+    const {submitOperation}=await setupFetch(t,async(_path,options)=>{if(options){posts++;return conflictResponse();}return new Promise(resolve=>release=()=>resolve(absentResponse()));});
+    sessionStorage.setItem('workbench-workspace','/A');
+    const key='workbench-operation/%2FA/test-page/same',pending=submitOperation('same',{kind:'generateSelection',chapterId:'chapter',revision:1});
+    await new Promise(resolve=>setImmediate(resolve));assert.ok(release);
+    const original=localStorage.getItem(key);
+    if(changed==='workspace')sessionStorage.setItem('workbench-workspace','/B');
+    else localStorage.setItem(key,JSON.stringify({operationId:'newer-operation',payload:{kind:'generateSelection',chapterId:'chapter',revision:2}}));
+    const kept=localStorage.getItem(key);release();await assert.rejects(pending,error=>error.retryClass==='check-existing-operation');assert.equal(localStorage.getItem(key),kept);assert.equal(posts,1);assert.ok(original);
+  }
+});
+
+test('actual API: a cached paid job is preserved even if a later conflict lookup returns 404',async t=>{
+  let posts=0,submitted;
+  const {submitOperation}=await setupFetch(t,async(_path,options)=>{if(!options)return absentResponse();submitted=JSON.parse(options.body);posts++;return posts===1?Response.json(receipt(submitted)):conflictResponse();});
+  const payload={kind:'generateSelection',chapterId:'chapter',revision:1};await submitOperation('paid',payload);
+  const stored=localStorage.getItem(operationRecord('paid'));await assert.rejects(submitOperation('paid',payload),error=>error.retryClass==='check-existing-operation');
+  assert.equal(localStorage.getItem(operationRecord('paid')),stored);assert.deepEqual(JSON.parse(stored).receipt.jobIds,['job-one']);assert.equal(posts,2);
 });

@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { openStore } from '../server/store.mjs';
 import { ffmpeg } from '../server/audio.mjs';
 import { createAttachments } from '../server/assistant/attachments.mjs';
+import { diskStatus, DISK_SAFETY_BYTES } from '../server/disk-space.mjs';
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'assistant-images-')), store = openStore(dir);
@@ -52,4 +55,13 @@ test('伪格式、超像素、损坏、过大和关闭会话在发送前拒绝',
   store.put('assistantSessions', { id: 's1', projectId: 'p', state: 'archived' }, 'p');
   await assert.rejects(attachments.create(input), { status: 409 });
   assert.equal(attachments.active, 0);
+});
+
+test('截图源与PNG同时写盘先预留，空间不足或数据库失败保留已有图片并释放额度',async t=>{
+  const f=fixture(t),previous=await f.attachments.create(f.input),record=f.store.get('assistantAttachments',previous.id),original=readFileSync(join(f.dir,record.sourcePath)),derived=readFileSync(join(f.dir,record.path)),folder=join(f.dir,'截图项目/assistant/attachments'),files=readdirSync(folder).sort();
+  let freeBytes=DISK_SAFETY_BYTES+1024;
+  const space=t.mock.method(fs,'statfsSync',()=>({bavail:freeBytes,bsize:1}));syncBuiltinESMExports();t.after(()=>{space.mock.restore();syncBuiltinESMExports();});
+  await assert.rejects(f.attachments.create(f.input),error=>error.status===507&&error.code==='disk-space-low');assert.equal(f.attachments.active,0);assert.equal(diskStatus(f.dir).reservedBytes,0);assert.deepEqual(readdirSync(folder).sort(),files);assert.deepEqual(f.store.get('assistantAttachments',previous.id),record);
+  freeBytes=DISK_SAFETY_BYTES+100*1024*1024;f.store.db.exec("CREATE TRIGGER reject_attachment BEFORE INSERT ON assistantAttachments BEGIN SELECT RAISE(ABORT,'fixture database failure'); END");
+  await assert.rejects(f.attachments.create(f.input),error=>error.code==='attachment-invalid');assert.equal(diskStatus(f.dir).reservedBytes,0);assert.equal(f.attachments.active,0);assert.deepEqual(readdirSync(folder).sort(),files);assert.deepEqual(readFileSync(join(f.dir,record.sourcePath)),original);assert.deepEqual(readFileSync(join(f.dir,record.path)),derived);assert.equal(f.store.all('assistantAttachments').length,1);
 });

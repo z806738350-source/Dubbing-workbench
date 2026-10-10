@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { ffmpeg, ffprobe, runMediaProcess as exec } from '../audio.mjs';
 import { fail, uid } from '../store.mjs';
 import { deletionPath } from '../workspace.mjs';
+import { reserveDiskSpace } from '../disk-space.mjs';
 
 const maxBytes = 5 * 1024 * 1024, maxPixels = 16000000;
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -57,6 +58,8 @@ export function createAttachments(store) {
     const folder = s.projectId ? store.get('projects', s.projectId).folder || '' : '';
     const sourcePath = join(folder, 'assistant', 'attachments', `${id}.source.${kind}`);
     const path = join(folder, 'assistant', 'attachments', `${id}.png`), file = join(store.directory, path);
+    // PNG also has a filter byte per row, including narrow images at the pixel limit.
+    const lease=reserveDiskSpace(store.directory,source.length+maxPixels*4+65536,'截图保存');
     const work = (async () => {
       let saved = false;
       try {
@@ -81,8 +84,10 @@ export function createAttachments(store) {
         if (e.status) throw e;
         invalid('图片无法完整解码，未上传；请换一张静态截图');
       } finally {
-        await rm(file + '.part', { force: true });
-        if (!saved) await Promise.all([rm(file, { force: true }), rm(join(store.directory, sourcePath), { force: true })]);
+        try {
+          await rm(file + '.part', { force: true });
+          if (!saved) await Promise.all([rm(file, { force: true }), rm(join(store.directory, sourcePath), { force: true })]);
+        } finally { lease.release(); }
       }
     })();
     pending.set(work, s.projectId);

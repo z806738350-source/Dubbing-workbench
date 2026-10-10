@@ -15,7 +15,7 @@ let sequence=0;
 async function fixture({rows=[],drafts=[],mode='smart',persistent=coverage(rows.length,0)}={}){
   const hooks=[],effects=[];let cursor=0,effectCursor=0,pending=[];
   const calls={api:[],grant:[],operations:[],refresh:0,saves:[]};
-  const runtime={React,Field:'Field',Form:'Form',Select:'Select',TaskAuthorization:'TaskAuthorization',AlertTriangle:'AlertTriangle',crypto,
+  const runtime={React,Field:'Field',Form:'Form',Select:'Select',TaskAuthorization:'TaskAuthorization',FidelitySummary:'FidelitySummary',AlertTriangle:'AlertTriangle',crypto,
     useState:initial=>{const index=cursor++;if(!(index in hooks))hooks[index]=typeof initial==='function'?initial():initial;return[hooks[index],next=>hooks[index]=typeof next==='function'?next(hooks[index]):next];},
     useRef:initial=>hooks[cursor++]||={current:initial},
     useEffect:(fn,deps)=>{const index=effectCursor++;if(!effects[index]||deps.some((value,i)=>value!==effects[index].deps[i]))pending.push(()=>{effects[index]?.cleanup?.();effects[index]={deps,cleanup:fn()};});},
@@ -24,7 +24,7 @@ async function fixture({rows=[],drafts=[],mode='smart',persistent=coverage(rows.
     withSavedDrafts:async(scope,ids,fn)=>{calls.saves.push({scope,ids});return fn();},draftScopeRevision:(_scope,revision)=>runtime.savedRevision??revision,
     submitOperation:async(key,payload)=>{calls.operations.push({key,payload});return{result:{analysis:{id:'started'}}};}};
   globalThis.pgUiFixture=runtime;
-  const header='const {React,Field,Form,Select,TaskAuthorization,AlertTriangle,crypto,useState,useRef,useEffect,api,ensureTaskGrant,withSavedDrafts,draftScopeRevision,submitOperation}=globalThis.pgUiFixture;\n';
+  const header='const {React,Field,Form,Select,TaskAuthorization,FidelitySummary,AlertTriangle,crypto,useState,useRef,useEffect,api,ensureTaskGrant,withSavedDrafts,draftScopeRevision,submitOperation}=globalThis.pgUiFixture;\n';
   const {default:AnalysisDialog}=await import('data:text/javascript;base64,'+Buffer.from(header+compiled+'\n//'+sequence++).toString('base64'));
   const props={chapter:{id:'chapter',projectId:'project',source:'她展开信纸。\n“先别开门。”',revision:4,segments:rows,suggestions:drafts,performanceCoverage:persistent},roles:[],selected:rows.map(row=>row.id),defaultModel:'fixture-text',contextRevision:1,stateJobs:[],refresh:async()=>{calls.refresh++;}};
   const render=()=>{cursor=effectCursor=0;pending=[];let tree=AnalysisDialog(props);for(const effect of pending)effect();if(pending.length){cursor=effectCursor=0;tree=AnalysisDialog(props);}return tree;};

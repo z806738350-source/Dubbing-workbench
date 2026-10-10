@@ -6,7 +6,8 @@ import "@fontsource/inter/600.css";
 import "./styles.css";
 import App from "./App";
 import { initDrafts } from "./drafts";
-void initDrafts().then(() => createRoot(document.getElementById("root")!).render(
+import { compactOperationStorage } from "./taskOperations";
+void initDrafts().then(() => compactOperationStorage()).then(() => createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>,

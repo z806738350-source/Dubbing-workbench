@@ -2818,6 +2818,41 @@
       "help": "analysis"
     },
     {
+      "id": "read.fidelity",
+      "version": 1,
+      "description": "只读核对原字、有效参与、冻结正文、参考字节和原件来源；不能证明实际念全或声景达标",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "arrangement": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          }
+        },
+        "required": []
+      },
+      "access": "read",
+      "delegation": "allowed-in-mandate",
+      "cost": "local-only",
+      "helpRefs": [
+        "fidelity"
+      ],
+      "handler": "domain.fidelity",
+      "help": "fidelity"
+    },
+    {
       "id": "read.outputs",
       "version": 1,
       "description": "发现本章真实母版与成品，按任务、操作、格式和编排查询",
@@ -6406,6 +6441,16 @@
         "anchor": "action==='segment.performance-basic'"
       },
       "boundary": "Only explicit user basic-reading intent; assistant uses trusted basic prepare scope, not arbitrary action forwarding"
+    },
+    {
+      "action": "segment.voice",
+      "capabilityId": null,
+      "access": "write",
+      "source": {
+        "file": "server/domain.mjs",
+        "anchor": "action === 'segment.voice'"
+      },
+      "boundary": "Manual selected-segment voice binding through useVoice; one transaction, explicit segment IDs, no model generation or role-default change. Not exposed as a generic assistant action."
     }
   ],
   "operations": [

@@ -1,6 +1,8 @@
 import { fail, same, text } from '../store.mjs';
 import { chmodSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { reserveDiskSpace } from '../disk-space.mjs';
+import { readTextResponse, textDiskBytes, ASSISTANT_RESPONSE_BYTES } from '../text-response.mjs';
 import defaults from './defaults.json' with { type: 'json' };
 
 const settingsId = 'assistant-connection';
@@ -61,6 +63,8 @@ export function createAssistantModel(store, audioConfig, { fetchImpl = (...args)
     const connection = assertReady({ images, expected });
     const key = connection.credentialSource === 'audio' ? audioConfig.key : connection.apiKey;
     const request = { model: connection.model, messages, stream: false };
+    const diskLease=reserveDiskSpace(store.directory,textDiskBytes(request,ASSISTANT_RESPONSE_BYTES),'AI助手文本请求');
+    try {
     let response;
     try {
       response = await fetchImpl(connection.baseUrl + '/chat/completions', { method: 'POST', redirect: 'error',
@@ -69,17 +73,11 @@ export function createAssistantModel(store, audioConfig, { fetchImpl = (...args)
     } catch { error('助手请求中断，结果尚未确认；未自动重复发送', 'outcome-unknown', 502); }
     if (!response.ok) error(`助手服务返回 ${response.status}；请核对连接或现有请求记录`, response.status >= 500 ? 'outcome-unknown' : 'assistant-provider-rejected', response.status >= 500 ? 502 : 400);
     const responseAt = stamp();
-    let bytes = 0, chunks = [], firstByteAt;
-    try {
-      for await (const chunk of response.body) {
-        firstByteAt ||= stamp();
-        bytes += chunk.length;
-        if (bytes > 2 * 1024 * 1024) throw Error('limit');
-        chunks.push(chunk);
-      }
-    } catch { error('助手回复未完整接收，请核对记录；未自动重复发送', 'outcome-unknown', 502); }
+    let firstByteAt, contentText;
+    try { contentText=await readTextResponse(response,ASSISTANT_RESPONSE_BYTES,()=>{firstByteAt ||= stamp();}); }
+    catch { error('助手回复未完整接收，请核对记录；未自动重复发送', 'outcome-unknown', 502); }
     let raw;
-    try { raw = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { error('助手回复格式无效，未执行任何提案', 'assistant-response-invalid'); }
+    try { raw=JSON.parse(contentText); } catch { error('助手回复格式无效，未执行任何提案', 'assistant-response-invalid'); }
     const envelope = raw.data || raw;
     const content = envelope.choices?.[0]?.message?.content ?? envelope.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') ??
       envelope.results?.map(p => p.text || '').join('') ?? envelope.text ?? envelope.output ?? envelope.content ?? envelope.markdown ?? envelope.caption;
@@ -88,6 +86,7 @@ export function createAssistantModel(store, audioConfig, { fetchImpl = (...args)
     if (!reply) error('助手未返回可用内容，未执行任何提案', 'assistant-response-invalid');
     return { content: reply, usage: envelope.usage || null, providerRequestId: response.headers.get('x-request-id') || raw.id || null,
       finishReason: envelope.choices?.[0]?.finish_reason || null, connection: { revision: connection.revision, baseUrl: connection.baseUrl, model: connection.model }, responseAt, firstByteAt: firstByteAt || null, receivedAt: stamp() };
+    } finally { diskLease.release(); }
   }
   return { publicSettings, save, identity, assertReady, generate };
 }

@@ -177,6 +177,7 @@ export interface OperationResult<T = unknown> {
   dependencies?: {chapterId?:string;segmentIds:string[];unitIds:string[];roleIds:string[]};
 }
 export interface GenerationPlan {
+  model?: string;
   actionKind?: "fillMissing"|"updateSelected"|"redoRejected"|"forceRegenerate";
   outstandingAttemptIds?: string[];
   rejectedUnits?: string[];
@@ -185,7 +186,7 @@ export interface GenerationPlan {
   arrangement:number;
   unitIds:string[];
   memberIds:string[];
-  units:{unitId:string;members:string[];mode:"dry"|"scene";reuse:boolean;audioId:string|null;rejected?:boolean;outstandingAttemptIds?:string[]}[];
+  units:{unitId:string;members:string[];mode:"dry"|"scene";reuse:boolean;audioId:string|null;model?:string;referenceVoices?:{voiceId:string;revision:number;fileVersion:string}[];rejected?:boolean;outstandingAttemptIds?:string[]}[];
   textRequests:number;
   audioRequests:number;
 }
@@ -330,6 +331,7 @@ export interface GenerationUnit {
 }
 export interface ActionReadiness {allowed:boolean;blockers:{code:string;scope:{unitId?:string;memberIds?:string[];mode?:"dry"|"scene"};message:string;resolution:string;attemptIds?:string[]}[];warnings:{code:string;message:string}[]}
 export interface ChapterDetail extends Chapter {
+  fidelity?: FidelitySummaryRecord;
   performanceCoverage?:PerformanceCoverage;
   outputDirectory: string;
   arrangementIssues?: string[];
@@ -346,16 +348,17 @@ export interface ChapterDetail extends Chapter {
   suggestions: unknown[];
 }
 export interface State {
-  sceneContract?: {descriptionMax:number;countUnit:string;promptMax:number};
+  sceneContract?: {descriptionMax:number;countUnit:string;promptMax:number;defaultTemplate?:string};
   enhancementTemplates?: {id:string;name:string;description?:string;mode:string;scope:string}[];
   templates: {id: string; name: string; description: string; current: boolean}[];
   projects: Project[];
-  chapters: Chapter[];
+  chapters: Omit<Chapter,"source">[];
   roles: Role[];
   voices: Voice[];
   voiceSessions?: VoiceSession[];
   jobs: Job[];
   settings: {
+    storage?: {freeBytes:number|null;reservedBytes:number;safetyBytes:number;availableBytes:number|null;message?:string}|null;
     scheduler?: SchedulerStatus;
     workspaceIdentity?: string;
     workspaceDirectory: string;
@@ -369,6 +372,18 @@ export interface State {
     defaultGap: number;
     features?: {voiceCreation?: boolean; groups?: boolean; scenes?: boolean};
   };
+}
+
+export interface FidelitySummaryRecord {
+  chapterId: string;
+  projectId: string;
+  scope: {kind:"current"|"historical";arrangement:number;sourceVersion:number};
+  sourceCoverage: {valid:boolean;gaps:number;overlaps:number};
+  textFidelity: {status:"retained"|"edited"|"mismatch"|"unknown";exact:number;punctuationEdits:number;wordEdits:number;unknown:number};
+  participation: {active:number;excluded:number;deleted:number;retired:number;gaps:number;overlaps:number};
+  spokenPayload: {status:"matched"|"mismatch"|"unknown";matched:number;missing:number;mismatches:number};
+  audioProvenance: {originalAvailable:number;originalNotSaved:number;originalUnknown:number;referenceFrozen:number;referenceUnknown:number};
+  listening: {reviewed:number;pending:number;quality:"not-assessed"};
 }
 
 export interface AudioRangeRecord {

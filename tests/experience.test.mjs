@@ -258,7 +258,7 @@ test('场景生成计划核对存在感与指导或已采用事件，干声和�
 test('存在感矛盾不阻断matched场景免费复用或修改旧音频历史，仅阻断重生成',t=>{
   const {d,c,rev,e,store,dir}=setup(t,true),id=d.list(c.id)[0].id;
   d.mutate('unit.update',{chapterId:c.id,revision:rev(),unitId:id,entityRevision:store.get('units',id).revision,mode:'scene',backgroundPresence:'clear',guidance:'背景音乐极微弱，几乎不可闻'});
-  const unit=store.get('units',id),input=d.enhancement.input(unit,'scene',undefined,false,false),audio={id:uid(),path:'old-scene.wav',input,prompt:compile(input),model:input.model};
+  const unit=store.get('units',id);unit.variants.scene.template='scene-v4-presence-1';store.put('units',unit,c.id);const input=d.enhancement.input(unit,'scene',undefined,false,false),audio={id:uid(),path:'old-scene.wav',input,prompt:compile(input),model:input.model};
   writeFileSync(join(dir,audio.path),wav());store.put('audios',audio,c.id);unit.variants.scene.current=audio.id;unit.mode='scene';store.put('units',unit,c.id);
   const before=['chapters','units','audios','jobs','attempts','settings'].map(kind=>store.all(kind)),fetchMock=t.mock.method(globalThis,'fetch',async()=>{throw Error('复用不得发送');});
   assert.equal(d.enhancement.status(unit,'scene').validity,'matched');

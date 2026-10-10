@@ -30,34 +30,40 @@ const format = (frame: number, sampleRate: number) => {
 export const rangePreviewUrl = (range: AudioRangeRecord, fullSource = false) => "/api/audio-ranges/preview?" + new URLSearchParams({ unitId: range.unitId, mode: range.mode, audioId: range.audioId, startFrame: String(fullSource ? 0 : range.startFrame), endFrame: String(fullSource ? range.sourceFrames : range.endFrame) });
 
 export default function SegmentWaveform(props: SegmentWaveformProps) {
+  const {unitId,mode,audioId,chapterId,projectId,lockedReason}=props;
   const root = useRef<HTMLDivElement>(null), [visibleIdentity, setVisibleIdentity] = useState("");
   const [result, setResult] = useState<RangeResponse | null>(null), [error, setError] = useState("");
-  const workspaceId = props.workspaceId ?? draftWorkspace(), identity = [workspaceId, props.unitId, props.mode, props.audioId].join("|");
+  const workspaceId = props.workspaceId ?? draftWorkspace(), identity = [workspaceId, unitId, mode, audioId].join("|");
   const visible = visibleIdentity === identity;
   useEffect(() => {
-    if (!root.current || !props.audioId) return;
+    if (!root.current || !audioId) return;
     if (typeof IntersectionObserver === "undefined") { setVisibleIdentity(identity); return; }
     const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) setVisibleIdentity(identity); });
     observer.observe(root.current); return () => observer.disconnect();
   }, [identity]);
   useEffect(() => {
     setResult(null); setError("");
-    if (!visible || !props.audioId) return;
-    let current = true;
+    if (!visible || !audioId) return;
+    let current = true, loading=false, reload=false;
+    const abort=new AbortController();
     const load = async () => {
+      reload=true;if(loading)return;loading=true;
+      try { while(current&&reload){
+      reload=false;
       try {
-        const response = await api<RangeResponse>("/units/" + encodeURIComponent(props.unitId) + "/audio-range?" + new URLSearchParams({ mode: props.mode, audioId: props.audioId! }));
-        if (!current) return;
-        if (response.range.chapterId !== props.chapterId || response.range.projectId !== props.projectId || response.range.audioId !== props.audioId) throw new Error("声音归属已变化，请重新打开该段。");
+        const response:RangeResponse = await api<RangeResponse>("/units/" + encodeURIComponent(unitId) + "/audio-range?" + new URLSearchParams({ mode, audioId }),undefined,undefined,{signal:abort.signal});
+        if (!current || reload) continue;
+        if (response.range.chapterId !== chapterId || response.range.projectId !== projectId || response.range.audioId !== audioId) throw new Error("声音归属已变化，请重新打开该段。");
         setResult(response); setError("");
-      } catch (failure) { if (current) setError((failure as Error).message); }
+      } catch (failure) { if (current && !reload) setError((failure as Error).message); }
+      } } finally {loading=false;}
     };
     void load();
     const changed = (event: StorageEvent) => { if (event.key === "workbench-change") void load(); };
     const reconnect = () => void load();
     window.addEventListener("storage", changed); window.addEventListener("online", reconnect);
-    return () => { current = false; window.removeEventListener("storage", changed); window.removeEventListener("online", reconnect); };
-  }, [identity, visible, props.chapterId, props.projectId, props.lockedReason]);
+    return () => { current = false;abort.abort(); window.removeEventListener("storage", changed); window.removeEventListener("online", reconnect); };
+  }, [identity, visible, chapterId, projectId, lockedReason]);
   return <div ref={root} className="segment-waveform" data-unit-id={props.unitId} data-audio-id={props.audioId || undefined}>
     {!props.audioId ? <p className="waveform-message">生成声音后可调整起止。</p> : error ? <p className="waveform-message warning" role="status">无法准备波形：{error} <button type="button" onClick={() => { setVisibleIdentity(""); setTimeout(() => setVisibleIdentity(identity), 0); }}>重试</button></p> : result ?
       <WaveformEditor key={identity + "|" + result.range.sourceHash} {...props} workspaceId={workspaceId} result={result} /> : <p className="waveform-message">{visible ? "正在准备真实波形…" : "滚动到此段后显示波形"}</p>}
@@ -65,20 +71,22 @@ export default function SegmentWaveform(props: SegmentWaveformProps) {
 }
 
 function WaveformEditor(props: SegmentWaveformProps & { workspaceId: string; result: RangeResponse }) {
+  const {unitId,mode,audioId,chapterId,workspaceId,lockedReason,sourceTime}=props;
+  const initialRange=props.result.range,sourceEditable=props.result.editable;
   const callbacks = useRef(props); callbacks.current = props;
   const active = useRef(true);
-  const historyAnchor = useRef(props.result.range.lastOperationId);
+  const historyAnchor = useRef(initialRange.lastOperationId);
   const [snapshot, setSnapshot] = useState<RangeSaveSnapshot | null>(null), [frozen, setFrozen] = useState(false);
   const [controller] = useState(() => createAudioRangeSave({
-    range: props.result.range, workspaceId: props.workspaceId, deferSubscribe: true,
+    range: initialRange, workspaceId, deferSubscribe: true,
     onChange: next => { if (active.current) { setSnapshot(next); callbacks.current.onRangeChange?.(next.range, next.dirty); } },
     onSaved: range => { historyAnchor.current = range.lastOperationId; if (active.current) callbacks.current.onSaved?.(range); },
   }));
   const state = snapshot || controller.snapshot(), range = state.range;
   const [gesture, setGesture] = useState<RangeBounds | null>(null);
   const current = useRef(range); current.current = { ...range, ...(gesture || {}) };
-  const shown = current.current, minimum = Math.min(range.sourceFrames, 960), editable = props.result.editable && !props.lockedReason && !frozen;
-  const historyKey = "workbench-audio-range-history/" + encodeURIComponent(props.workspaceId) + "/" + (sessionStorage.getItem("draft-owner") || "page") + "/" + props.unitId + "/" + props.mode + "/" + props.audioId;
+  const shown = current.current, minimum = Math.min(range.sourceFrames, 960), editable = sourceEditable && !lockedReason && !frozen;
+  const historyKey = "workbench-audio-range-history/" + encodeURIComponent(workspaceId) + "/" + (sessionStorage.getItem("draft-owner") || "page") + "/" + unitId + "/" + mode + "/" + audioId;
   const [history, setHistory] = useState<RangeBounds[]>(() => {
     try {
       const record = JSON.parse(localStorage.getItem(historyKey) || "null");
@@ -92,21 +100,21 @@ function WaveformEditor(props: SegmentWaveformProps & { workspaceId: string; res
   const drag = useRef<{ pointer: number; side: "start" | "end"; before: RangeBounds; element: HTMLDivElement } | null>(null);
   const [startText, setStartText] = useState((range.startFrame / range.sampleRate).toFixed(3)), [endText, setEndText] = useState((range.endFrame / range.sampleRate).toFixed(3));
   const [inputSide, setInputSide] = useState<"start" | "end" | null>(null), [inputError, setInputError] = useState("");
-  const inputDraftKey = "audio-range-time-v1/" + props.unitId + "/" + props.mode + "/" + props.audioId;
+  const inputDraftKey = "audio-range-time-v1/" + unitId + "/" + mode + "/" + audioId;
   const inputDraft = useRef<{ start?: string; end?: string }>({});
   const [otherDrafts, setOtherDrafts] = useState<DraftRecord<RangeBounds>[]>([]), [draftError, setDraftError] = useState("");
   const span = range.sourceFrames / zoom, viewStart = clamp(view, 0, Math.max(0, range.sourceFrames - span)), viewEnd = viewStart + span;
   useEffect(() => {
     active.current = true;
     controller.connect();
-    const unregister = registerDraftSave(controller.key, { scope: "chapter:" + props.chapterId, dependencies: [controller.key, "unit:" + props.unitId + "/" + props.mode], state: () => controller.snapshot().status, dirty: controller.dirty, flush: controller.flush, freeze: value => { if (active.current) setFrozen(value); } });
-    if (props.result.editable && !props.lockedReason) controller.start();
+    const unregister = registerDraftSave(controller.key, { scope: "chapter:" + chapterId, dependencies: [controller.key, "unit:" + unitId + "/" + mode], state: () => controller.snapshot().status, dirty: controller.dirty, flush: controller.flush, freeze: value => { if (active.current) setFrozen(value); } });
+    if (sourceEditable && !lockedReason) controller.start();
     const resume = () => { if (controller.dirty() && controller.snapshot().status !== "conflict") void controller.flush().catch(() => {}); };
     const leaving = () => { if (drag.current) cancelGesture(); resume(); };
     window.addEventListener("online", resume); window.addEventListener("pagehide", leaving);
     return () => { active.current = false; window.removeEventListener("online", resume); window.removeEventListener("pagehide", leaving); unregister(); controller.release(); };
   }, [controller]);
-  useEffect(() => controller.refresh(props.result.range), [props.result.range.revision, props.result.range.startFrame, props.result.range.endFrame, controller]);
+  useEffect(() => controller.refresh(initialRange), [initialRange.revision, initialRange.startFrame, initialRange.endFrame, controller]);
   useEffect(() => {
     if (!state.dirty && range.lastOperationId !== historyAnchor.current) { historyAnchor.current = range.lastOperationId; setHistory([]); return; }
     try { localStorage.setItem(historyKey, JSON.stringify({ sourceHash: range.sourceHash, decodeProfile: range.decodeProfile, lastOperationId: historyAnchor.current, ranges: history })); }
@@ -125,7 +133,7 @@ function WaveformEditor(props: SegmentWaveformProps & { workspaceId: string; res
   }, [shown.startFrame, shown.endFrame, inputSide, range.sampleRate]);
   useEffect(() => {
     try {
-      const old = readDraft<{ start?: string; end?: string }>(inputDraftKey, props.workspaceId);
+      const old = readDraft<{ start?: string; end?: string }>(inputDraftKey, workspaceId);
       if (old && [old.draft.start, old.draft.end].every(value => value === undefined || typeof value === "string")) {
         inputDraft.current = old.draft;
         if (old.draft.start !== undefined) setStartText(old.draft.start);
@@ -133,7 +141,7 @@ function WaveformEditor(props: SegmentWaveformProps & { workspaceId: string; res
         setInputError("时间尚未填完，当前播放范围保留。");
       }
     } catch { setInputError("时间暂存无法读取，当前播放范围保留。"); }
-  }, [inputDraftKey, props.workspaceId]);
+  }, [inputDraftKey, workspaceId]);
   useEffect(() => {
     if (!track.current) return;
     const observer = new ResizeObserver(() => setSize(track.current?.clientWidth || 0));
@@ -158,9 +166,12 @@ function WaveformEditor(props: SegmentWaveformProps & { workspaceId: string; res
     const paint = (element: HTMLCanvasElement | null, data: Waveform | null, low: number, high: number, mini = false) => {
       if (!element || !data) return;
       const rect = element.getBoundingClientRect(), w = rect.width, h = rect.height, dpr = window.devicePixelRatio || 1;
-      element.width = Math.round(w * dpr); element.height = Math.round(h * dpr);
+      const width=Math.round(w*dpr),height=Math.round(h*dpr);
+      if(element.width!==width)element.width=width;
+      if(element.height!==height)element.height=height;
       const context = element.getContext("2d"); if (!context) return;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      context.clearRect(0,0,w,h);context.lineWidth=1;
       const x = (frame: number) => (frame - low) / (high - low) * w;
       context.fillStyle = "#f5f7f5"; context.fillRect(0, 0, w, h);
       context.fillStyle = "#e1f2e5";
@@ -174,15 +185,15 @@ function WaveformEditor(props: SegmentWaveformProps & { workspaceId: string; res
         context.beginPath(); context.moveTo(px, h / 2 - clamp(maximum, -1, 1) * h * .45); context.lineTo(px, h / 2 - clamp(minimum, -1, 1) * h * .45); context.stroke();
       }
       if (mini) { context.strokeStyle = "#49845a"; context.lineWidth = 1.5; context.strokeRect(x(viewStart), 1, x(viewEnd) - x(viewStart), h - 2); }
-      else if (props.sourceTime !== undefined) { const px = x(props.sourceTime * range.sampleRate); if (px >= 0 && px <= w) { context.strokeStyle = "#252d28"; context.lineWidth = 1.5; context.beginPath(); context.moveTo(px, 0); context.lineTo(px, h); context.stroke(); } }
+      else if (sourceTime !== undefined) { const px = x(sourceTime * range.sampleRate); if (px >= 0 && px <= w) { context.strokeStyle = "#252d28"; context.lineWidth = 1.5; context.beginPath(); context.moveTo(px, 0); context.lineTo(px, h); context.stroke(); } }
     };
     paint(canvas.current, waveform, viewStart, viewEnd); paint(overview.current, whole.current, 0, range.sourceFrames, true);
-  }, [waveform, shown.startFrame, shown.endFrame, size, viewStart, viewEnd, props.sourceTime]);
+  }, [waveform, shown.startFrame, shown.endFrame, size, viewStart, viewEnd, sourceTime]);
 
   const commit = (bounds: RangeBounds, remember = true) => {
     const before = { startFrame: range.startFrame, endFrame: range.endFrame };
     if (same(before, bounds)) { callbacks.current.onRangeChange?.(range, state.dirty); callbacks.current.onEditCancel?.(range); return; }
-    if (!inputSide && Object.keys(inputDraft.current).length) { inputDraft.current = {}; try { clearDraft(inputDraftKey, undefined, false, props.workspaceId); } catch { /* Current range remains visible. */ } setInputError(""); }
+    if (!inputSide && Object.keys(inputDraft.current).length) { inputDraft.current = {}; try { clearDraft(inputDraftKey, undefined, false, workspaceId); } catch { /* Current range remains visible. */ } setInputError(""); }
     if (remember) setHistory(values => [...values, before].slice(-20));
     controller.edit(bounds); setGesture(null);
   };
@@ -226,13 +237,13 @@ function WaveformEditor(props: SegmentWaveformProps & { workspaceId: string; res
   };
   const changeInput = (side: "start" | "end", text: string) => {
     if (side === "start") setStartText(text); else setEndText(text);
-    const keepDraft = () => { inputDraft.current[side] = text; try { writeDraft(inputDraftKey, inputDraft.current, range.revision, props.workspaceId); } catch { setInputError("时间输入仍在当前页，浏览器未能保存暂存。"); } };
+    const keepDraft = () => { inputDraft.current[side] = text; try { writeDraft(inputDraftKey, inputDraft.current, range.revision, workspaceId); } catch { setInputError("时间输入仍在当前页，浏览器未能保存暂存。"); } };
     if (!text.trim() || !/^\d+(?:\.\d+)?$/.test(text)) { setInputError("时间尚未填完，当前播放范围保留。"); keepDraft(); return; }
     const frame = Math.round(Number(text) * range.sampleRate);
     const bounds = side === "start" ? { startFrame: frame, endFrame: shown.endFrame } : { startFrame: shown.startFrame, endFrame: frame };
     if (!Number.isSafeInteger(frame) || bounds.startFrame < 0 || bounds.endFrame > range.sourceFrames || bounds.endFrame - bounds.startFrame < minimum) { setInputError("起止时间超出范围或间隔过短，当前播放范围保留。"); keepDraft(); return; }
     delete inputDraft.current[side];
-    try { if (Object.keys(inputDraft.current).length) writeDraft(inputDraftKey, inputDraft.current, range.revision, props.workspaceId); else clearDraft(inputDraftKey, undefined, false, props.workspaceId); } catch { /* Keep the numeric value visible even if browser storage is unavailable. */ }
+    try { if (Object.keys(inputDraft.current).length) writeDraft(inputDraftKey, inputDraft.current, range.revision, workspaceId); else clearDraft(inputDraftKey, undefined, false, workspaceId); } catch { /* Keep the numeric value visible even if browser storage is unavailable. */ }
     setInputError(Object.keys(inputDraft.current).length ? "时间尚未填完，当前播放范围保留。" : ""); callbacks.current.onEditStart?.(); commit(bounds);
   };
   const undo = () => {

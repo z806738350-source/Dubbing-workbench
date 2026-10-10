@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compile, compileNativeScene, listTemplates, listUnitTemplates, templateCatalog, resolveCompiler, scenePresenceConflicts, inspectScenePresence } from '../server/templates.mjs';
+import { compile, compileNativeScene, listTemplates, listUnitTemplates, templateCatalog, resolveCompiler, scenePresenceConflicts, inspectScenePresence, sceneIntentConflicts, sceneContract } from '../server/templates.mjs';
 
 const single = () => ({
   template: 'scene-v3-native',
@@ -13,8 +13,56 @@ const single = () => ({
   ],
 });
 
+test('S2新关系版本按已采用类别输出控制，保持单旁白/正文/参考及数值不变',()=>{
+  for(const kinds of [['music'],['environment','effect'],['environment','music','effect']]){
+    const s={...single(),template:'scene-v5-relations-1',backgroundPresence:'clear',config:{speech_rate:0,loudness_rate:0,pitch_rate:0}};
+    s.events=kinds.map(kind=>({id:'adopted-'+kind,kind,memberId:'s1',position:'during',description:({music:'可辨的宁静旋律',environment:'洞内空气的空间质感',effect:'单声水珠落入浅坑'})[kind]}));
+    s.events.push({id:'removed',kind:'music',state:'removed',memberId:'s1',position:'during',description:'已移除的喧闹乐曲'});s.guidance='保持当前已采用声音关系。';
+    const before=structuredClone(s),prompt=compile(s);assert.deepEqual(s,before);assert.equal(prompt.split(s.members[0].text).length,2);assert.match(prompt,/@音频1/);assert.match(prompt,/字词清楚/);assert.doesNotMatch(prompt,/已移除的喧闹乐曲|dB|成年男性|背景强于人声/);
+    for(const kind of kinds)assert.ok(prompt.includes('事件 adopted-'+kind));
+    if(!kinds.includes('music'))assert.doesNotMatch(prompt,/音乐在采用范围|旋律和明确存在感|音乐情绪/);
+    if(!kinds.includes('environment'))assert.doesNotMatch(prompt,/环境声在采用范围|环境声按已选空间/);
+    if(!kinds.includes('effect'))assert.doesNotMatch(prompt,/每个一次性音效|一次性音效按指定动作/);
+    assert.equal(resolveCompiler(s,prompt),'scene-v5-relations-1');assert.equal(templateCatalog.current,'dry-v1');
+  }
+});
+
+test('S2多事件发展均绑定稳定事件ID和真实重复引文，不猜秒数或新事件',()=>{
+  const s={...single(),template:'scene-v5-relations-1',backgroundPresence:'natural'};s.members[0].text='水珠落下。她将水珠接住。水珠落下。';s.guidance='已采用声音按正文动作发展。';
+  s.events=[{id:'drop-one',kind:'effect',memberId:'s1',position:'during',description:'单声水珠落入浅坑',transition:{memberId:'s1',quote:'水珠落下',occurrence:1,development:'这一声落入浅坑后保留回响；接住时不重复这一下落水声'}},{id:'music-one',kind:'music',memberId:'s1',position:'during',description:'宁静器乐',transition:{memberId:'s1',quote:'水珠落下',occurrence:2,development:'旋律转为舒展'}}];
+  const prompt=compile(s);assert.match(prompt,/一次性音效（事件 drop-one）的发展：.*第1次出现“水珠落下”/);assert.match(prompt,/音乐（事件 music-one）的发展：.*第2次出现“水珠落下”/);assert.match(prompt,/接住时不重复这一下落水声/);assert.match(prompt,/音乐（事件 music-one）的音量变化：未指定/);assert.doesNotMatch(prompt,/\d+\s*(?:秒|毫秒|dB)/);
+  s.events[1].transition.occurrence=3;assert.throws(()=>compile(s),/出现序号已失效/);s.events[1].transition.occurrence=2;s.events[1].transition.memberId='other';assert.throws(()=>compile(s),/本单元成员/);
+});
+
+test('S2控制字段漏扫修复：表演、事件发展均可定位；正文和人物声音要求不当背景禁令',()=>{
+  const s={...single(),template:'scene-v5-relations-1',backgroundPresence:'clear'};s.events[1].id='music-one';s.members[0].performance='无音乐';
+  const conflicts=sceneIntentConflicts(s);assert.equal(conflicts.length,1);assert.match(conflicts[0],/members\[0\]\.performance.*音乐.*规则/);assert.throws(()=>compile(s),e=>e.code==='scene-intent-conflict'&&e.status===409);
+  const legacy={...s,template:'scene-v4-presence-1'},saved=compile(legacy);assert.match(saved,/旁白表演：无音乐/);assert.equal(resolveCompiler(legacy,saved),'scene-v4-presence-1','历史v4编译不得新增performance阻断');
+  s.members[0].performance='背景音乐全程几乎不可闻';assert.match(inspectScenePresence(s).conflicts[0],/members\[0\]\.performance/);
+  s.members[0].performance='人声保持干净清楚，不添加笑声';s.members[0].text='她说：“不要音乐。”然后走开。';assert.deepEqual(sceneIntentConflicts(s),[]);assert.deepEqual(inspectScenePresence(s),{conflicts:[],warnings:[]});assert.doesNotThrow(()=>compile(s));
+  s.events[1].transition={memberId:'s1',quote:'走开',occurrence:1,development:'背景音乐全程几乎不可闻'};assert.match(inspectScenePresence(s).conflicts[0],/music.*events\[1\]\.transition\.development/);
+  s.events[1].transition.development='音乐情绪转为宁静，旋律仍清楚';assert.deepEqual(inspectScenePresence(s),{conflicts:[],warnings:[]});s.members[0].performance='全程几乎不可闻';const before=structuredClone(s),inspection=inspectScenePresence(s);assert.equal(inspection.conflicts.length,0);assert.match(inspection.warnings[0],/members\[0\]\.performance.*对象.*范围/);assert.deepEqual(s,before);
+});
+
+test('S2明确朗读动词引用本成员逐字正文，不把字词重读当背景音量要求',()=>{
+  for(const performance of ['强调“音乐几乎听不到”，句末收轻。','读出「音乐几乎听不到」，语气干脆。','念出『音乐几乎听不到』，语速稍缓。','重音落在 “音乐几乎听不到”，随后收句。']){
+    const s={...single(),template:'scene-v5-relations-1',backgroundPresence:'clear'};s.members[0].text='她说：“音乐几乎听不到。”';s.members[0].performance=performance;const before=structuredClone(s);
+    assert.deepEqual(inspectScenePresence(s),{conflicts:[],warnings:[]});assert.deepEqual(sceneIntentConflicts(s),[]);assert.ok(compile(s).includes(performance));assert.deepEqual(s,before);
+    const legacy={...s,template:'scene-v4-presence-1'},prompt=compile(legacy);assert.ok(prompt.includes(performance));assert.equal(resolveCompiler(legacy,prompt),'scene-v4-presence-1');
+  }
+});
+
+test('S2非正文/非本成员/非朗读引用仍检查，朗读引用不遮住后续及其他字段的控制要求',()=>{
+  const s={...single(),template:'scene-v5-relations-1',backgroundPresence:'clear'};s.members[0].text='她说：“音乐几乎听不到。”';s.guidance='旋律清楚可辨。';
+  for(const performance of ['让背景保持“音乐几乎听不到”的音量。','强调“音乐几乎听不清”，句末收轻。','强调“音乐几乎听不到”；音乐全程几乎听不到。']){s.members[0].performance=performance;assert.equal(inspectScenePresence(s).conflicts.length,1,performance);assert.throws(()=>compile(s),e=>e.code==='scene-intent-conflict');}
+  s.members[0].text='她站在窗前。';s.members.push({id:'other',roleId:'narrator',text:'音乐几乎听不到。',performance:''});s.members[0].performance='强调“音乐几乎听不到”。';assert.equal(inspectScenePresence(s).conflicts.length,1,'其他成员正文不能替本成员证明引文');
+  s.members=s.members.slice(0,1);s.members[0].text='她说：“音乐几乎听不到。”';s.members[0].performance='强调“音乐几乎听不到”，句末收轻。';
+  s.guidance='背景音乐保持“几乎听不到”。';assert.match(inspectScenePresence(s).conflicts[0],/guidance/);s.guidance='旋律清楚可辨。';s.events[1].description='背景音乐保持“几乎听不到”。';assert.match(inspectScenePresence(s).conflicts[0],/events\[1\]\.description/);
+});
+
 test('native 场景为明确试验白名单，不改变默认或旧模板策略', () => {
   assert.equal(templateCatalog.current,'dry-v1');
+  assert.equal(sceneContract.defaultTemplate,'scene-v4-presence-1','听评选用v4为新场景默认，v5仍需明确选择');
   assert.deepEqual(listTemplates().map(t=>t.id),['dry-v1']);
   const template=listUnitTemplates().find(t=>t.id==='scene-v3-native');
   assert.equal(template.mode,'scene');assert.equal(template.scope,'unit');assert.match(template.name,/试验/);

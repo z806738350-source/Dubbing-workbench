@@ -867,3 +867,32 @@ test('章节目录状态由当前内容和任务推导，不把旧失败或全�
   update('segment.update',{id:first.id,excluded:false});first=store.get('segments',first.id);first.source.spans=[];store.put('segments',first,c.id);assert.equal(state(),'待校对');
   assert.equal(store.get('chapters',c.id).productionStatus,undefined,'状态只用于展示，不持久化成第二份事实');
 });
+
+test('章节快照只读取一次选中单元音频状态，原chapter详细检查仍保留',t=>{
+  const {store,d,c,role,v,update}=setup(t);
+  update('role.update',{id:role.id,voiceId:v.id});update('segment.confirm',{ids:d.list(c.id).map(s=>s.id)});
+  const audioIds=new Set();
+  for(const s of d.list(c.id)){const audio={id:uid(),path:v.path,input:inputOf(s),prompt:compile(s)};audioIds.add(audio.id);store.put('audios',audio,c.id);s.current=audio.id;store.put('segments',s,c.id);}
+  const maybe=store.maybe.bind(store);let reads=0;
+  const mocked=t.mock.method(store,'maybe',(table,id)=>{if(table==='audios'&&audioIds.has(id))reads++;return maybe(table,id);});
+  try{const state=d.snapshot().chapters.find(row=>row.id===c.id);assert.equal(state.productionStatus,'待检查');assert.equal(reads,audioIds.size,'不能先检查legacy片段再重复检查选中单元');}
+  finally{mocked.mock.restore();}
+  const chapter=d.chapter(c.id);assert.ok(chapter.segments.every(s=>s.validity==='matched'&&s.prompt.length));assert.ok(chapter.playbackItems.every(item=>item.validity==='matched'));
+});
+
+test('快照只按选中组/scene状态显示，legacy干声unknown不盖住已审核结果，角色保护保留',t=>{
+  const {store,d,c,role,v,update}=setup(t);
+  update('role.update',{id:role.id,voiceId:v.id});const ids=d.list(c.id).map(s=>s.id);update('segment.confirm',{ids});
+  const models=store.maybe('settings','models')||{id:'models'};models.features={...models.features,groups:true,scenes:true};store.put('settings',models);
+  let unit=update('unit.create',{ids});unit=store.get('units',unit.id);unit.state='active';
+  for(const s of d.list(c.id)){s.current=null;s.latest='unknown';store.put('segments',s,c.id);}
+  for(const mode of ['dry','scene']){
+    unit.mode=mode;store.put('units',unit,c.id);const input=d.enhancement.input(unit,mode),audio={id:uid(),path:v.path,input,prompt:compile(input),model:input.model};store.put('audios',audio,c.id);
+    unit.variants[mode]={...unit.variants[mode],current:audio.id,latest:'success',review:{audioId:audio.id,basis:d.enhancement.basis(unit,mode),state:'passed'}};store.put('units',unit,c.id);
+    assert.equal(d.snapshot().chapters.find(row=>row.id===c.id).productionStatus,'已检查',mode);
+    const detail=d.chapter(c.id);assert.equal(detail.playbackItems.length,1);assert.equal(detail.playbackItems[0].validity,'matched');assert.equal(detail.playbackItems[0].review,'passed');assert.ok(detail.segments.every(s=>s.validity==='missing'),'保留原chapter的legacy逐段检查');
+    unit=store.get('units',unit.id);
+  }
+  unit.variants.scene.latest='unknown';store.put('units',unit,c.id);assert.equal(d.snapshot().chapters.find(row=>row.id===c.id).productionStatus,'结果待核对');
+  const member=store.get('segments',ids[0]);member.roleConfirmed=false;store.put('segments',member,c.id);assert.equal(d.snapshot().chapters.find(row=>row.id===c.id).productionStatus,'待确认');
+});

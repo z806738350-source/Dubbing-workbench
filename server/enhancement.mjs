@@ -29,7 +29,7 @@ export function createEnhancement(store, d) {
   const enabled = key => { if (!features()[key]) fail('此增强功能已关闭，已有资源仍可查看和处理'); };
   function syncLegacySegment(s) {
     let u = store.maybe('units', s.id);
-    if (!u) u = { id: s.id, chapterId: s.chapterId, kind: 'single', members: [s.id], state: 'active', revision: 1, membershipRevision: 1, mode: 'dry', guidance: '', variants: { dry: variant(), scene: {...variant(),template:'scene-v4-presence-1',backgroundPresence:'clear'} }, createdAt: stamp() };
+    if (!u) u = { id: s.id, chapterId: s.chapterId, kind: 'single', members: [s.id], state: 'active', revision: 1, membershipRevision: 1, mode: 'dry', guidance: '', variants: { dry: variant(), scene: {...variant(),template:sceneContract.defaultTemplate,backgroundPresence:'clear'} }, createdAt: stamp() };
     u.state = s.retired ? 'retired' : 'active';
     const before = u.variants.dry;
     const dry = { ...before, current: s.current || null, previous: s.previous || null, approved: s.approved || null, review: s.review || null, latest: s.latest || 'none' };
@@ -39,7 +39,7 @@ export function createEnhancement(store, d) {
     }
     return u;
   }
-  const syncLegacy = () => { for (const s of store.all('segments')) syncLegacySegment(s); };
+  const syncLegacy = chapterId => { for (const s of store.all('segments',chapterId)) syncLegacySegment(s); };
   store.transaction(() => {
     const schema = store.maybe('settings', 'data-schema');
     if (schema && schema.version > 4) fail('数据模式高于此版本，请使用匹配版本或恢复对应备份');
@@ -109,14 +109,14 @@ export function createEnhancement(store, d) {
     let sceneTemplate = 'scene-v1';
     if (mode === 'scene' && !v.template && !v.resolvedCompilerId && !v.current && !v.previous && !v.approved && !store.unitHistory(u,'scene',[]).length) {
       const pending = store.all('jobs',u.chapterId).filter(j=>active(j) || j.status==='unknown').flatMap(j=>store.all('attempts',j.id)).find(a=>a.targetKind==='unit' && (a.unitId || a.targetId || a.input?.unitId)===u.id && (a.mode || a.input?.mode)==='scene' && ['queued','sending','unknown'].includes(a.status));
-      sceneTemplate = pending?.input?.template || (pending ? 'scene-v1' : 'scene-v4-presence-1');
+      sceneTemplate = pending?.input?.template || (pending ? 'scene-v1' : sceneContract.defaultTemplate);
     }
     const template = v.template || (mode === 'scene' ? sceneTemplate : u.kind === 'single' ? first.template : 'dialogue-dry-v1');
-    if (forGeneration && mode === 'scene' && v.backgroundPresence && v.backgroundPresence !== 'unspecified' && (v.resolvedCompilerId || template) !== 'scene-v4-presence-1') fail('所选背景存在感尚未生效，请先核对并使用存在感模板；本次未发送');
+    if (forGeneration && mode === 'scene' && v.backgroundPresence && v.backgroundPresence !== 'unspecified' && !['scene-v4-presence-1','scene-v5-relations-1'].includes(v.resolvedCompilerId || template)) fail('所选背景存在感尚未生效，请先核对并使用存在感模板；本次未发送');
     const input = { targetKind: 'unit', unitId: u.id, mode, model: model || first.model || 'seed-audio-1.0', template, config: first.config, members: rows.map(s => ({ id: s.id, roleId: s.roleId, type: s.type, text: s.text, voiceId: s.voiceId, performance: s.performance })), slots, referenceVoiceIds, guidance, events: selected.map(eventInput), ...(mode==='scene' && v.backgroundPresence ? {backgroundPresence:v.backgroundPresence} : {}), ...(v.resolvedCompilerId ? {compilerId:v.resolvedCompilerId} : {}) };
-    if (template==='scene-v4-presence-1') input.constraintSources={guidance:v.guidanceSource || {kind:guidance?'inherited_user':'system_default'},backgroundPresence:v.backgroundPresenceSource || {kind:'system_default'},events:selected.map(e=>({id:e.id,source:e.source || {kind:e.evidence?.suggestionId?'adopted_ai':'inherited_user'}}))};
+    if (['scene-v4-presence-1','scene-v5-relations-1'].includes(template)) input.constraintSources={guidance:v.guidanceSource || {kind:guidance?'inherited_user':'system_default'},backgroundPresence:v.backgroundPresenceSource || {kind:'system_default'},events:selected.map(e=>({id:e.id,source:e.source || {kind:e.evidence?.suggestionId?'adopted_ai':'inherited_user'}}))};
     if (u.kind === 'single' && mode === 'dry') Object.assign(input, d.inputOf(first), v.template ? {template:v.template} : {});
-    if (forGeneration && mode === 'scene') { const conflicts=scenePresenceConflicts(input); if (conflicts.length) fail(conflicts.join('；')+'；请修改背景描述或共同要求后再生成，本次未发送',409); }
+    if (forGeneration && mode === 'scene') { const conflicts=[...sceneIntentConflicts(input),...scenePresenceConflicts(input)]; if (conflicts.length) fail(conflicts.join('；')+'；请修改背景描述或共同要求后再生成，本次未发送',409); }
     if (!validatePrompt) return input;
     const prompt = compile(input);
     if (Array.from(prompt).length > sceneContract.promptMax) fail('完整提示超过 3000 字符，请缩减指导或拆小范围；未发送');
@@ -257,7 +257,7 @@ export function createEnhancement(store, d) {
     const rows = d.list(c.id), start = rows.findIndex(s => s.id === p.ids[0]);
     if (!same(rows.slice(start, start + p.ids.length).map(s => s.id), p.ids) || rows.slice(start, start + p.ids.length).some(s => s.excluded)) fail('只能选择同章按真实顺序连续的有效台词');
     if (store.all('units', c.id).some(u => u.kind === 'group' && ['active', 'pending'].includes(u.state) && u.members.some(id => p.ids.includes(id)))) fail('成员已属于活动或待生成组，请先解除', 409);
-    const u = { id: uid(), chapterId: c.id, kind: 'group', members: p.ids, state: 'pending', revision: 1, membershipRevision: 1, mode: 'dry', guidance: p.guidance || '', variants: { dry: variant(), scene: {...variant(),template:'scene-v4-presence-1',backgroundPresence:'clear'} }, createdAt: stamp() };
+    const u = { id: uid(), chapterId: c.id, kind: 'group', members: p.ids, state: 'pending', revision: 1, membershipRevision: 1, mode: 'dry', guidance: p.guidance || '', variants: { dry: variant(), scene: {...variant(),template:sceneContract.defaultTemplate,backgroundPresence:'clear'} }, createdAt: stamp() };
     if (typeof u.guidance !== 'string' || u.guidance.length > 2000) fail('组指导最多 2000 字');
     u.variants.dry.guidance = u.guidance;
     const input = buildInput(u, 'dry', undefined, true);
@@ -282,10 +282,10 @@ export function createEnhancement(store, d) {
       if (!u.members.includes(e.memberId) || !positions.includes(e.position)) fail('事件锚点必须是本单元的明确成员ID及位置');
     }
     if (e.transition) {
-      if (e.kind !== 'music') fail('转折发展仅用于音乐事件');
+      if (e.kind !== 'music' && (u.variants.scene.resolvedCompilerId || u.variants.scene.template) !== 'scene-v5-relations-1') fail('环境声或音效的正文触发与发展需要关系模板；旧版本转折发展仅用于音乐事件');
       assertQuoteAnchor(members(u),e.transition);
       const ids = e.startMemberId ? u.members.slice(u.members.indexOf(e.startMemberId),u.members.indexOf(e.endMemberId)+1) : [e.memberId];
-      if (!ids.includes(e.transition.memberId)) fail('转折引文必须在该音乐的采用范围内');
+      if (!ids.includes(e.transition.memberId)) fail('转折引文必须在该声音事件的采用范围内');
     }
   }
   function validateEvent(u, item) {
@@ -320,9 +320,10 @@ export function createEnhancement(store, d) {
     return records.map(e => eventView(e, u));
   }
   function snapshot() {
-    return { schemaVersion: 3, sceneContract, features: features(), voiceSessions: store.all('voiceSessions').map(s => ({ ...s, candidates: store.all('jobs').filter(j => j.sessionId === s.id).flatMap(j => store.all('attempts', j.id).map(a => {
+    const jobs=store.db.prepare("SELECT id,json_extract(data,'$.error') AS error FROM jobs WHERE COALESCE(json_extract(data,'$.sessionId'),json_extract(data,'$.target.sessionId'))=? ORDER BY rowid");
+    return { schemaVersion: 3, sceneContract, features: features(), voiceSessions: store.all('voiceSessions').map(s => ({ ...s, candidates: jobs.all(s.id).flatMap(j => store.all('attempts', j.id).map(a => {
       const audio = store.maybe('audios', a.id), saved = store.maybe('voices', a.id);
-      return { id: a.id, jobId: j.id, status: a.status, error: a.error || j.error, audioId: audio?.id, savedVoiceId: saved?.sourceAudioId === a.id ? saved.id : undefined, input: a.input, prompt: a.prompt, referenceEligible: !!audio && !storedAudioUnavailable(store,audio) && audio.duration > 0 && audio.duration <= 30 && /^(wav|mp3)$/.test(audio.format || '') && existsSync(join(store.directory, audio.path)) && statSync(join(store.directory, audio.path)).size > 0 && statSync(join(store.directory, audio.path)).size <= 10 * 1024 * 1024, discarded: !!a.discarded, late: a.adopted === false };
+      return { id: a.id, jobId: j.id, status: a.status, error: a.error || j.error || undefined, audioId: audio?.id, savedVoiceId: saved?.sourceAudioId === a.id ? saved.id : undefined, input: a.input, prompt: a.prompt, referenceEligible: !!audio && !storedAudioUnavailable(store,audio) && audio.duration > 0 && audio.duration <= 30 && /^(wav|mp3)$/.test(audio.format || '') && existsSync(join(store.directory, audio.path)) && statSync(join(store.directory, audio.path)).size > 0 && statSync(join(store.directory, audio.path)).size <= 10 * 1024 * 1024, discarded: !!a.discarded, late: a.adopted === false };
     })) })) };
   }
   function prepare(p, config) {
@@ -373,7 +374,7 @@ export function createEnhancement(store, d) {
     const later = hasNewerAttempt(store.all('attempts'), a, v => v.targetKind === 'unit' && (v.unitId || v.targetId) === u.id && v.mode === a.mode);
     if (!active(job) || ['dissolved','retired'].includes(u.state) || later || c.revision !== job.revision || u.revision !== a.unitRevision || !same(basis(u, a.mode), a.basis)) return false;
     const v = u.variants[a.mode], old = v.current;
-    if (a.mode === 'scene' && !v.template && !v.resolvedCompilerId && a.input.template === 'scene-v4-presence-1') v.template = a.input.template;
+    if (a.mode === 'scene' && !v.template && !v.resolvedCompilerId && ['scene-v4-presence-1','scene-v5-relations-1'].includes(a.input.template)) v.template = a.input.template;
     if (old !== audio.id) v.previous = old;
     v.current = audio.id; v.review = null; v.latest = 'success';
     const changed = u.mode !== a.mode || u.state === 'pending' || old !== audio.id;

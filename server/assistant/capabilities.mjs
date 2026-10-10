@@ -103,6 +103,7 @@ define('job.master', '免费准备整章试听母版', {}, [], { handler: 'worke
 define('job.voice-test', '用已有参考朗读指定测试文字', { voiceId: id, text: string(300) }, ['voiceId', 'text'], { handler: 'worker.submit', chapter: false, access: 'paid', cost: 'one-audio-request', help: 'voices' });
 define('voice.save-candidate', '免费把合格候选保存到音色库', { audioId: id, name: string(100) }, ['audioId', 'name'], { chapter: false, handler: 'saveCandidateVoice', help: 'voice-create' });
 define('read.performanceCoverage','免费读取当前章有效台词的表演覆盖、保留与缺口',{ids,analysisId:id},[],{access:'read',handler:'analysis.coverage',help:'analysis'});
+define('read.fidelity','只读核对原字、有效参与、冻结正文、参考字节和原件来源；不能证明实际念全或声景达标',{arrangement:number(0,Number.MAX_SAFE_INTEGER,true),cursor:string(100),limit:pageFields.limit},[],{access:'read',handler:'domain.fidelity',help:'fidelity'});
 define('read.outputs','发现本章真实母版与成品，按任务、操作、格式和编排查询',{jobId:id,operationId:id,format:values('wav','mp3'),arrangement:number(0,Number.MAX_SAFE_INTEGER,true),cursor:string(100),limit:pageFields.limit},[],{access:'read',handler:'bounded outputs',help:'export'});
 define('export.reveal', '在本机访达中定位已保存成品', { id }, ['id'], { target: 'exports', handler: 'revealExport', access: 'ui-only', help: 'export' });
 define('audio.tail.repair','免费预览并清理所选纯人声的尾部异常，保留原件',{unitIds:ids},['unitIds'],{handler:'repairAudio',help:'original-audio'});
@@ -246,6 +247,7 @@ export function createCapabilities({ store, domain, worker, analysis, experience
     if (def.access !== 'read') fail('该能力不是读取操作');
     if (id === 'help.search') return getHelp(input);
     if (id==='read.performanceCoverage') return analysis.coverage(bound.chapter.id,input);
+    if (id==='read.fidelity') return domain.fidelity({...input,chapterId:bound.chapter.id,projectId:scope.projectId});
     if (id==='read.outputs') return outputs(input,scope);
     if (id==='read.audioRange') return resolveAudioRange(store,input.unitId,input.mode,input.audioId);
     if (id === 'generation.plan') return experience.plan({ ...p, kind: 'generateSelection' });

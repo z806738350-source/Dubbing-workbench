@@ -19,8 +19,10 @@ import { createExperience } from './experience.mjs';
 import { createActionExecutor } from './actions.mjs';
 import { createAssistant } from './assistant/service.mjs';
 import { previewTailRepair, applyTailRepair } from './tail-maintenance.mjs';
-import { resolveAudioRange, updateAudioRange, undoAudioRange, getRangeOperation, audioWaveform, rangeResource } from './audio-range.mjs';
-import { workspaceDirectory, workspaceIdentity, workspaceConfig as defaultWorkspaceConfig, copyWorkspace, saveWorkspaceLocation, recoverProjectFolders, chooseWorkspaceDirectory, readRuntime, workspaceDiagnostics, revealExport, revealOutput } from './workspace.mjs';
+import { resolveAudioRange, updateAudioRange, undoAudioRange, getRangeOperation, audioWaveform, rangeResource, audioRangeActivity, pruneAudioRangeCache, renderIdentity } from './audio-range.mjs';
+import { createStorageMaintenance } from './storage-maintenance.mjs';
+import { diskStatus, DISK_SAFETY_BYTES } from './disk-space.mjs';
+import { workspaceDirectory, workspaceIdentity, workspaceConfig as defaultWorkspaceConfig, copyWorkspace, saveWorkspaceLocation, recoverProjectFolders, chooseWorkspaceDirectory, readRuntime, workspaceDiagnostics, locateDraftChapters, revealExport, revealOutput } from './workspace.mjs';
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 if (existsSync(join(root, ".env.kunpo")))
@@ -67,7 +69,7 @@ export async function startServer({
   await writeFile(runtime, JSON.stringify({ pid: process.pid, port }), {
     flag: "wx",
   });
-  let store, domain, worker, analysis, experience, audioTools, assistant, executeAction;
+  let store, domain, worker, analysis, experience, audioTools, assistant, executeAction, storageMaintenance;
   try {
     store = openStore(directory);
     domain = createDomain(store);
@@ -124,7 +126,34 @@ export async function startServer({
     }
   }
   const referenceReads = new Map();
-  let activeRequests = 0, moving = false, closing = false, movePromise = null, audioMaintenance = null, choosingDirectory = false;
+  let activeRequests = 0, moving = false, closing = false, movePromise = null, audioMaintenance = null, choosingDirectory = false, storageTask = null, storageController = null, lastStorageSweep = Date.now(), storageSweepDelay = 60000;
+  const connectStorage = () => { storageMaintenance = createStorageMaintenance(store); };
+  connectStorage();
+  const storageCapacity = () => { try { return diskStatus(directory); } catch (error) { return { freeBytes: null, availableBytes: null, reservedBytes: 0, safetyBytes: DISK_SAFETY_BYTES, message: error.message }; } };
+  const storageIdle = () => {
+    const ranges = audioRangeActivity();
+    return !moving && !closing && !audioMaintenance && !choosingDirectory && !activeRequests && !worker.running && !assistant.active && !storageMaintenance.restoringCount && !ranges.active && !ranges.queued && !ranges.preparing && !ranges.clips && !ranges.waves &&
+      !store.db.prepare("SELECT 1 FROM jobs WHERE json_extract(data,'$.status')='running' LIMIT 1").get() &&
+      (worker.storagePressure || !store.db.prepare("SELECT 1 FROM jobs WHERE json_extract(data,'$.status')='queued' LIMIT 1").get()) &&
+      !store.db.prepare("SELECT 1 FROM suggestions WHERE json_extract(data,'$.status')='running' LIMIT 1").get() &&
+      !store.db.prepare("SELECT 1 FROM assistantRuns WHERE json_extract(data,'$.state') IN ('planning','executing') LIMIT 1").get() &&
+      (worker.storagePressure || !store.db.prepare("SELECT 1 FROM assistantRuns WHERE json_extract(data,'$.state')='waitingJobs' LIMIT 1").get());
+  };
+  function maintainStorage() {
+    if (storageTask) return storageTask;
+    if (!audioTools || !storageIdle()) return Promise.resolve({ skipped: 'workspace-busy' });
+    lastStorageSweep = Date.now();
+    storageController = new AbortController();
+    // Bound each pass; drain a backlog sooner while foreground work can interrupt.
+    storageTask = (async () => {
+      const cache = await pruneAudioRangeCache(store, { keep: storageMaintenance.readPaths, maxBytes: worker.storagePressure ? 0 : 1024 ** 3 });
+      const masters = await storageMaintenance.cleanupMasters({ limit: 1, signal: storageController.signal });
+      storageSweepDelay = masters.reclaimed.length && !masters.aborted ? 1000 : 60000;
+      return { masters, cache };
+    })().catch(error => { storageSweepDelay = 60000; throw error; });
+    storageTask.finally(() => { storageTask = null; storageController = null; }).catch(() => {});
+    return storageTask;
+  }
   async function repairAudio(p) {
     if (closing || moving || audioMaintenance) fail('本地维护正在进行，请等当前处理完成', 409);
     if (p.phase === 'preview') {
@@ -149,6 +178,9 @@ export async function startServer({
   }
   connectAssistant();
   async function serveFile(req, res, file, type) {
+    const release = storageMaintenance.acquireRead(file);
+    let source;
+    try {
     const info = await stat(file);
     const headers = {
       "Content-Type": type,
@@ -157,6 +189,7 @@ export async function startServer({
       "Cache-Control": "no-cache",
     };
     const range = req.headers.range;
+    let options;
     if (range) {
       const match = /^bytes=(\d+)-(\d*)$/.exec(range);
       if (!match) fail("音频范围无效", 416);
@@ -170,11 +203,16 @@ export async function startServer({
         "Content-Range": `bytes ${start}-${end}/${info.size}`,
         "Content-Length": end - start + 1,
       });
-      createReadStream(file, { start, end }).on('error', () => res.destroy()).pipe(res);
+      options={start,end};
     } else {
       res.writeHead(200, { ...headers, "Content-Length": info.size });
-      createReadStream(file).on('error', () => res.destroy()).pipe(res);
     }
+    if(req.method==='HEAD' || req.aborted || res.destroyed)return res.end();
+    source=createReadStream(file,options);const stop=()=>source.destroy();
+    res.once('close',stop);req.once('aborted',stop);
+    source.once('close',()=>{res.off('close',stop);req.off('aborted',stop);release();});
+    source.on('error',()=>res.destroy()).pipe(res);
+    } finally { if (!source) release(); }
   }
   const server = http.createServer(async (req, res) => {
     let counted = false;
@@ -194,6 +232,11 @@ export async function startServer({
       )
         fail("跨站请求已拒绝", 403);
       const path = new URL(req.url, `http://${host}`).pathname;
+      // Small read-only polling must not starve maintenance; user work takes priority.
+      if (storageTask && !(req.method === 'GET' && (path === '/api/state' || /^\/api\/chapters\/[^/]+(?:\/playback-status)?$/.test(path) || /^\/api\/jobs\/[^/]+\/progress$/.test(path)))) {
+        storageController?.abort();
+        await storageTask.catch(() => {});
+      }
       if (moving || closing) fail('工作区正在迁移或停止，请稍后重试；未保存内容请保留', 503);
       if (audioMaintenance && req.method !== 'GET' && !/\/assistant\/runs\/[^/]+\/control$/.test(path)) fail('音频维护正在保存，请稍后操作；已有编辑请保留', 409);
       activeRequests++;
@@ -210,7 +253,7 @@ export async function startServer({
       if(req.method==='POST'&&path==='/api/audio-ranges/update')return send(res,200,await updateAudioRange(store,await body(req)));
       if(req.method==='POST'&&path==='/api/audio-ranges/undo')return send(res,200,await undoAudioRange(store,await body(req)));
       if(req.method==='GET'&&/^\/api\/audio-ranges\/operations\/[^/]+$/.test(path))return send(res,200,getRangeOperation(store,decodeURIComponent(path.split('/').at(-1))));
-      if(req.method==='GET'&&path==='/api/audio-ranges/preview'){
+      if(['GET','HEAD'].includes(req.method)&&path==='/api/audio-ranges/preview'){
         const q=new URL(req.url,`http://${host}`).searchParams,options={unitId:q.get('unitId'),mode:q.get('mode') || 'dry',audioId:q.get('audioId')};
         for(const key of ['startFrame','endFrame'])if(q.has(key))options[key]=Number(q.get(key));
         // URL identity is validation only; recipes come from the canonical source.
@@ -233,9 +276,9 @@ export async function startServer({
       if (req.method === 'POST' && path === '/api/workspace/move') {
         const p = await body(req);
         if (p.source !== directory) fail('保存位置已改变，请重新打开设置后再操作', 409);
-        if (activeRequests !== 1 || referenceReads.size || worker.running || assistant.active ||
+        if (activeRequests !== 1 || referenceReads.size || storageMaintenance.readPaths.length || worker.running || assistant.active ||
             store.all('assistantRuns').some(r => ['planning', 'executing', 'waitingJobs'].includes(r.state)) ||
-            store.all('jobs').some(j => ['queued', 'running'].includes(j.status)) ||
+            store.all('jobs').some(j => j.status === 'running' || j.status === 'queued' && (!worker.storagePressure || !['generate','voice-test','voice-create','unit-generate'].includes(j.kind))) ||
             store.all('suggestions').some(s => s.status === 'running'))
           fail('仍有任务或资料正在处理，请等任务结束、停止试听后再迁移', 409);
         moving = true;
@@ -256,6 +299,7 @@ export async function startServer({
             directory = target;
             runtime = join(target, 'runtime.json');
             store = nextStore; domain = nextDomain; worker = nextWorker; analysis = nextAnalysis;
+            connectStorage();
             experience = createExperience(store,domain,worker,analysis,config);
             connectAssistant();
             await rm(oldRuntime, { force: true }).catch(() => console.warn('旧位置运行标记未能移除；原资料仍保留。'));
@@ -313,6 +357,7 @@ export async function startServer({
             textModel: textModel(store),
             defaultGap: store.maybe("settings", "models")?.defaultGap ?? 0.5,
             workspaceDirectory: directory,
+            storage: storageCapacity(),
             workspaceIdentity: workspaceIdentity(directory),
             runtimePid: process.pid,
             projectFolders: !!store.maybe('settings', 'project-folders')?.enabled,
@@ -323,7 +368,8 @@ export async function startServer({
         });
       if (req.method === "GET" && /^\/api\/voices\/[^/]+\/usage$/.test(path))
         return send(res, 200, domain.voiceUsage(path.split("/")[3]));
-      if (req.method === 'GET' && path === '/api/workspace/diagnostics') return send(res,200,workspaceDiagnostics(store));
+      if (req.method === 'GET' && path === '/api/workspace/diagnostics') return send(res,200,{...workspaceDiagnostics(store),capacity:storageCapacity()});
+      if (req.method === 'POST' && path === '/api/drafts/locate') return send(res,200,locateDraftChapters(store,(await body(req)).ids));
       if (req.method === 'POST' && /^\/api\/exports\/[^/]+\/reveal$/.test(path))
         return send(res, 200, await revealExport(store, decodeURIComponent(path.split('/')[3])));
       if (req.method === 'POST' && /^\/api\/outputs\/(master|export)\/[^/]+\/reveal$/.test(path)) {
@@ -331,10 +377,17 @@ export async function startServer({
         if (Object.keys(p).some(key=>!['chapterId','projectId'].includes(key))) fail('成品定位参数无效');
         const record=store.get(kind==='master'?'masters':'exports',id),chapter=store.get('chapters',p.chapterId);
         if (record.chapterId!==chapter.id || p.projectId && p.projectId!==chapter.projectId) fail('成品不属于当前任务范围',403);
-        return send(res,200,await revealOutput(store,kind,id));
+        const release = storageMaintenance.acquireRead(join(directory,record.path));
+        try { if (kind === 'master') await storageMaintenance.ensureMasterFile(id);return send(res,200,await revealOutput(store,kind,id)); }
+        finally { release(); }
       }
-      if (req.method === 'GET' && /^\/api\/chapters\/[^/]+\/(performance-coverage|outputs)$/.test(path)) {
+      if (req.method === 'GET' && /^\/api\/chapters\/[^/]+\/(performance-coverage|outputs|fidelity)$/.test(path)) {
         const chapterId=decodeURIComponent(path.split('/')[3]),p=Object.fromEntries(new URL(req.url,`http://${host}`).searchParams);
+        if(path.endsWith('/fidelity')) {
+          if(Object.keys(p).some(key=>!['projectId','arrangement','limit','cursor'].includes(key)))fail('保真查询参数无效');
+          for(const key of ['arrangement','limit'])if(p[key]!==undefined)p[key]=Number(p[key]);
+          return send(res,200,domain.fidelity({...p,chapterId}));
+        }
         if(path.endsWith('/performance-coverage')) {
           if(Object.keys(p).some(key=>!['ids','analysisId'].includes(key))) fail('表演覆盖查询参数无效');
           if(p.analysisId && store.get('suggestions',p.analysisId).chapterId!==chapterId) fail('分析不属于本章',403);
@@ -350,6 +403,18 @@ export async function startServer({
         return send(res, 200, domain.structuralRepairPlan({ chapterId: path.split('/')[3] }));
       if (req.method === 'GET' && path === '/api/diagnostics/compiler-compatibility')
         return send(res, 200, domain.enhancement.compilerCompatibility());
+      if (req.method === 'GET' && /^\/api\/chapters\/[^/]+\/playback-status$/.test(path)) {
+        const id=decodeURIComponent(path.split('/')[3]),chapter=store.get('chapters',id);
+        const {rows}=domain.enhancement.inspectArrangement(id),identity=renderIdentity(store,id,rows);
+        const activeJobs=store.db.prepare(`SELECT json_object('id',id,'chapterId',json_extract(data,'$.chapterId'),
+          'kind',json_extract(data,'$.kind'),'status',json_extract(data,'$.status'),'done',json_extract(data,'$.done'),'total',json_extract(data,'$.total'),
+          'stop',json_extract(data,'$.stop'),'createdAt',json_extract(data,'$.createdAt'),'error',json_extract(data,'$.error'),
+          'arrangement',json_extract(data,'$.arrangement'),'renderRevision',json_extract(data,'$.renderRevision'),
+          'renderSignature',json_extract(data,'$.renderSignature')) AS data FROM jobs
+          WHERE json_extract(data,'$.chapterId')=? AND json_extract(data,'$.status') IN ('queued','running') ORDER BY rowid`).all(id).map(row=>{const job=JSON.parse(row.data);return {...job,stop:job.stop===null?null:!!job.stop};});
+        return send(res,200,{chapterId:id,workspaceIdentity:workspaceIdentity(directory),revision:chapter.revision,arrangement:chapter.arrangement,
+          renderRevision:identity.renderRevision||0,renderSignature:identity.renderSignature??null,activeJobs});
+      }
       if (req.method === "GET" && path.startsWith("/api/chapters/")) {
         const id = path.split("/").pop();
         if (audioTools) for (const row of domain.enhancement.inspectArrangement(id).rows) {
@@ -404,18 +469,31 @@ export async function startServer({
         return send(res, 200, await uploadVoice(store, await body(req)));
       if (req.method === "GET" && /^\/api\/voices\/[^/]+$/.test(path))
         return send(res,200,store.get('voices',decodeURIComponent(path.split('/').at(-1))));
+      if (req.method === 'GET' && /^\/api\/jobs\/[^/]+\/progress$/.test(path)) {
+        const row=store.db.prepare(`SELECT json_object('id',id,'chapterId',json_extract(data,'$.chapterId'),
+          'kind',json_extract(data,'$.kind'),'status',json_extract(data,'$.status'),'done',json_extract(data,'$.done'),'total',json_extract(data,'$.total'),
+          'masterId',json_extract(data,'$.masterId'),'arrangement',json_extract(data,'$.arrangement'),'renderRevision',json_extract(data,'$.renderRevision'),
+          'renderSignature',json_extract(data,'$.renderSignature'),'error',json_extract(data,'$.error')) AS data FROM jobs WHERE id=?`).get(decodeURIComponent(path.split('/')[3]));
+        if(!row)fail('任务不存在，原操作未重发',404);
+        return send(res,200,{...JSON.parse(row.data),workspaceIdentity:workspaceIdentity(directory)});
+      }
       if (req.method === "POST" && path === "/api/jobs") {
         if (!audioTools) fail("没有找到 FFmpeg，请先配置音频处理程序");
         const result = await worker.submit(await body(req));
         void worker.tick();
         return send(res, 200, result);
       }
-      if (req.method === "GET" && path.startsWith("/api/media/")) {
+      if (["GET","HEAD"].includes(req.method) && path.startsWith("/api/media/")) {
         const [, , , kind, id] = path.split("/");
         if (!["voices", "audios", "masters", "exports"].includes(kind))
           fail("文件类型无效", 404);
         const record = store.get(kind, id);
         if (!record.path) fail("文件已删除", 404);
+        if (kind === 'masters') {
+          const release = storageMaintenance.acquireRead(join(directory,record.path));
+          try { await storageMaintenance.ensureMasterFile(id);return await serveFile(req,res,join(directory,record.path),'audio/wav'); }
+          finally { release(); }
+        }
         if (kind === "audios" && audioTools && !await validateStoredAudio(store, record))
           fail("音频损坏或缺失，请恢复备份或明确选择重做", 409);
         if (kind === "voices") {
@@ -475,8 +553,9 @@ export async function startServer({
     } finally { if (counted) activeRequests--; }
   });
   const interval = setInterval(() => {
-    if (moving || closing || audioMaintenance) return;
+    if (moving || closing || audioMaintenance || storageTask) return;
     void worker.tick();
+    if (Date.now() - lastStorageSweep >= storageSweepDelay && storageIdle()) { void maintainStorage().catch(() => console.warn('历史试听缓存整理未完成，原始素材与记录仍保留。'));return; }
     void assistant.tick();
     drainReferenceDeletes(store, referenceReads);
   }, 1000);
@@ -501,8 +580,12 @@ export async function startServer({
     get domain() { return domain; },
     get worker() { return worker; },
     get assistant() { return assistant; },
+    get storageMaintenance() { return storageMaintenance; },
+    maintainStorage,
     async close() {
       closing = true;
+      storageController?.abort();
+      if (storageTask) await storageTask.catch(() => {});
       if (movePromise) await movePromise.catch(() => {});
       if (audioMaintenance) await audioMaintenance.catch(() => {});
       assistant.stop();

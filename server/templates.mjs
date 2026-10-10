@@ -1,6 +1,6 @@
 import { fail } from "./store.mjs";
 
-export const sceneContract = Object.freeze({ descriptionMax: 1500, promptMax: 3000, countUnit: 'Unicode code point' });
+export const sceneContract = Object.freeze({ descriptionMax: 1500, promptMax: 3000, countUnit: 'Unicode code point', defaultTemplate:'scene-v4-presence-1' });
 export const validEventDescription = value => typeof value === 'string' && !!value.trim() && Array.from(value).length <= sceneContract.descriptionMax;
 
 // Keep each published implementation under its existing ID. Changing the
@@ -63,6 +63,12 @@ export const templateCatalog = {
       defaults: {speech_rate:0, loudness_rate:0, pitch_rate:0},
       compile: compilePresenceScene,
     },
+    "scene-v5-relations-1": {
+      name: "场景 v5 · 已采用声音关系（试验）", scope: "unit", mode: "scene",
+      description: "按已采用事件表达存在感、正文触发与发展归属；效果待听评，历史版本保持不变。",
+      defaults: {speech_rate:0, loudness_rate:0, pitch_rate:0},
+      compile: compileRelationsScene,
+    },
   },
 };
 export function templateOf(id) {
@@ -92,14 +98,37 @@ export function assertQuoteAnchor(members, anchor) {
   return members.indexOf(member) + 1;
 }
 
-export function sceneIntentConflicts(s) {
+function legacySceneIntentConflicts(s) {
   // ponytail: recognise only explicit standalone prohibitions; uncertain prose
   // stays unchanged for human review instead of guessing its meaning.
   const clauses = (s.guidance || '').split(/[，,；;。\n]/u).map(value=>value.trim());
   return [['music',['无音乐','不要音乐','不添加音乐']],['environment',['无环境声','不要环境声','不添加环境声']],['effect',['无音效','不要音效','不添加音效']]].filter(([kind,words])=>(s.events || []).some(e=>e.kind===kind) && clauses.some(clause=>words.includes(clause))).map(([kind])=>`整体场景指导明确禁止${({music:'音乐',environment:'环境声',effect:'音效'})[kind]}，但已采用同类事件，请一次核对这段的指导和事件`);
 }
 
-export function inspectScenePresence({backgroundPresence, guidance, events = []}) {
+function sceneControlSources({guidance,performance,members=[],events=[]}) {
+  return [{label:'整体场景指导（guidance）',value:guidance,object:'unknown'}, {label:'整体表演（performance）',value:performance,object:'unknown'},
+    ...members.map((member,index)=>({label:`成员 ${member.id || index+1} 的表演（members[${index}].performance）`,value:typeof member.performance==='string'?member.performance.replace(/(?:强调|重音(?:落)?在|读出|念出|朗读)\s*[“「『"']([^”」』"']+)[”」』"']/gu,(quote,words)=>typeof member.text==='string'&&member.text.includes(words)?' '.repeat(quote.length):quote):member.performance,object:'unknown'})),
+    ...events.flatMap((event,index)=>{
+      if(event.state!==undefined && event.state!=='adopted')return [];
+      const label=`已采用${({music:'音乐',environment:'环境声',effect:'音效'})[event.kind] || '声音'}（${event.id || `第${index+1}个事件`}）`,object=['music','environment','effect'].includes(event.kind)?'background':'unknown';
+      return [{label:label+`的描述（events[${index}].description）`,value:event.description,object},
+        {label:label+`的发展（events[${index}].transition.development）`,value:event.transition?.development,object},
+        {label:label+`的转折音量（events[${index}].transition.volumeChange）`,value:event.transition?.volumeChange,object,transition:true}];
+    })];
+}
+export function sceneIntentConflicts(s) {
+  const events=(s.events || []).filter(e=>e.state===undefined || e.state==='adopted');
+  return sceneControlSources(s).flatMap(({label,value})=>{
+    if(typeof value!=='string')return [];
+    const clauses=value.split(/[，,；;。\n]/u).map(v=>v.trim());
+    return [['music','音乐'],['environment','环境声'],['effect','音效']].filter(([kind,name])=>events.some(e=>e.kind===kind) && clauses.some(clause=>
+      [`无${name}`,`不要${name}`,`不添加${name}`].includes(clause) || /^(?:清晰)?干声$/u.test(clause) || /^(?:无|不要|不添加)(?:音乐|环境声|音效|[、和与及\s])+$/u.test(clause)&&clause.includes(name)
+    )).map(([,name])=>`${label}明确禁止${name}，但已采用同类事件；规则：已采用声音与控制字段一致，请核对这段的指导和事件`);
+  });
+}
+
+export function inspectScenePresence(input) {
+  const {backgroundPresence}=input;
   // ponytail: finite sound subjects, polarity and ending phrases, not general
   // NLP. Unresolved subjects get advice; clarify their object/range in place.
   const patterns = {
@@ -111,11 +140,7 @@ export function inspectScenePresence({backgroundPresence, guidance, events = []}
   const negated = /(?:不要|不能|不会|无需|避免|防止|勿|别|禁止|并非|不是|并不|不再|不应|不用|不必|不需要|不)(?:把|将|让|使|音乐|背景|环境声|音效|声音|声响|音量|压低|降低|降到|淡出|减弱|保持|变得|明确|全程|始终|一直|仅|只|到|成|为|得|的|\s)*$/u;
   const subjects = /(?<background>背景(?:音乐|声)?|环境声|音乐|音效|声响|底噪|水滴|配乐|伴奏)|(?<voice>人声|旁白|对白|台词|讲话|说话|叙述|字词|吐字)/gu;
   const whole = /全程|全段|整段|全部|始终|一直|从头到尾|整个|(?:对白|讲话|说话|叙述|旁白)期间/u;
-  const sources = [{label:'整体场景指导',value:guidance,object:'unknown'}, ...events.filter(event=>event.state === undefined || event.state === 'adopted').flatMap((event,index)=>{
-    const label = `已采用${({music:'音乐',environment:'环境声',effect:'音效'})[event.kind] || '声音'}（第${index+1}个事件）`;
-    const object = ['music','environment','effect'].includes(event.kind) ? 'background' : 'unknown';
-    return [{label,value:event.description,object}, {label:label+'的转折音量',value:event.transition?.volumeChange,object,transition:true}];
-  })];
+  const sources = sceneControlSources(input);
   const warnings = [], conflicts = sources.flatMap(({label,value,object:sourceObject,transition})=>{
     if (typeof value !== 'string') return [];
     let ending = false, warned = false;
@@ -149,7 +174,7 @@ export function inspectScenePresence({backgroundPresence, guidance, events = []}
 export const scenePresenceConflicts = input => inspectScenePresence(input).conflicts;
 
 function compilePresenceScene(s) {
-  const conflicts = sceneIntentConflicts(s);
+  const conflicts = legacySceneIntentConflicts(s);
   if (conflicts.length) throw Object.assign(new Error(conflicts.join('；')), {status:409,code:'scene-intent-conflict',conflicts});
   const presence = s.backgroundPresence || 'unspecified';
   if (!['clear','natural','subtle','unspecified'].includes(presence)) fail('背景存在感选项无效');
@@ -167,6 +192,36 @@ function compilePresenceScene(s) {
     return `声音事件发展：在第${index}条正文第${anchor.occurrence}次出现“${anchor.quote}”时，${anchor.development}；音量变化：${anchor.volumeChange || '未指定，不由情绪变化推断淡出'}。`;
   });
   if (transitions.length) prompt = prompt.replace(s.members.length===1 && s.members[0].type==='narration' ? '\n\n只将以下引号' : '\n\n[人物与参考]',`\n${transitions.join('\n')}${s.members.length===1 && s.members[0].type==='narration' ? '\n\n只将以下引号' : '\n\n[人物与参考]'}`);
+  return prompt;
+}
+
+function compileRelationsScene(s) {
+  const events=(s.events || []).filter(event=>event.state===undefined || event.state==='adopted'),input={...s,events};
+  const conflicts=[...sceneIntentConflicts(input),...scenePresenceConflicts(input)];
+  if(conflicts.length)throw Object.assign(new Error(conflicts.join('；')),{status:409,code:'scene-intent-conflict',conflicts});
+  const presence=s.backgroundPresence || 'unspecified';
+  if(!['clear','natural','subtle','unspecified'].includes(presence))fail('背景存在感选项无效');
+  const kinds=new Set(events.map(event=>event.kind)),names={music:'音乐',environment:'环境声',effect:'一次性音效'};
+  const controls={
+    clear:{music:'音乐在采用范围内保持可辨识的旋律和明确存在感；宁静是情绪与织体的发展，不自动淡出到几乎听不到。',environment:'环境声在采用范围内可辨，保留已选距离、空间与质感。',effect:'每个一次性音效在采用位置出现，声响及已采用的回响清楚可辨；次数和物理结果按原描述。'},
+    natural:{music:'音乐在采用范围内自然呈现，旋律可辨；情绪与织体变化不自动表示音量淡出。',environment:'环境声按已选空间和距离自然可辨。',effect:'一次性音效按指定动作和采用位置自然可辨。'},
+    subtle:{music:'音乐在采用范围内轻柔呈现，不抢讲话；情绪发展与音量变化分开。',environment:'环境声按已选空间和距离轻柔呈现，不抢讲话。',effect:'一次性音效按指定动作和采用位置轻柔呈现，不抢讲话。'},
+  };
+  const label=(event,index)=>`${names[event.kind] || '声音'}（事件 ${event.id || index+1}）`;
+  let prompt=compileNativeScene({...input,events:events.map((event,index)=>({...event,description:`${label(event,index)}：${event.description}`}))});
+  const adopted=[...kinds].map(kind=>names[kind]).filter(Boolean).join('、');
+  prompt=prompt.replace('旁白与已采用的环境、音乐、音效共同构成一份音频','旁白'+(adopted?`与已采用的${adopted}`:'')+'共同构成一份音频')
+    .replace('旁白或对白与已采用的环境、音乐、音效共同构成这次输出','旁白或对白'+(adopted?`与已采用的${adopted}`:'')+'共同构成这次输出')
+    .replace(/已采用声音按各自范围及发展要求组织；环境和音乐可与(?:旁白|说话)同期呈现。/u,
+      [...kinds].map(kind=>controls[presence]?.[kind]).filter(Boolean).concat('讲话与已采用声音按各自范围共同呈现，字词清楚；既有声音内部可自然发展织体、空间回响和情绪，事件类别、次数、因果与停止要求保持。').join(''));
+  const transitions=events.flatMap((event,index)=>{
+    const anchor=event.transition;if(!anchor)return [];
+    const member=assertQuoteAnchor(s.members,anchor);
+    if(typeof anchor.development!=='string' || !anchor.development.trim() || Array.from(anchor.development).length>500)fail('转折发展描述不能为空，且不能超过500个Unicode字符');
+    if(anchor.volumeChange!==undefined && (typeof anchor.volumeChange!=='string' || Array.from(anchor.volumeChange).length>200))fail('转折音量描述无效');
+    return [`${label(event,index)}的发展：在第${member}条正文第${anchor.occurrence}次出现“${anchor.quote}”时，${anchor.development}；${label(event,index)}的音量变化：${anchor.volumeChange || '未指定，保留已选存在感，不由情绪变化推断淡出'}。`];
+  });
+  if(transitions.length){const boundary=s.members.length===1 && s.members[0].type==='narration'?'\n\n只将以下引号':'\n\n[人物与参考]';prompt=prompt.replace(boundary,`\n${transitions.join('\n')}${boundary}`);}
   return prompt;
 }
 

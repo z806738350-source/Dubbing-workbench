@@ -10,9 +10,9 @@ const manifestPath = attempt => `${rawPath(attempt)}.delivery.json`;
 
 // IDs and versions cannot detect a truncated or replaced file between filesystem and
 // SQLite commits. Hashes are limited to validating those persisted audio receipts.
-export async function audioDigest(file) {
+export async function audioDigest(file, { signal } = {}) {
   const hash = createHash('sha256'); let bytes = 0;
-  for await (const chunk of createReadStream(file)) { hash.update(chunk); bytes += chunk.length; }
+  for await (const chunk of createReadStream(file, { signal })) { hash.update(chunk); bytes += chunk.length; }
   return { sha256: hash.digest('hex'), bytes };
 }
 async function flush(file) {

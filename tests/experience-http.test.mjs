@@ -6,6 +6,27 @@ import {join} from 'node:path';
 import {startServer} from '../server/index.mjs';
 import {uid} from '../server/store.mjs';
 
+test('状态轮询在JSON解析前投影后台快照，任务/未知回执保留且数据库与按需操作记录不变',async t=>{
+  const directory=mkdtempSync(join(tmpdir(),'dubbing-state-projection-')),app=await startServer({port:0,directory,config:{key:''}}),base=`http://127.0.0.1:${app.server.address().port}`;
+  t.after(async()=>{await app.close();rmSync(directory,{recursive:true,force:true});});app.worker.close();
+  const native=globalThis.fetch;let providerCalls=0;t.mock.method(globalThis,'fetch',(url,init)=>{if(String(url).startsWith(base+'/'))return native(url,init);providerCalls++;throw Error('状态投影不能发供应商请求');});
+  const project=app.domain.mutate('project.create',{name:'轮询投影夹具'}),chapter=app.domain.mutate('chapter.create',{projectId:project.id,title:'自拟章',source:'自拟一句。',segment:true}),segment=app.domain.list(chapter.id)[0],heavy='后台快照自拟内容'.repeat(16000),rows=[];
+  const session=app.domain.mutate('voice-session.create',{description:'存在候选会话时也不应全读后台任务'});
+  for(const [index,status] of ['success','failed','unknown'].entries()){
+    const id=uid(),attemptId=uid(),row={id,chapterId:chapter.id,kind:index===1?'export':'master',status,done:index===0?1:0,total:1,stop:false,createdAt:`2026-10-09T10:00:0${index}Z`,commandId:uid(),masterId:'master-'+index,...(index===1?{exportId:'export-one',format:'mp3'}:{}),result:{masterId:'master-'+index,renderRevision:2},scope:{kind:'attempt',ids:[attemptId]},retryClass:'check-existing-operation',acknowledgedAttemptIds:[attemptId],counts:{unknown:index===2?1:0},localOutputPending:index===1,
+      items:[{text:'RAW_JOB_ITEM_NOT_FOR_POLLING'.repeat(10000)}],targetScopes:[{text:heavy}],renderRows:[{s:{text:heavy},a:{input:{text:heavy},prompt:heavy}}],outputRecords:{master:{mapping:[{text:heavy}]}},request:{kind:'master',text:heavy},confirmation:{reviewItems:[{basis:{text:heavy}}]}};
+    app.store.put('jobs',row,chapter.id);app.store.put('attempts',{id:attemptId,jobId:id,segmentId:segment.id,status,phase:index===1?'localRecoveryPending':status,deliveryVersion:1,input:{members:[{id:segment.id,text:heavy}]}},id);rows.push(app.store.get('jobs',id));
+  }
+  const rawBefore=app.store.db.prepare('SELECT data FROM jobs ORDER BY rowid').all(),all=app.store.all.bind(app.store),parse=JSON.parse,projection=t.mock.method(app.store,'all',(table,parent)=>{assert.notEqual(table,'jobs','快照应在SQLite中剔除重字段后才JSON.parse');return all(table,parent);}),noItemsParse=t.mock.method(JSON,'parse',(text,...args)=>{assert.ok(!String(text).includes('RAW_JOB_ITEM_NOT_FOR_POLLING'),'冻结逐段正文不能进入状态JSON解析');return parse(text,...args);});try{app.domain.snapshot();}finally{projection.mock.restore();noItemsParse.mock.restore();}
+  const response=await fetch(base+'/api/state');assert.equal(response.status,200);const body=await response.text(),state=JSON.parse(body);assert.ok(body.length<20000,'后台快照不能全量进入状态响应');assert.ok(!body.includes(heavy));assert.deepEqual(state.jobs.map(j=>j.id),rows.map(j=>j.id).reverse());
+  assert.deepEqual(state.voiceSessions.find(row=>row.id===session.id).candidates,[]);
+  for(const raw of rows){const item=state.jobs.find(j=>j.id===raw.id);for(const key of ['renderRows','outputRecords','request','confirmation','items','targetScopes'])assert.equal(Object.hasOwn(item,key),false,key);for(const key of ['status','commandId','masterId','result','scope','retryClass','acknowledgedAttemptIds','counts','localOutputPending'])assert.deepEqual(item[key],raw[key],key);assert.equal(item.attempts[0].submitted,true);assert.deepEqual(item.attempts[0].memberNumbers,[1]);}
+  assert.equal(state.jobs.find(j=>j.status==='unknown').unknown,1);assert.equal(state.jobs.find(j=>j.status==='failed').failed,1);assert.equal(state.jobs.find(j=>j.status==='success').done,1);assert.equal(state.jobs.find(j=>j.kind==='export').exportId,'export-one');assert.equal(state.jobs.find(j=>j.status==='failed').localRecoveryAttemptIds.length,1);
+  assert.deepEqual(app.store.db.prepare('SELECT data FROM jobs ORDER BY rowid').all(),rawBefore);
+  const operationId=uid();app.store.put('settings',{id:'ux-operation:'+operationId,operationId,request:{kind:'generateSelection',chapterId:chapter.id},jobIds:[rows[0].id],createdObjectIds:[],steps:{enqueued:rows[0].id},result:{job:rows[0]},outcome:'processing'});
+  const receipt=await(await fetch(base+'/api/operations/'+operationId)).json();assert.equal(receipt.outcome,'completed');assert.deepEqual(receipt.result.job,rows[0],'按需回执仍读取完整原记录，不能破坏恢复');assert.equal(providerCalls,0);
+});
+
 test('UX HTTP合同：策略/授权/保存回执及上传查询，零供应商请求且不外露配置凭据',async t=>{
   const directory=mkdtempSync(join(tmpdir(),'dubbing-experience-http-'));
   const key='synthetic-private-fixture',app=await startServer({port:0,directory,config:{key,model:'seed-audio-1.0',baseUrl:'https://example.invalid/v1',audioUrl:'https://example.invalid/audio'}}),base=`http://127.0.0.1:${app.server.address().port}`;

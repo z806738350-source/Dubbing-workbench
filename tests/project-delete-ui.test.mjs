@@ -118,7 +118,7 @@ function appFixture(){
   const state={settings:{workspaceDirectory:'/fixture'},projects:[{id:'one',name:'第一项目'},{id:'two',name:'第二项目'}],chapters:[{id:'old',projectId:'one',revision:1,arrangement:1},{id:'next',projectId:'two',revision:1,arrangement:1}]};
   const env={React,Select:'Select',state,projectId:'one',busy:false,connectionReady:true,
     stateRef:{current:state},projectRef:{current:'one'},chapterRef:{current:'old'},refreshPending:{current:null},bookmarks:{current:{old:'line-old',next:'line-next'}},chapterPlaybackSnapshots:{current:{old:{id:'old'},next:{id:'next'}}},
-    playIntent:{current:0},playbackPreparation:{current:null},setPlayPreparing:value=>{env.playPreparing=value;},segmentDeletionIntent:{current:0},setSegmentDeletion(){},pendingPlay:{current:'old'},pendingPlaySnapshot:{current:{arrangement:1}},recoveryTarget:{current:{chapterId:'old'}},
+    playIntent:{current:0},playbackPreparation:{current:null},pendingPlaybackRead:{current:null},setPlayPreparing:value=>{env.playPreparing=value;},segmentDeletionIntent:{current:0},setSegmentDeletion(){},pendingPlay:{current:'old'},pendingPlaySnapshot:{current:{arrangement:1}},recoveryTarget:{current:{chapterId:'old'}},
     bindDraftWorkspace(){},draftWorkspace:()=>'',playbackIdentity:items=>JSON.stringify(items),generationIntent:{current:0},generationPlan:{id:'old-plan'},audio:{current:{pause(){calls.paused++;}}},
     action:async(name,payload)=>calls.actions.push({name,payload}),refresh:async()=>{calls.refresh++;},
   };
@@ -209,6 +209,7 @@ test('成功删除等待已有刷新结束，迟到旧章读不能在切剩余�
 test('真实刷新回调读取旧章期间清空项目，迟到章节不回填空页面',async()=>{
   const f=appFixture();let release;
   f.env.useCallback=callback=>callback;f.env.pendingPlay.current=null;f.env.playerRef={current:null};f.env.active=()=>false;
+  f.env.playbackReadEpoch={current:0};f.env.applyPlaybackChapter=()=>assert.fail('已切走的章节不得采用');
   f.env.setLoading=()=>{};f.env.setConnectionReady=()=>{};f.env.connectionMessage='连接失败';
   f.env.api=async path=>path==='/state'?{...f.env.state,jobs:[]}:new Promise(resolve=>release=resolve);
   const refresh=project(declaration('refresh'),f.env),pending=refresh();await new Promise(resolve=>setImmediate(resolve));

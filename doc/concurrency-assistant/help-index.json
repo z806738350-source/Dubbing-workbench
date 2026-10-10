@@ -679,6 +679,36 @@
         "anchor": "read.audioRange"
       },
       "version": 1
+    },
+    {
+      "id": "fidelity",
+      "title": "原文与声音来源核对",
+      "text": "后台分别核对来源范围、原字与已记录编辑、有效朗读参与、冻结正文及参考字节、原件和处理来源。原字或请求匹配不表示声音念全或声景达标；实际试听独立判断。历史缺少原件、参考字节或源版本时显示未知，不自动补文、恢复删除或重录。查询免费只读；新母版保留左右声道和原间隔，旧mono成品仍在历史。",
+      "pageIds": [
+        "workspace",
+        "analysis",
+        "segment"
+      ],
+      "capabilityIds": [
+        "read.fidelity"
+      ],
+      "errorCodes": [],
+      "keywords": [
+        "原文",
+        "细节",
+        "保真",
+        "来源",
+        "原件",
+        "历史",
+        "单声道",
+        "立体声"
+      ],
+      "source": {
+        "file": "server/fidelity.mjs",
+        "line": 14,
+        "anchor": "inspectFidelity"
+      },
+      "version": 1
     }
   ]
 }

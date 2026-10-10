@@ -19,8 +19,8 @@ async function setup(api = async () => ({}), operations = async () => ({ result:
   const apiSource = compile(readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8'));
   const autosaveSource = compile(readFileSync(new URL('../src/autosave.ts', import.meta.url), 'utf8')).replace('"./api"', JSON.stringify(url(apiSource)));
   const autosave = await import(url(autosaveSource));
-  let index = 0; const hooks = [];
-  const runtime = { ...autosave, api, submitOperation: operations, useEffect: effect => effect(),
+  let index = 0; const hooks = [], cleanups = [];
+  const runtime = { ...autosave, api, submitOperation: operations, useEffect: effect => { const cleanup = effect(); if (typeof cleanup === 'function') cleanups.push(cleanup); },
     useState: initial => { const key = index++; if (!(key in hooks)) hooks[key] = typeof initial === 'function' ? initial() : initial; return [hooks[key], value => { hooks[key] = typeof value === 'function' ? value(hooks[key]) : value; }]; },
     useRef: initial => { const key = index++; return hooks[key] ||= { current: initial }; },
     React: { createElement: (type, props, ...children) => ({ type, props: { ...props, children } }), Fragment: 'Fragment' },
@@ -30,8 +30,77 @@ async function setup(api = async () => ({}), operations = async () => ({ result:
   const component = source.slice(source.indexOf('export function VoicePicker('), source.indexOf('export function RecoveryCenter('));
   const header = `const {useEffect,useRef,useState,api,submitOperation,withSavedDrafts,draftScopeRevision,React}=globalThis.voicePickerTest; const Dialog='Dialog',Field='Field',Form='Form',VoiceCreation='VoiceCreation',Search='Search',Play='Play',Upload='Upload';\n`;
   const { VoicePicker } = await import(url(header + compile(component)));
-  return { ...autosave, render: props => { index = 0; return VoicePicker(props); } };
+  return { ...autosave, render: props => { index = 0; return VoicePicker(props); }, unmount: () => cleanups.splice(0).forEach(cleanup => cleanup()) };
 }
+
+const bulkFixture = () => ({ ...fixture(), initialTarget: { segmentIds: ['one', 'two'], tab: 'create' } });
+const chooseVoice = (app, props) => {
+  nodes(app.render(props)).find(node => node.type === 'button' && node.props.className === 'voice-choice-main').props.onClick();
+  return app.render(props);
+};
+
+test('批量选声固定勾选范围，试听不代替选择且不展开角色、上传或生成入口', async () => {
+  globalThis.localStorage = storage(); globalThis.sessionStorage = storage();
+  const props = bulkFixture(), previews = [], sent = [];
+  props.play = (...args) => previews.push(args);
+  const app = await setup(undefined, async (...args) => { sent.push(args); return { result: {} }; });
+  let tree = app.render(props);
+  assert.equal(tree.props.title, '改绑所选台词音色'); assert.equal(tree.props.footer.props.disabled, true);
+  assert.ok(!nodes(tree).some(node => ['VoiceCreation', 'Form'].includes(node.type)));
+  for (const label of ['角色在本章', '仅这一句', '上传参考', '描述创建']) assert.ok(!nodes(tree).some(node => node.type === 'button' && node.props.children.includes(label)), label);
+  assert.equal(nodes(tree).filter(node => node.props?.className === 'original-excerpt').length, 2, '已有非空单句覆盖也在明确替换范围');
+  nodes(tree).find(node => node.type === 'button' && node.props['aria-label'] === '试听本章声音').props.onClick();
+  tree = app.render(props);
+  assert.deepEqual(previews, [['voices', 'chapter-voice', '本章声音']]); assert.equal(tree.props.footer.props.disabled, true); assert.equal(sent.length, 0);
+});
+
+test('批量明确选择后只提交一次精确 IDs，保存屏障仅涉及所选片段并包含原单句覆盖', async () => {
+  globalThis.localStorage = storage(); globalThis.sessionStorage = storage();
+  const props = bulkFixture(), sent = [], flushed = [], frozen = []; let refreshed = 0, used = 0;
+  props.chapter.segments.push({ id: 'other', order: 2, text: '未选台词', roleId: 'role', voiceSource: 'override', voiceId: 'other-voice' });
+  props.onRefresh = async () => { refreshed++; }; props.onUsed = () => { used++; };
+  const app = await setup(undefined, async (key, payload) => { sent.push({ key, payload }); return { result: {} }; });
+  for (const id of ['one', 'two', 'other']) app.registerDraftSave(id, { scope: 'chapter:chapter', dependencies: ['segment:' + id], dirty: () => true, state: () => 'local', freeze: value => frozen.push([id, value]), flush: async () => { flushed.push(id); } });
+  const tree = chooseVoice(app, props); assert.equal(tree.props.footer.props.disabled, false);
+  tree.props.footer.props.onClick(); await tick();
+  assert.deepEqual(flushed, ['one', 'two']); assert.deepEqual(frozen, [['one', true], ['two', true], ['one', false], ['two', false]]);
+  assert.equal(sent.length, 1); assert.equal(sent[0].key, 'use-voice:selected:chapter');
+  assert.deepEqual(sent[0].payload.segmentIds, ['one', 'two']); assert.equal(sent[0].payload.voiceId, 'chapter-voice'); assert.equal(sent[0].payload.revision, 1);
+  for (const field of ['roleId', 'segmentId', 'entityRevision']) assert.equal(Object.hasOwn(sent[0].payload, field), false, field);
+  assert.equal(refreshed, 1); assert.equal(used, 1);
+});
+
+test('批量选择期间收到新章版本，保留选择并阻止过期范围提交', async () => {
+  globalThis.localStorage = storage(); globalThis.sessionStorage = storage();
+  const props = bulkFixture(), sent = [], app = await setup(undefined, async (...args) => { sent.push(args); return { result: {} }; });
+  chooseVoice(app, props);
+  const changed = { ...props, chapter: { ...props.chapter, revision: 2 } }, tree = app.render(changed);
+  assert.equal(tree.props.footer.props.disabled, true);
+  assert.ok(nodes(tree).some(node => node.type === 'button' && node.props.children.includes('重新核对当前范围')));
+  tree.props.footer.props.onClick(); await tick(); assert.equal(sent.length, 0);
+});
+
+test('批量中有缺失或已排除目标，重新核对不能静默缩小范围后提交', async () => {
+  for (const defect of ['missing', 'excluded']) {
+    globalThis.localStorage = storage(); globalThis.sessionStorage = storage();
+    const props = bulkFixture(), sent = [], app = await setup(undefined, async (...args) => { sent.push(args); return { result: {} }; });
+    if (defect === 'missing') props.chapter.segments = props.chapter.segments.filter(segment => segment.id !== 'two');
+    else props.chapter.segments = props.chapter.segments.map(segment => segment.id === 'two' ? { ...segment, excluded: true } : segment);
+    let tree = chooseVoice(app, props); assert.equal(tree.props.footer.props.disabled, true, defect);
+    nodes(tree).find(node => node.type === 'button' && node.props.children.includes('重新核对当前范围')).props.onClick();
+    tree = app.render(props); assert.equal(tree.props.footer.props.disabled, true, defect); assert.equal(sent.length, 0);
+  }
+});
+
+test('关闭批量选声面板后完成草稿保存，不能继续提交已经取消的选声', async () => {
+  globalThis.localStorage = storage(); globalThis.sessionStorage = storage();
+  const props = bulkFixture(), sent = [], frozen = []; let release;
+  const app = await setup(undefined, async (...args) => { sent.push(args); return { result: {} }; });
+  app.registerDraftSave('one', { scope: 'chapter:chapter', dependencies: ['segment:one'], dirty: () => true, state: () => 'local', freeze: value => frozen.push(value), flush: () => new Promise(resolve => { release = resolve; }) });
+  chooseVoice(app, props).props.footer.props.onClick(); await tick(); assert.equal(typeof release, 'function');
+  app.unmount(); release(); await tick();
+  assert.equal(sent.length, 0); assert.deepEqual(frozen, [true, false]);
+});
 
 test('voice choice captures scope and chapter voice; polling changes require an explicit new review', async () => {
   globalThis.localStorage = storage(); globalThis.sessionStorage = storage();

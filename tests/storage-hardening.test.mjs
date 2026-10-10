@@ -7,9 +7,11 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { openStore, uid } from '../server/store.mjs';
-import { createDomain } from '../server/domain.mjs';
-import { copyWorkspace, readRuntime, workspaceDiagnostics, workspaceDirectory, workspaceIdentity } from '../server/workspace.mjs';
+import { createDomain, inputOf, basisOf } from '../server/domain.mjs';
+import { compile } from '../server/templates.mjs';
+import { copyWorkspace, readRuntime, workspaceDiagnostics, workspaceDirectory, workspaceIdentity, projectFile } from '../server/workspace.mjs';
 import { buildMaster, ffmpeg } from '../server/audio.mjs';
+import { updateAudioRange, savedAudioRange, renderIdentity, renderProfileOf, DEFAULT_RENDER_PROFILE, LEGACY_RENDER_PROFILE } from '../server/audio-range.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'dubbing-storage-v3-')), store = openStore(join(root, 'source'));
@@ -55,6 +57,22 @@ test('缺失派生母版按保存配方本地重建再迁移，历史导出和�
   rmSync(join(store.directory, a.path)); assert.equal(workspaceDiagnostics(store).primaryAvailable,false);
   await assert.rejects(copyWorkspace(store, join(root, 'missing-source')), /原始素材.*original.wav/);
   assert.equal(existsSync(join(root, 'missing-source')), false);
+});
+
+test('缺失历史裁剪母版按冻结mapping迁移，stereo和未标记legacy均不套用后来人工范围',async t=>{
+  for(const profile of [DEFAULT_RENDER_PROFILE,LEGACY_RENDER_PROFILE])await t.test(profile,async t=>{
+    const {root,store,domain}=fixture(t);store.put('settings',{id:'project-folders',enabled:true});const project=domain.mutate('project.create',{name:'历史裁剪恢复'}),chapter=domain.mutate('chapter.create',{projectId:project.id,title:'自拟两句',source:'第一句。第二句。',segment:true});
+    const frames=12000,bytes=Buffer.alloc(44+frames*4);bytes.write('RIFF');bytes.writeUInt32LE(bytes.length-8,4);bytes.write('WAVEfmt ',8);bytes.writeUInt32LE(16,16);bytes.writeUInt16LE(1,20);bytes.writeUInt16LE(2,22);bytes.writeUInt32LE(48000,24);bytes.writeUInt32LE(192000,28);bytes.writeUInt16LE(4,32);bytes.writeUInt16LE(16,34);bytes.write('data',36);bytes.writeUInt32LE(frames*4,40);for(let i=0;i<frames;i++){bytes.writeInt16LE((i*7919)%60001-30000,44+i*4);bytes.writeInt16LE((i*6271)%60001-30000,44+i*4+2);}
+    mkdirSync(join(store.directory,'voices'));writeFileSync(join(store.directory,'voices/reference.wav'),bytes);const voice={id:uid(),name:'合成参考',state:'active',path:'voices/reference.wav'};store.put('voices',voice);const role=store.all('roles',project.id)[0];domain.mutate('role.update',{id:role.id,entityRevision:role.revision??1,chapterId:chapter.id,revision:store.get('chapters',chapter.id).revision,voiceId:voice.id});domain.mutate('segment.confirm',{chapterId:chapter.id,revision:store.get('chapters',chapter.id).revision,ids:domain.list(chapter.id).map(s=>s.id)});
+    const sourcePath=projectFile(store,chapter.id,'audio','source.wav');mkdirSync(join(store.directory,project.folder,'audio'),{recursive:true});writeFileSync(join(store.directory,sourcePath),bytes);
+    const audios=domain.list(chapter.id).map(s=>{const a={id:uid(),chapterId:chapter.id,path:sourcePath,input:inputOf(s),basis:basisOf(s),prompt:compile(s),model:s.model};store.put('audios',a,chapter.id);s.current=a.id;s.latest='success';store.put('segments',s,chapter.id);domain.enhancement.syncLegacySegment(s);return a;}),unitId=domain.list(chapter.id)[0].id;
+    const payload=extra=>({operationId:uid(),unitId,mode:'dry',audioId:audios[0].id,expectedRevision:savedAudioRange(store,unitId,'dry',audios[0].id)?.revision || 0,startFrame:143,endFrame:10479,...extra});
+    await updateAudioRange(store,payload({}));const rows=domain.enhancement.resolve(chapter.id).map(r=>({...r,range:savedAudioRange(store,r.s.id,r.s.mode,r.a.id)})),id=uid(),master={id,chapterId:chapter.id,arrangement:chapter.arrangement,...await buildMaster(store,rows,.17,id,profile),...renderIdentity(store,chapter.id,rows,profile)};if(profile===LEGACY_RENDER_PROFILE)delete master.renderProfile;store.put('masters',master,chapter.id);const original=readFileSync(join(store.directory,master.path));
+    const later=await updateAudioRange(store,payload({startFrame:3000,endFrame:9000}));assert.equal(later.range.revision,2);rmSync(join(store.directory,master.path));
+    const target=await copyWorkspace(store,join(root,'moved')),copy=openStore(target);try{const rebuilt=copy.get('masters',id);assert.equal(rebuilt.frames,master.frames);assert.deepEqual(rebuilt.mapping,master.mapping);assert.equal(renderProfileOf(rebuilt),profile);assert.equal(rebuilt.channels,profile===DEFAULT_RENDER_PROFILE?2:1);assert.ok(readFileSync(join(target,rebuilt.path)).equals(original),'历史裁剪和原间隔按同一profile精确恢复');assert.deepEqual(savedAudioRange(copy,unitId,'dry',audios[0].id),later.range);assert.equal(copy.all('attempts').length,0);}finally{copy.close();}
+    assert.deepEqual(savedAudioRange(store,unitId,'dry',audios[0].id),later.range);assert.ok(readFileSync(join(store.directory,sourcePath)).equals(bytes));assert.equal(existsSync(join(store.directory,master.path)),false);
+    const changed=Buffer.from(bytes);changed[44]^=1;writeFileSync(join(store.directory,sourcePath),changed);await assert.rejects(copyWorkspace(store,join(root,'rejected-source')),/裁剪源身份已变化/);assert.equal(existsSync(join(root,'rejected-source')),false);assert.deepEqual(savedAudioRange(store,unitId,'dry',audios[0].id),later.range);
+  });
 });
 
 test('运行标记损坏、零或负PID只给诊断，不删除标记或探测进程组', t => {

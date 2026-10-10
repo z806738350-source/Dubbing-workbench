@@ -1,8 +1,10 @@
 import { cp, readFile, writeFile, readdir, lstat, unlink } from "node:fs/promises";
-import { recordFiles, verifyWorkspaceDeliveries, verifyWorkspaceAttachments } from "../server/workspace.mjs";
+import { recordFiles, verifyWorkspaceDeliveries, verifyWorkspaceAttachments, assertMasterRecipe } from "../server/workspace.mjs";
 import { existsSync } from "node:fs";
 import { resolve, join, relative, isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileTreeBytes, reserveDiskSpace } from '../server/disk-space.mjs';
+import { dirname } from 'node:path';
 const [mode, sourceArg, targetArg] = process.argv.slice(2);
 if (
   !["create", "restore", "verify", "cleanup"].includes(mode) ||
@@ -55,14 +57,20 @@ async function verify(dir) {
       }
       for (const v of records('voices')) if (v.sourceAudioId && !audios.has(v.sourceAudioId)) throw new Error('音色来源候选引用缺失');
     }
-    const retained = new Set();
+    const retained = new Set(), masterSources = new Map(records('audios').map(audio => [audio.id,audio]));
     for (const table of ["voices", "audios", "masters", "exports", "assistantAttachments"])
       for (const item of records(table)) for (const path of recordFiles(item)) {
         retained.add(resolve(dir, path));
         if (item.state === "deleted") continue;
         const file = resolve(dir, path), rel = relative(dir, file);
         if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("备份包含越界文件路径");
-        if (!existsSync(file)) throw new Error(`备份缺少被引用文件：${path}`);
+        if (!existsSync(file)) {
+          if (table === 'masters' && path === item.path && item.fileReclaimedAt) {
+            assertMasterRecipe(item);
+            if (item.mapping.every(mapping => {const audio=masterSources.get(mapping.audioId);return audio?.path && existsSync(resolve(dir,audio.path));})) continue;
+          }
+          throw new Error(`备份缺少被引用文件：${path}`);
+        }
       }
     await verifyWorkspaceDeliveries(dir, records('attempts'));
     const attachments = await verifyWorkspaceAttachments(dir, records('assistantAttachments'));
@@ -105,7 +113,10 @@ else if (mode !== "cleanup") {
     throw new Error("目标目录已存在，请使用新目录，避免覆盖");
   if (target.startsWith(source + "/"))
     throw new Error("备份不能放在来源目录内部");
-  await cp(source, target, {
+  let targetParent = dirname(target);
+  while (!existsSync(targetParent)) targetParent = dirname(targetParent);
+  const reservation = reserveDiskSpace(targetParent, await fileTreeBytes(source), mode === 'restore' ? '恢复备份' : '创建备份');
+  try { await cp(source, target, {
     recursive: true,
     errorOnExist: true,
     force: false,
@@ -123,4 +134,5 @@ else if (mode !== "cleanup") {
   console.log(
     mode === "restore" ? "已恢复到新目录，原数据保留。" : "已创建完整备份。",
   );
+  } finally { reservation.release(); }
 }

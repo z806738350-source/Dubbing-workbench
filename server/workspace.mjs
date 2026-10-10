@@ -5,7 +5,9 @@ import { cp, lstat, mkdir, realpath, rename, rm, writeFile, readdir, mkdtemp } f
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { fail, openStore } from './store.mjs';
+import { fail, openStore, same } from './store.mjs';
+import { renderProfileOf, LEGACY_RENDER_PROFILE, DEFAULT_RENDER_PROFILE, prepareAudioSource } from './audio-range.mjs';
+import { fileTreeBytes, reserveDiskSpace } from './disk-space.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 export const workspaceConfig = join(root, '.workspace-local.json');
@@ -60,6 +62,68 @@ export function recordFiles(item, attempt = false) {
   return [...new Set([path, item.sourcePath, item.delivery?.rawPath, item.delivery?.manifestPath, item.processing?.resultPath,
     ...(attempt && item.deliveryVersion ? [`${path}.delivery.json`, `${path.slice(0, -4)}.processed.wav`] : [])].filter(Boolean))];
 }
+
+// Recovery needs object ownership, never every chapter's text or audio history.
+export function locateDraftChapters(store, ids) {
+  if (!Array.isArray(ids) || ids.length > 1000 || ids.some(id => typeof id !== 'string' || !id || id.length > 260)) fail('暂存定位范围无效');
+  const chapters = new Map();
+  const add = (chapterId, table, record) => {
+    if (!chapterId) return;
+    const chapter = store.maybe('chapters', chapterId);
+    if (!chapter) return;
+    if (!chapters.has(chapter.id)) chapters.set(chapter.id, { id: chapter.id, projectId: chapter.projectId, title: chapter.title, segments: [], units: [], events: [] });
+    if (record && !chapters.get(chapter.id)[table].some(item => item.id === record.id)) chapters.get(chapter.id)[table].push(record);
+  };
+  for (const id of ids) {
+    const [type, raw, context] = id.split('/'), key = raw || id;
+    const segment = store.maybe('segments', type === 'voice-session-v1' && key === 'new-voice-context' ? context || '' : key);
+    if (segment) add(segment.chapterId, 'segments', { id: segment.id, order: segment.order, text: segment.text.slice(0, 24), roleId: segment.roleId });
+    if (type === 'unit-v1' && key.startsWith('new-')) add(key.slice(4));
+    if (type === 'unit-v1' || type === 'sound-event-v1') {
+      const event = type === 'sound-event-v1' && store.maybe('events', key);
+      const unit = store.maybe('units', event?.unitId || key.replace(/^new-/, ''));
+      if (unit) {
+        add(unit.chapterId, 'units', { id: unit.id, kind: unit.kind, state: unit.state });
+        if (event) add(unit.chapterId, 'events', { id: event.id, unitId: event.unitId, description: (event.description || '').slice(0, 24) });
+      }
+    }
+    if (type === 'voice-session-v1' && key === 'new-voice-context') add(context);
+  }
+  return [...chapters.values()];
+}
+export function assertMasterRecipe(master) {
+  let cursor=0;
+  const valid=Array.isArray(master.mapping)&&master.mapping.length>0&&master.mapping.every((m,index)=>{
+    if(!m || typeof m.audioId!=='string' || !m.audioId || !Number.isSafeInteger(m.startFrame) || !Number.isSafeInteger(m.endFrame) || m.startFrame!==cursor || m.endFrame<=m.startFrame)return false;
+    cursor=m.endFrame+(index<master.mapping.length-1?master.gapFrames:0);return true;
+  });
+  if (!valid || !Number.isSafeInteger(master.frames) || master.frames < 1 || cursor!==master.frames || !Number.isSafeInteger(master.gapFrames) || master.gapFrames < 0 || ![LEGACY_RENDER_PROFILE,DEFAULT_RENDER_PROFILE].includes(renderProfileOf(master)) || master.processing !== `pcm_s16le-48000-${renderProfileOf(master)===LEGACY_RENDER_PROFILE?'mono':'stereo'}`)
+    fail(`母版 ${master.path} 的本地重建配方不完整，历史文件仍保留`,409);
+}
+export async function historicalMasterRows(store, master, { signal } = {}) {
+  assertMasterRecipe(master);
+  const job=master.jobId && store.maybe('jobs',master.jobId), rows=[];
+  for (const [index,m] of master.mapping.entries()) {
+    signal?.throwIfAborted();
+    const current=store.maybe('audios',m.audioId), frozen=job?.renderRows?.[index];
+    if (!current?.path || !existsSync(deletionPath(store,current.path))) fail(`母版 ${master.path} 的原始音频缺失：${m.audioId}，不能重新录制替代`,409);
+    const a=frozen?.a?.id===m.audioId ? {...current,...frozen.a,path:current.path} : current;
+    let range;
+    if (m.sourceHash || m.decodeProfile || m.rangeRevision) {
+      const source=await prepareAudioSource(store,a.id,{signal});
+      signal?.throwIfAborted();
+      if (source.sourceHash!==m.sourceHash || source.decodeProfile!==m.decodeProfile) fail(`母版 ${master.path} 的裁剪源身份已变化，历史仍保留`,409);
+      range={...source,unitId:m.unitId || m.segmentId,mode:m.mode || 'dry',startFrame:m.clipStartFrame,endFrame:m.clipEndFrame,revision:m.rangeRevision,edgePolicy:m.edgePolicy};
+      if (frozen?.a?.id===m.audioId && frozen.range) range={...frozen.range,...range};
+    }
+    rows.push({a,...(range?{range}:{}),s:{id:m.unitId || m.segmentId,chapterId:master.chapterId,unitId:m.unitId,members:m.memberIds,kind:m.memberIds?.length>1?'group':'single',mode:m.mode}});
+  }
+  return rows;
+}
+export function verifyRebuiltMaster(master, rebuilt) {
+  if (rebuilt.frames!==master.frames || rebuilt.gapFrames!==master.gapFrames || rebuilt.channels!==(master.channels || (renderProfileOf(master)===LEGACY_RENDER_PROFILE?1:2)) || rebuilt.sampleRate!==(master.sampleRate || 48000) || renderProfileOf(rebuilt)!==renderProfileOf(master) || rebuilt.mapping.length!==master.mapping.length || master.mapping.some((m,i)=>Object.keys(m).some(key=>!same(m[key],rebuilt.mapping[i][key]))))
+    fail(`母版 ${master.path} 的重建配方与原始音频不一致，历史仍保留`,409);
+}
 function mapRecordFiles(item, map) {
   if (item.path) item.path = map(item.path);
   if (item.sourcePath) item.sourcePath = map(item.sourcePath);
@@ -96,7 +160,7 @@ export async function verifyWorkspaceAttachments(directory, attachments) {
 
 // Read-only inventory: original recordings and historical exports are not caches.
 export function workspaceDiagnostics(store) {
-  const counts = {}, bytes = {}, missing = [], root = realpathSync(store.directory), counted = new Set();
+  const counts = {}, bytes = {}, missing = [], reclaimedMasters=[], root = realpathSync(store.directory), counted = new Set();
   const available = path => {
     if (!path) return false;
     try { const file = deletionPath(store, path); return lstatSync(file).isFile(); } catch { return false; }
@@ -109,7 +173,9 @@ export function workspaceDiagnostics(store) {
     counts[kind] = rows.length; bytes[kind] = 0;
     for (const item of rows) for (const path of recordFiles(item)) {
       if (available(path)) { account(kind, path); continue; }
-      const repairable = kind === 'masters' && path === item.path && Array.isArray(item.mapping) && item.mapping.length > 0 && Number.isSafeInteger(item.frames) && Number.isSafeInteger(item.gapFrames) && item.gapFrames >= 0 && item.processing === 'pcm_s16le-48000-mono' && item.mapping.every(m => available(store.maybe('audios',m.audioId)?.path));
+      let repairable=false;
+      if(kind==='masters'&&path===item.path)try{assertMasterRecipe(item);repairable=item.mapping.every(m=>available(store.maybe('audios',m.audioId)?.path));}catch{}
+      if(repairable&&item.fileReclaimedAt){reclaimedMasters.push({id:item.id,chapterId:item.chapterId,path:item.path});continue;}
       missing.push({kind,id:item.id,path,repairable:!!repairable});
     }
   }
@@ -124,7 +190,8 @@ export function workspaceDiagnostics(store) {
       if (required.has(path)) missing.push({kind:'deliveries',id:attempt.id,path,repairable:false});
     }
   }
-  return {scope:'current-workspace',counts,bytes,missing,primaryAvailable:missing.every(item=>item.kind === 'masters' && item.repairable),totalReferencedBytes:Object.values(bytes).reduce((a,b)=>a+b,0)};
+  counts.reclaimedMasters=reclaimedMasters.length;
+  return {scope:'current-workspace',counts,bytes,missing,reclaimedMasters,primaryAvailable:missing.every(item=>item.kind === 'masters' && item.repairable),totalReferencedBytes:Object.values(bytes).reduce((a,b)=>a+b,0)};
 }
 
 // Called only while the server has excluded concurrent requests and background jobs.
@@ -141,14 +208,19 @@ export async function copyWorkspace(store, requested) {
   if (inside(source, target) || inside(target, source)) fail('新位置不能是当前工作区、其内部目录或上级目录');
   if (existsSync(target) && (!(await lstat(target)).isDirectory() || (await readdir(target)).length))
     fail('目标文件夹不为空，请选择空文件夹或新位置，避免覆盖资料');
-  const staging = await mkdtemp(join(parent, '.dubbing-move-'));
+  const folders = [...new Set(['voices', 'audio', 'masters', 'exports', 'output', 'assistant', ...store.all('projects').map(p => p.folder).filter(Boolean)])].filter(folder=>existsSync(join(source,folder)));
+  let bytes = (await lstat(join(source,'workbench.sqlite'))).size;
+  if (existsSync(join(source,'workbench.sqlite-wal'))) bytes += (await lstat(join(source,'workbench.sqlite-wal'))).size;
+  for (const folder of folders) bytes += await fileTreeBytes(join(source,folder));
+  const reservation = reserveDiskSpace(parent, bytes, '迁移项目资料');
+  let staging;
   try {
+    staging = await mkdtemp(join(parent, '.dubbing-move-'));
     await verifyWorkspaceDeliveries(source, store.all('attempts'));
     await verifyWorkspaceAttachments(source, store.all('assistantAttachments'));
     // SQLite creates a consistent database copy including committed WAL contents.
     store.db.exec(`VACUUM INTO '${join(staging, 'workbench.sqlite').replaceAll("'", "''")}'`);
-    for (const folder of new Set(['voices', 'audio', 'masters', 'exports', 'output', 'assistant', ...store.all('projects').map(p => p.folder).filter(Boolean)])) {
-      if (!existsSync(join(source, folder))) continue;
+    for (const folder of folders) {
       await cp(join(source, folder), join(staging, folder), {
         recursive: true, force: false, errorOnExist: true,
         filter: async path => {
@@ -157,7 +229,8 @@ export async function copyWorkspace(store, requested) {
         },
       });
     }
-    const missingMasters = [];
+    reservation.release();
+    const missingMasters = [], reclaimedMasters=[];
     const db = new DatabaseSync(join(staging, 'workbench.sqlite'), { readOnly: true });
     try {
       if (Object.values(db.prepare('PRAGMA integrity_check').get())[0] !== 'ok') fail('新位置的数据库校验失败');
@@ -171,7 +244,7 @@ export async function copyWorkspace(store, requested) {
             const path = resolve(staging, file);
             if (!inside(staging, path)) fail(`素材路径无效：${file}，未切换保存位置`);
             if (!existsSync(path)) {
-              if (table === 'masters' && file === item.path) { missingMasters.push(item); continue; }
+              if (table === 'masters' && file === item.path) {if(item.fileReclaimedAt){assertMasterRecipe(item);reclaimedMasters.push(item);}else missingMasters.push(item);continue;}
               if (table === 'attempts' && (!required.has(file) || file === item.delivery?.rawPath && existsSync(path + '.part'))) continue;
               fail(`原始素材或历史导出缺失：${file}，请恢复文件后再迁移`);
             }
@@ -183,19 +256,17 @@ export async function copyWorkspace(store, requested) {
     } finally { db.close(); }
     const copy = openStore(staging);
     try {
+      for(const master of reclaimedMasters)for(const mapping of master.mapping) {
+        const audio=copy.maybe('audios',mapping.audioId);
+        if(!audio?.path || !existsSync(deletionPath(copy,audio.path)) || mapping.sourceHash&&!copy.maybe('units',mapping.unitId||mapping.segmentId))fail(`历史母版 ${master.path} 的本地恢复原件或裁剪归属缺失，未切换保存位置`,409);
+      }
       if (missingMasters.length) {
         const { buildMaster } = await import('./audio.mjs');
         for (const master of missingMasters) {
-          if (!Array.isArray(master.mapping) || !master.mapping.length || !Number.isSafeInteger(master.frames) || !Number.isSafeInteger(master.gapFrames) || master.gapFrames < 0 || master.processing !== 'pcm_s16le-48000-mono')
-            fail(`缺少母版 ${master.path} 且重建配方不完整，请在原工作区免费重新准备整章试听后迁移`);
-          const rows = master.mapping.map(m => {
-            const a = copy.maybe('audios', m.audioId);
-            if (!a || !a.path || !existsSync(join(staging, a.path))) fail(`母版 ${master.path} 的原始音频缺失：${m.audioId}，不能重新录制替代`);
-            return { a, s: { id: m.unitId || m.segmentId, chapterId: master.chapterId, unitId: m.unitId, members: m.memberIds, kind: m.memberIds?.length > 1 ? 'group' : 'single', mode: m.mode } };
-          });
-          const rebuilt = await buildMaster(copy, rows, master.gapFrames / 48000, master.id);
-          if (rebuilt.frames !== master.frames || JSON.stringify(rebuilt.mapping) !== JSON.stringify(master.mapping)) fail(`母版 ${master.path} 的重建配方与原始音频不一致，未切换保存位置`);
-          copy.put('masters', { ...master, ...rebuilt, invalid: false, rebuiltAt: new Date().toISOString() }, master.chapterId);
+          const rows=await historicalMasterRows(copy,master);
+          const rebuilt = await buildMaster(copy, rows, master.gapFrames / 48000, master.id, renderProfileOf(master));
+          verifyRebuiltMaster(master,rebuilt);
+          copy.put('masters', { ...master, ...rebuilt, mapping:master.mapping, invalid: false, rebuiltAt: new Date().toISOString() }, master.chapterId);
         }
       }
       organizeProjects(copy);
@@ -205,9 +276,9 @@ export async function copyWorkspace(store, requested) {
     await rename(staging, target);
     return target;
   } catch (error) {
-    await rm(staging, { recursive: true, force: true });
+    if (staging) await rm(staging, { recursive: true, force: true });
     throw error;
-  }
+  } finally { reservation.release(); }
 }
 
 export function projectFile(store, chapterId, kind, filename) {

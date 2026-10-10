@@ -8,7 +8,35 @@ import { withSavedDrafts, draftScopeRevision, hasLiveDraft } from './autosave';
 import { submitOperation } from './taskOperations';
 import VoiceCreation from './VoiceCreation';
 import type { VoiceTarget } from './VoiceCreation';
-import type { ChapterDetail, GenerationPlan, Role, Segment, State, Voice } from './types';
+import type { ChapterDetail, FidelitySummaryRecord, GenerationPlan, Role, Segment, State, Voice } from './types';
+
+export function generationPlanChanges(before:GenerationPlan,after:GenerationPlan,voices:Pick<Voice,"id"|"name">[]=[]):string[] {
+  const changes:string[]=[],same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
+  if(before.chapterId!==after.chapterId)changes.push('目标章节已改变。');
+  if(!same(before.units.map(({unitId,members})=>({unitId,members})),after.units.map(({unitId,members})=>({unitId,members}))))changes.push(`声音单元或成员顺序已改变（${before.memberIds.length} 条 → ${after.memberIds.length} 条）。`);
+  const modes=(plan:GenerationPlan)=>plan.units.map(unit=>unit.mode==='scene'?'带背景声':'纯人声');
+  if(!same(modes(before),modes(after)))changes.push(`制作模式已改变（${modes(before).join('、')} → ${modes(after).join('、')}）。`);
+  const models=(plan:GenerationPlan)=>plan.units.map(unit=>unit.model||plan.model);
+  if(!same(models(before),models(after)))changes.push(`声音模型已改变（${before.model||'原选择'} → ${after.model||'当前选择'}）。`);
+  const references=(plan:GenerationPlan)=>[...new Set(plan.units.flatMap(unit=>unit.referenceVoices||[]).map(voice=>voices.find(record=>record.id===voice.voiceId)?.name||'所选参考录音'))].join('、');
+  if(!same(before.units.map(unit=>unit.referenceVoices),after.units.map(unit=>unit.referenceVoices)))changes.push(`参考录音或其版本已改变（${references(before)||'原选择'} → ${references(after)||'当前选择'}）。`);
+  if(after.audioRequests>before.audioRequests||after.textRequests>before.textRequests)changes.push(`请求数量增加（音频 ${before.audioRequests} → ${after.audioRequests} 次）。`);
+  if((after.outstandingAttemptIds||[]).some(id=>!before.outstandingAttemptIds?.includes(id)))changes.push('出现新的未确认请求，可能已经计费。');
+  return changes;
+}
+
+export function FidelitySummary({audit}:{audit?:FidelitySummaryRecord}) {
+  if(!audit)return null;
+  const status={retained:'原文字面保留',edited:'存在编辑差异',mismatch:'存在字面差异',unknown:'字面依据未完整'}[audit.textFidelity.status];
+  return <details className="task-panel-section fidelity-summary"><summary>原文与声音依据 · {status}</summary>
+    <p className="hint">{audit.scope.kind==='historical'?'历史编排':'当前编排'} {audit.scope.arrangement} · 原文版本 {audit.scope.sourceVersion} · 只读核对</p>
+    <p className="hint">来源范围：{audit.sourceCoverage.valid?'完整':`缺口 ${audit.sourceCoverage.gaps}、重叠 ${audit.sourceCoverage.overlaps}`}；字面一致 {audit.textFidelity.exact} 段，标点编辑 {audit.textFidelity.punctuationEdits} 段，字词编辑 {audit.textFidelity.wordEdits} 段，依据未完整 {audit.textFidelity.unknown} 段。</p>
+    <p className="hint">当前参与 {audit.participation.active} 段，排除 {audit.participation.excluded} 段，已删除 {audit.participation.deleted} 段，退役 {audit.participation.retired} 段；有效参与缺口 {audit.participation.gaps}、重叠 {audit.participation.overlaps}。</p>
+    <p className="hint">冻结朗读成员：匹配 {audit.spokenPayload.matched} 段，缺少请求依据 {audit.spokenPayload.missing} 段，差异 {audit.spokenPayload.mismatches} 段。</p>
+    <p className="hint">声音原件：可用 {audit.audioProvenance.originalAvailable} 份，未保存 {audit.audioProvenance.originalNotSaved} 份，依据未知 {audit.audioProvenance.originalUnknown} 份；参考录音已冻结 {audit.audioProvenance.referenceFrozen} 份，历史依据未知 {audit.audioProvenance.referenceUnknown} 份。</p>
+    <p className="hint">听评记录 {audit.listening.reviewed} 段，待听评 {audit.listening.pending} 段。字面和请求匹配不能证明声音念全；声景质量未由本核对评定。</p>
+  </details>;
+}
 
 export type WorkspaceIssue = { key:string; code?:string; scope?:{unitId?:string;mode?:'dry'|'scene';ids:string[]}; resolution?:string; title:string; detail:string; kind:'structure'|'configuration'|'identity'|'voice'|'request'|'audio'|'advice'; ids:string[]; roleId?:string; unitId?:string; mode?:'dry'|'scene' };
 export function configurationDecided(segment:Segment,field?:'role'|'identity'):boolean {
@@ -101,35 +129,37 @@ export function ProjectOverview({state,projectId,onPick,onClose,onImport,onHelp}
     <button className="text-button" onClick={onHelp}>查看四步入门</button>
   </Dialog>;
 }
-export function VoicePicker({state,chapter,roles,initialTarget,onClose,onRefresh,play,playingId,onUsed}:{state:State;chapter:ChapterDetail;roles:Role[];initialTarget:{roleId?:string;segmentId?:string;tab?:'create';sessionId?:string};onClose:()=>void;onRefresh:()=>Promise<void>;play:(kind:string,id:string,title:string)=>void;playingId?:string;onUsed:()=>void}){
+export function VoicePicker({state,chapter,roles,initialTarget,onClose,onRefresh,play,playingId,onUsed}:{state:State;chapter:ChapterDetail;roles:Role[];initialTarget:{roleId?:string;segmentId?:string;segmentIds?:string[];tab?:'create';sessionId?:string};onClose:()=>void;onRefresh:()=>Promise<void>;play:(kind:string,id:string,title:string)=>void;playingId?:string;onUsed:()=>void}){
   const [basis,setBasis]=useState(()=>({chapter,roles}));
+  const bulk=initialTarget.segmentIds;
   const segment=basis.chapter.segments.find(s=>s.id===initialTarget.segmentId),role=basis.roles.find(r=>r.id===(initialTarget.roleId||segment?.roleId));
-  const initialVoice=segment?.voiceId||(role&&Object.hasOwn(basis.chapter.roleVoices||{},role.id)?basis.chapter.roleVoices?.[role.id]:role?.voiceId)||'';
-  const [scope,setScope]=useState<'chapter'|'single'>(segment?'single':'chapter'),[tab,setTab]=useState(initialTarget.tab||'library'),[query,setQuery]=useState(''),[picked,setPicked]=useState(initialVoice);
+  const initialVoice=bulk?'':segment?.voiceId||(role&&Object.hasOwn(basis.chapter.roleVoices||{},role.id)?basis.chapter.roleVoices?.[role.id]:role?.voiceId)||'';
+  const [scope,setScope]=useState<'chapter'|'single'>(segment?'single':'chapter'),[tab,setTab]=useState(bulk?'library':initialTarget.tab||'library'),[query,setQuery]=useState(''),[picked,setPicked]=useState(initialVoice);
   const [error,setError]=useState(''),[pending,setPending]=useState(false),[uploadName,setUploadName]=useState(role?.name?role.name+'的参考声音':'');
   const [uploaded,setUploaded]=useState<Voice|null>(null);
   const live=useRef({chapter,roles,scope});live.current={chapter,roles,scope};
   const active=useRef(true);useEffect(()=>()=>{active.current=false;},[]);
-  const affected=scope==='single'&&segment?[segment]:basis.chapter.segments.filter(s=>!s.excluded&&s.roleId===role?.id&&(s.voiceSource!=='override'||!s.voiceId));
+  const affected=bulk?basis.chapter.segments.filter(s=>bulk.includes(s.id)&&!s.excluded):scope==='single'&&segment?[segment]:basis.chapter.segments.filter(s=>!s.excluded&&s.roleId===role?.id&&(s.voiceSource!=='override'||!s.voiceId));
   const needsReview=chapter.id!==basis.chapter.id||draftScopeRevision('chapter:'+basis.chapter.id,chapter.revision)!==draftScopeRevision('chapter:'+basis.chapter.id,basis.chapter.revision)||
-    (role&&roles.find(r=>r.id===role.id)?.revision!==role.revision)||!!(segment&&!chapter.segments.some(s=>s.id===segment.id&&!s.excluded));
-  const target:VoiceTarget={projectId:basis.chapter.projectId,chapterId:basis.chapter.id,revision:basis.chapter.revision,roleId:scope==='chapter'?role?.id:undefined,segmentId:scope==='single'?segment?.id:undefined,entityRevision:role?.revision||1,apply:true,scope,chapterOnly:true,firstDefault:scope==='chapter'&&!role?.voiceId,dependencies:affected.map(s=>'segment:'+s.id).concat(role?'role:'+role.id:[]),needsReview:!!needsReview,label:scope==='single'?`第 ${(segment?.order||0)+1} 条`:role?.name};
+    (role&&roles.find(r=>r.id===role.id)?.revision!==role.revision)||!!(segment&&!chapter.segments.some(s=>s.id===segment.id&&!s.excluded))||!!(bulk&&bulk.some(id=>!chapter.segments.some(s=>s.id===id&&!s.excluded)));
+  const target:VoiceTarget={projectId:basis.chapter.projectId,chapterId:basis.chapter.id,revision:basis.chapter.revision,roleId:scope==='chapter'?role?.id:undefined,segmentId:scope==='single'?segment?.id:undefined,entityRevision:role?.revision||1,apply:true,scope,chapterOnly:true,firstDefault:!bulk&&scope==='chapter'&&!role?.voiceId,dependencies:affected.map(s=>'segment:'+s.id).concat(role?'role:'+role.id:[]),needsReview:!!needsReview,label:bulk?`${affected.length} 条所选台词`:scope==='single'?`第 ${(segment?.order||0)+1} 条`:role?.name};
   const use=async(voiceId:string)=>{
     setPending(true);setError('');
     try{
       await withSavedDrafts('chapter:'+basis.chapter.id,target.dependencies,async()=>{
         const current=live.current,revision=draftScopeRevision('chapter:'+basis.chapter.id,basis.chapter.revision);
+        if(!active.current)throw new Error('声音选用已取消，原选择保持。');
         if(current.chapter.id!==basis.chapter.id||current.scope!==scope||draftScopeRevision('chapter:'+basis.chapter.id,current.chapter.revision)!==revision||(role&&current.roles.find(r=>r.id===role.id)?.revision!==role.revision))throw new Error('应用范围已经变化，请重新核对受影响台词。');
-        const receipt=await submitOperation('use-voice:'+(target.segmentId||target.roleId),{kind:'useVoice',chapterId:target.chapterId,revision,roleId:target.roleId,segmentId:target.segmentId,entityRevision:target.entityRevision,apply:true,chapterOnly:true,voiceId},state.jobs);
+        const receipt=await submitOperation('use-voice:'+(bulk?'selected:'+basis.chapter.id:target.segmentId||target.roleId),{kind:'useVoice',chapterId:target.chapterId,revision,...(bulk?{segmentIds:[...bulk]}:{roleId:target.roleId,segmentId:target.segmentId,entityRevision:target.entityRevision}),apply:true,chapterOnly:true,voiceId},state.jobs);
         if(receipt.error)throw new Error(receipt.error);await onRefresh();
       });
       if(active.current)onUsed();
     }catch(e){if(active.current)setError((e as Error).message);}finally{if(active.current)setPending(false);}
   };
-  return <Dialog title={`为${target.label||'当前角色'}选声音`} presentation="sidepanel" onClose={onClose} footer={tab!=='create'&&<button className="button primary" disabled={!picked||pending||!affected.length||!!needsReview||!(scope==='single'?segment:role)} onClick={()=>void use(picked)}>{pending?'正在保存并应用…':'用这个声音'}</button>}>
+  return <Dialog title={bulk?'改绑所选台词音色':`为${target.label||'当前角色'}选声音`} presentation="sidepanel" onClose={onClose} footer={tab!=='create'&&<button className="button primary" disabled={!picked||pending||!affected.length||!!needsReview||!bulk&&!(scope==='single'?segment:role)} onClick={()=>void use(picked)}>{pending?'正在保存并应用…':'用这个声音'}</button>}>
     {!!needsReview&&<section className="warning" role="alert"><p>章节或角色在选择期间发生了变化。你的声音选择仍保留，请重新核对范围后再应用。</p><button className="button secondary" disabled={pending} onClick={()=>{setBasis({chapter,roles});setError('');}}>重新核对当前范围</button></section>}
-    <section className="voice-scope"><h3>应用范围</h3><div className="tabs"><button disabled={pending} aria-pressed={scope==='chapter'} onClick={()=>setScope('chapter')}>角色在本章</button>{segment&&<button disabled={pending} aria-pressed={scope==='single'} onClick={()=>setScope('single')}>仅这一句</button>}</div><p className="hint">{affected.length} 条将使用所选声音。{scope==='chapter'?'更新本章沿用默认或尚未选声音的台词，保留已单独指定的声音。'+(target.firstDefault?'首次绑定也设为未来新片段的角色默认。':''):'这句单独指定，其他台词继续沿用角色声音。'}</p><details><summary>查看受影响台词</summary>{affected.map(s=><p className="original-excerpt" key={s.id}>第 {s.order+1} 条 · {s.text}</p>)}</details></section>
-    <div className="tabs task-tabs" aria-label="声音来源">{[['library','已有声音'],['upload','上传参考'],['create','描述创建']].map(([id,label])=><button key={id} disabled={pending} className={tab===id?'active':''} aria-pressed={tab===id} onClick={()=>setTab(id)}>{label}</button>)}</div>
+    <section className="voice-scope"><h3>应用范围</h3>{bulk?<p>已勾选 {affected.length} 条台词</p>:<div className="tabs"><button disabled={pending} aria-pressed={scope==='chapter'} onClick={()=>setScope('chapter')}>角色在本章</button>{segment&&<button disabled={pending} aria-pressed={scope==='single'} onClick={()=>setScope('single')}>仅这一句</button>}</div>}<p className="hint">{affected.length} 条将使用所选声音。{bulk?'包括这些台词中原先单独指定的声音。只修改音色，角色归属保持；已有音频不会自动重新生成。':scope==='chapter'?'更新本章沿用默认或尚未选声音的台词，保留已单独指定的声音。'+(target.firstDefault?'首次绑定也设为未来新片段的角色默认。':''):'这句单独指定，其他台词继续沿用角色声音。'}</p><details><summary>查看受影响台词</summary>{affected.map(s=><p className="original-excerpt" key={s.id}>第 {s.order+1} 条 · {s.text}</p>)}</details></section>
+    {!bulk&&<div className="tabs task-tabs" aria-label="声音来源">{[['library','已有声音'],['upload','上传参考'],['create','描述创建']].map(([id,label])=><button key={id} disabled={pending} className={tab===id?'active':''} aria-pressed={tab===id} onClick={()=>setTab(id)}>{label}</button>)}</div>}
     {tab==='library'&&<><div className="search-field"><Search size={16}/><input aria-label="查找声音" value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索声音名称"/></div><div className="voice-choice-list">{state.voices.filter(v=>v.state==='active'&&v.name.includes(query)).map(v=><article className={'voice-choice '+(picked===v.id?'selected':'')} key={v.id}><button className="voice-choice-main" onClick={()=>setPicked(v.id)} aria-pressed={picked===v.id}><strong>{v.name}</strong><small>{Math.round(v.duration)} 秒参考 · {v.sourceCandidateId?'描述创建':'参考录音'}{picked===v.id?' · 已选':''}</small></button><button className="icon" aria-label={'试听'+v.name} onClick={()=>play('voices',v.id,v.name)}><Play size={16}/></button></article>)}</div>{!state.voices.some(v=>v.state==='active')&&<p className="empty-inline">还没有声音。上传参考录音，或描述你想要的声音。</p>}</>}
     {tab==='upload'&&<Form label={uploaded?'已保存参考声音':'保存参考声音'} busy={pending||!!uploaded} onSubmit={async f=>{
       const file=f.get('audio') as File;if(!file?.size)throw new Error('请选择参考录音');if(file.size>10*1024*1024)throw new Error('参考录音不能超过10 MB');
@@ -152,18 +182,26 @@ export function VoicePicker({state,chapter,roles,initialTarget,onClose,onRefresh
   </Dialog>;
 }
 export type RecoveryTarget = {kind:'import'|'segment'|'unit'|'event'|'new-group'|'voice-session'|'voice-context'|'role'|'unknown';label:string;chapterId?:string;projectId?:string;segmentId?:string;unitId?:string;eventId?:string;mode?:'dry'|'scene';voiceSessionId?:string;roleId?:string;contextKey?:string;ids?:string[]};
+type RecoveryChapter = Pick<ChapterDetail,'id'|'title'|'projectId'> & {segments:Pick<Segment,'id'|'order'|'text'|'roleId'>[];units:Pick<NonNullable<ChapterDetail['units']>[number],'id'|'kind'|'state'>[];events:Pick<NonNullable<ChapterDetail['events']>[number],'id'|'unitId'|'description'>[]};
+export function DraftPreview({value}:{value:unknown}){
+  const [open,setOpen]=useState(false);
+  return <details onToggle={e=>setOpen(e.currentTarget.open)}><summary>查看暂存内容</summary>{open&&<pre className="draft-preview">{JSON.stringify(value,null,2)}</pre>}</details>;
+}
 export function RecoveryCenter({chapter,state,onClose,onRecovered}:{chapter:ChapterDetail|null;state:State;onClose:()=>void;onRecovered:(id:string,target:RecoveryTarget)=>void|Promise<void>}){
-  const [records,setRecords]=useState<{id:string;entry:DraftRecord<unknown>}[]>([]),[chapters,setChapters]=useState<ChapterDetail[]>(chapter?[chapter]:[]),[error,setError]=useState(''),[loading,setLoading]=useState(true),[pending,setPending]=useState(false);
+  const [records,setRecords]=useState<{id:string;entry:DraftRecord<unknown>}[]>([]),[chapters,setChapters]=useState<RecoveryChapter[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true),[pending,setPending]=useState(false);
+  const loadingRequest=useRef<AbortController|null>(null);
   const reload=async()=>{
+    loadingRequest.current?.abort();const controller=new AbortController();loadingRequest.current=controller;
     setLoading(true);setError('');
     try{
-      setRecords(await listAllDrafts());
-      const loaded=await Promise.allSettled(state.chapters.map(c=>api<ChapterDetail>('/chapters/'+c.id)));
-      setChapters(loaded.flatMap(result=>result.status==='fulfilled'?[result.value]:[]));
-      if(loaded.some(result=>result.status==='rejected'))setError('部分章节资料未能读取，相关暂存仍保留。恢复连接后请刷新。');
-    }catch(e){setError((e as Error).message);}finally{setLoading(false);}
+      const drafts=await listAllDrafts();if(controller.signal.aborted)return;
+      setRecords(drafts);
+      const ids=drafts.filter(({entry})=>entry.compatible!==false&&!entry.error).map(({id})=>id);
+      const loaded=ids.length?await api<RecoveryChapter[]>('/drafts/locate',{ids},undefined,{signal:controller.signal}):[];
+      if(!controller.signal.aborted)setChapters(loaded);
+    }catch(e){if(!controller.signal.aborted){setChapters([]);setError((e as Error).message);}}finally{if(!controller.signal.aborted)setLoading(false);}
   };
-  useEffect(()=>{void reload();},[]);
+  useEffect(()=>{void reload();return()=>loadingRequest.current?.abort();},[]);
   const targetFor=(id:string,entry:DraftRecord<unknown>):RecoveryTarget=>{
     const unknown:RecoveryTarget={kind:'unknown',label:'尚未定位的暂存 · '+id},parts=id.split('/'),type=parts.shift()!,raw=parts[0]||id;
     if(entry.compatible===false)return {kind:'unknown',label:(entry.workspaceIdentity?'其他工作区的暂存':'旧版归属未确认的暂存')+' · '+id};
@@ -196,27 +234,28 @@ export function RecoveryCenter({chapter,state,onClose,onRecovered}:{chapter:Chap
   return <Dialog title="本机暂存与恢复" presentation="sidepanel" onClose={onClose}>
     <p className="task-panel-summary">暂存仍在本机。其他页面正在编辑的内容，需要回到原页面处理。</p><button className="text-button" disabled={pending||loading} onClick={()=>void reload()}>刷新暂存列表</button>
     {loading&&<p className="hint">正在定位章节与未完成编辑…</p>}{!loading&&!records.length&&<p className="empty-inline">没有未保存的暂存。</p>}
-    {records.map(({id,entry})=>{const target=targetFor(id,entry);return <article className="issue-card" key={entry.key}><h3>{target.label}</h3><Status kind={entry.status==='active'?'warning':'neutral'}>{entry.status==='active'?'其他页面正在编辑':entry.status==='orphan'?'关闭页面遗留':'本页暂存'}</Status><details><summary>查看暂存内容</summary><pre className="draft-preview">{JSON.stringify(entry.data?.draft,null,2)}</pre></details>{entry.error&&<p className="error-inline">{entry.error}</p>}{!loading&&target.kind==='unknown'&&<p className="hint">对应对象已不在当前资料中，或暂存格式尚不支持定位。原内容仍保留，可查看并复制。</p>}<div className="button-row">
+    {records.map(({id,entry})=>{const target=targetFor(id,entry);return <article className="issue-card" key={entry.key}><h3>{target.label}</h3><Status kind={entry.status==='active'?'warning':'neutral'}>{entry.status==='active'?'其他页面正在编辑':entry.status==='orphan'?'关闭页面遗留':'本页暂存'}</Status><DraftPreview value={entry.data?.draft}/>{entry.error&&<p className="error-inline">{entry.error}</p>}{!loading&&target.kind==='unknown'&&<p className="hint">对应对象已不在当前资料中，或暂存格式尚不支持定位。原内容仍保留，可查看并复制。</p>}<div className="button-row">
       {!entry.error&&<button className="button" disabled={pending||loading||entry.status==='active'||target.kind==='unknown'} onClick={()=>void(async()=>{setPending(true);setError('');try{if(entry.status==='orphan'){if(hasLiveDraft(id))throw new Error('本页还有未完成编辑或待确认保存，请先处理，不能覆盖。');await recoverDraft(id,entry);}await onRecovered(id,target);}catch(e){setError((e as Error).message);await reload();}finally{setPending(false);}})()}>{entry.status==='current'?'返回编辑':'恢复并返回编辑'}</button>}
       <button className="text-button" disabled={pending||entry.status==='active'} onClick={()=>void(async()=>{setPending(true);setError('');try{if(entry.status==='current'){if(!clearDraft(id,entry.raw,true))throw new Error('暂存已变化，请重新查看');}else await discardDraft(id,entry);await reload();}catch(e){setError((e as Error).message);}finally{setPending(false);}})()}>放弃这份暂存</button></div></article>;})}
     {error&&<p className="error-inline" role="alert">{error}</p>}
   </Dialog>;
 }
-export function GeneratePlan({plan,chapter,model,concurrency,unknown,routeBlocked,busy,invalidated=false,onGenerate,onRecheck,onEdit,onClose}:{plan:GenerationPlan;chapter:ChapterDetail;model?:string;concurrency?:import('react').ReactNode;unknown:boolean;routeBlocked:boolean;busy:boolean;invalidated?:boolean;onGenerate:(grantId?:string,decision?:{retryUnknown?:boolean;resumeRoute?:boolean})=>Promise<void>;onRecheck:()=>Promise<void>;onEdit:(id:string)=>void;onClose:()=>void}){
+export function GeneratePlan({plan,chapter,model,concurrency,unknown,routeBlocked,busy,invalidated=false,changes=[],onGenerate,onRecheck,onEdit,onClose}:{plan:GenerationPlan;chapter:ChapterDetail;model?:string;concurrency?:import('react').ReactNode;unknown:boolean;routeBlocked:boolean;busy:boolean;invalidated?:boolean;changes?:string[];onGenerate:(grantId?:string,decision?:{retryUnknown?:boolean;resumeRoute?:boolean})=>Promise<void>;onRecheck:()=>Promise<void>;onEdit:(id:string)=>void;onClose:()=>void}){
   const [invalid,setInvalid]=useState(invalidated),[pending,setPending]=useState(false),[error,setError]=useState(''),[updated,setUpdated]=useState(false);
   const execute=async(recheck:boolean)=>{
     if(pending||busy||!recheck&&invalid)return;
     setPending(true);setError('');
     try{if(recheck){await onRecheck();setInvalid(false);setUpdated(true);}else await onGenerate(undefined,{retryUnknown:unknown,resumeRoute:routeBlocked});}
-    catch(e){if((e as {status?:number}).status===409)setInvalid(true);else setError((e as Error).message);}
+    catch(e){if((e as {status?:number;retryClass?:string}).status===409&&(e as {retryClass?:string}).retryClass!=='check-existing-operation')setInvalid(true);else setError((e as Error).message);}
     finally{setPending(false);}
   };
   return <Dialog title="生成这次待办" presentation="sidepanel" onClose={onClose} footer={invalid
     ? <button className="button primary" disabled={busy||pending} onClick={()=>void execute(true)}>{pending?'正在重新核对…':'重新核对生成范围'}</button>
     : plan.audioRequests===0 ? <button className="button primary" disabled={busy||pending} onClick={onClose}>完成核对</button>
-    : <button className="button primary" disabled={busy||pending} onClick={()=>void execute(false)}>{pending?'正在提交…':unknown?`重新发送 ${plan.audioRequests} 次并继续${routeBlocked?'（同时恢复接口）':''}`:routeBlocked?`恢复接口并生成 ${plan.audioRequests} 个声音`:`开始生成 ${plan.audioRequests} 个声音`}</button>}>
-    {invalid&&<div className="task-outcome" role="alert"><h3>内容已变化，本次未发送</h3><p>先免费重新核对生成范围。更新后的范围会在这里展示，再由你决定开始生成。</p></div>}
-    {!invalid&&updated&&<p className="hint" role="status">已按当前内容重新核对，请查看下面的范围后再开始生成。</p>}
+    : <button className="button primary" disabled={busy||pending} onClick={()=>void execute(false)}>{pending?'正在提交…':unknown?`重新发送 ${plan.audioRequests} 次并继续${routeBlocked?'（同时恢复接口）':''}`:routeBlocked?`恢复接口并生成 ${plan.audioRequests} 个声音`:changes.length?`按更新范围生成 ${plan.audioRequests} 个声音`:`开始生成 ${plan.audioRequests} 个声音`}</button>}>
+    {invalid&&<div className="task-outcome" role="alert"><h3>内容已变化，本次未发送</h3><p>免费核对后，同一目标、模式、参考录音和请求数量内会继续；真实变化集中在这里决定。</p></div>}
+    {!invalid&&updated&&<p className="hint" role="status">已按当前内容重新核对；范围内会继续，变化时只需作出下面这一项决定。</p>}
+    {!invalid&&!!changes.length&&<div className="task-outcome" role="status"><h3>本次制作有具体变化</h3><ul>{changes.map((change,index)=><li key={index}>{change}</li>)}</ul><p>只提交下面列出的当前范围；关闭窗口不会发送。</p></div>}
     <p className="task-panel-summary">{invalid?'之前核对的范围：':'本次覆盖 '}{plan.memberIds.length} 条台词，其中 {plan.units.filter(u=>u.reuse).length} 个已有声音直接复用；实际发送 {plan.audioRequests} 次音频请求。</p>
     <div className="task-member-list">{plan.units.map(unit=><p key={unit.unitId}>{unit.members.length>1?'一起演绎':'单句'} · 第 {unit.members.map(id=>{const segment=chapter.segments.find(s=>s.id===id);return segment?segment.order+1:'已移除';}).join('、')} 条 · {unit.mode==='scene'?'声音背景':'纯人声'} · {unit.reuse?'复用已有声音':'生成新声音'}</p>)}</div>
     {!invalid&&plan.units.filter(unit=>!unit.reuse).map(unit=>{
@@ -226,7 +265,7 @@ export function GeneratePlan({plan,chapter,model,concurrency,unknown,routeBlocke
     })}
     {!invalid&&plan.audioRequests>0&&<>
       {concurrency}
-      <p className="hint">点击开始即使用 {model||'当前声音模型'}，发送所列正文、表演指导及已选参考录音；仅生成以上范围。</p>
+      <p className="hint">点击开始即使用 {plan.model||model||'当前声音模型'}，发送所列正文、表演指导及已选参考录音；仅生成以上范围。</p>
       {unknown&&<p className="warning">上次结果不明，可能已计费。本次将发送上列 {plan.audioRequests} 次请求，可能重复计费；点击“重新发送并继续”作出这次具体决定。关闭窗口不会发送。</p>}
       {routeBlocked&&<p className="warning">接口曾因权限或额度问题暂停。请先确认服务已恢复；点击下方明确的恢复操作后，才继续上列请求。</p>}
     </>}

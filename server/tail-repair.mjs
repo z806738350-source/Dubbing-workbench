@@ -5,6 +5,7 @@ import { projectFile } from './workspace.mjs';
 import { analyzeTail, trimTail, TAIL_PROCESSING_VERSION } from './tail-audio.mjs';
 import { audioDigest } from './audio-delivery.mjs';
 import { inspect } from './audio.mjs';
+import { reserveDiskSpace } from './disk-space.mjs';
 
 // The online adapter supplies an already previewed, exact unit; the offline
 // maintenance command uses the same file/transaction path for every current unit.
@@ -33,8 +34,9 @@ export async function repairTailUnit(store, domain, chapterId, unitId, { expecte
   detail.reason = analysis.reason;
   if (!analysis.detected) return detail;
   const id = uid(), path = projectFile(store, chapter.id, 'audio', `${id}.wav`), file = join(store.directory, path);
-  await mkdir(dirname(file), { recursive: true });
+  const lease=reserveDiskSpace(store.directory,44+analysis.cutFrame*analysis.channels*2,'尾部清理');
   try {
+    await mkdir(dirname(file), { recursive: true });
     await trimTail(join(store.directory, source.path), file, analysis);
     const metadata = await inspect(file), resultDigest = await audioDigest(file);
     if ((await audioDigest(sourceFile)).sha256 !== sourceDigest.sha256) fail('原音频在清理期间变化，未替换声音', 409);
@@ -57,7 +59,7 @@ export async function repairTailUnit(store, domain, chapterId, unitId, { expecte
   } catch (error) {
     await rm(file, { force: true });
     throw error;
-  }
+  } finally { lease.release(); }
   return { ...detail, changed: true, audioId: id, removedSeconds: analysis.removedSeconds };
 }
 

@@ -15,9 +15,11 @@ const scrollEffect=effect('currentSegment,follow,filter,search'),mediaEffect=eff
 const startPlay=find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file)==='startPlay').initializer;
 const beginPlayback=find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file)==='beginPlayback').initializer;
 const finishPlayback=find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file)==='finishPlayback').initializer;
+const chapterPlaybackSnapshot=project(find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file)==='chapterPlaybackSnapshot').initializer,{});
 const readyPoint=find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file)==='point').initializer;
 const list=find(node=>ts.isJsxOpeningElement(node)&&node.tagName.getText(file)==='div'&&attribute(node,'className')?.initializer?.text==='script-list');
 const followButton=find(node=>ts.isJsxElement(node)&&node.openingElement.tagName.getText(file)==='button'&&attribute(node.openingElement,'aria-pressed')?.initializer?.expression?.getText(file)==='follow');
+const playbackButton=find(node=>ts.isJsxOpeningElement(node)&&node.tagName.getText(file)==='button'&&attribute(node,'className')?.initializer?.text==='play-button');
 const React={createElement:(type,props,...children)=>({type,props:{...props,children}})};
 const text=node=>node==null||typeof node==='boolean'?'':typeof node!=='object'?String(node):(node.props.children||[]).flat(Infinity).map(text).join('');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
@@ -36,13 +38,14 @@ function fixture(){
     const row={offsetTop,offsetHeight:80,parentElement:scriptList,scrollIntoView:options=>calls.otherScroll.push(['scrollIntoView',options])};
     row.getBoundingClientRect=()=>({top:100+row.offsetTop-scriptList.scrollTop});rows.set('segment-'+id,row);
   }
-  const chapter={id:'chapter',title:'隔离播放夹具',revision:1,arrangement:1,playbackItems:[],units:[],masters:[master]};
-  const state={jobs:[],chapters:[{id:chapter.id,revision:chapter.revision,arrangement:chapter.arrangement}]};
-  const env={React,useCallback:fn=>fn,Link2:'Link2',master,chapter,chapterId:chapter.id,chapterRef:{current:chapter.id},connectionReady:true,playPreparing:false,playbackPreparation:{current:null},rangeResume:{current:null},
+  const chapter={id:'chapter',title:'隔离播放夹具',workspaceIdentity:'workspace',revision:1,arrangement:1,segments:[],playbackItems:[],units:[],masters:[master]};
+  const state={settings:{workspaceIdentity:'workspace'},jobs:[],chapters:[{id:chapter.id,revision:chapter.revision,arrangement:chapter.arrangement}]};
+  const env={React,chapterPlaybackSnapshot,useCallback:fn=>fn,Link2:'Link2',master,chapter,chapterId:chapter.id,chapterRef:{current:chapter.id},connectionReady:true,playPreparing:false,playbackPreparation:{current:null},pendingPlaybackRead:{current:null},rangeResume:{current:null},
     player:{kind:'masters',id:master.id,title:chapter.title,master,chapterId:chapter.id,arrangement:chapter.arrangement,playbackItems:chapter.playbackItems,intent:1},playerRef:{current:null},playIntent:{current:1},
     follow:true,playing:true,currentSegment:'',currentMembers:[],currentHidden:false,filter:'all',search:'',bookmarks:{current:{}},chapterPlaybackSnapshots:{current:{}},
     pendingPlay:{current:null},pendingPlaySnapshot:{current:null},playbackIdentity:items=>JSON.stringify(items),active:()=>false,refresh:async()=>{},
-    stateRef:{current:state},api:async path=>path==='/state'?state:chapter,
+    stateRef:{current:state},api:async path=>path==='/state'?state:path.endsWith('/playback-status')?{chapterId:chapter.id,workspaceIdentity:'workspace',revision:chapter.revision,arrangement:chapter.arrangement,renderRevision:0,renderSignature:null,activeJobs:[]}:chapter,
+    applyChapter:value=>{env.chapter=value;},setChapter:value=>{env.chapter=value;},
     document:{getElementById:id=>rows.get(id),body:frame,documentElement:frame},window:{scrollTo:options=>calls.otherScroll.push(['window',options])},listRef:{current:scriptList},
     audio:{current:{src:'',currentTime:0,duration:10,readyState:4,paused:true,ended:false,getAttribute(name){return name==='src'?this.src||null:null;},load(){calls.loads++;this.currentTime=0;this.readyState=0;},play(){calls.plays++;this.paused=false;this.ended=false;this.readyState=4;return Promise.resolve();},pause(){calls.pauses++;this.paused=true;}}},
     setPlayer:value=>{calls.players.push(value);env.player=value;env.playerRef.current=value;},
@@ -51,9 +54,19 @@ function fixture(){
   scriptList.scrollTo=options=>{calls.scroll.push({id:env.currentSegment,options});scriptList.scrollTop=Math.max(0,options.top);};
   for(const [setter,key] of [['setFollow','follow'],['setPlaying','playing'],['setPlayPreparing','playPreparing'],['setCurrentSegment','currentSegment'],['setCurrentMembers','currentMembers'],['setTransitioning','transitioning'],['setPosition','position'],['setFilter','filter'],['setSearch','search']])env[setter]=value=>{calls.writes.push([setter,value]);env[key]=value;};
   env.beginPlayback=project(beginPlayback,env);env.finishPlayback=project(finishPlayback,env);
+  env.draftWorkspace=()=> 'workspace';env.readPlaybackChapter=(...args)=>project(find(node=>ts.isVariableDeclaration(node)&&node.name.getText(file)==='readPlaybackChapter').initializer,env)(...args);env.acceptPlaybackChapter=context=>{env.chapter=context.chapter;return true;};
   env.playerRef.current=env.player;
   return {env,calls,rows,time:t=>{env.audio.current.currentTime=t;project(timeUpdate,env)();},scroll:()=>{project(scrollEffect,env)();assert.deepEqual(calls.otherScroll,[],'只能滚动剧本列表，不能滚动页面或祖先容器');assert.equal(frame.scrollTop,26);},mount:()=>project(mediaEffect,env)(),start:(...args)=>project(startPlay,env)(...args),button:()=>project(followButton,env),input:(name,event)=>project(attribute(list,name).initializer.expression,env)(event)};
 }
+test('播放键读取媒体即时状态，快速暂停后React状态未更新也能一次续播',()=>{
+  const f=fixture(),resumes=[];Object.assign(f.env,{startPlay:(...args)=>resumes.push(args),playChapter:()=>assert.fail('已有播放器不能重启整章')});
+  f.env.audio.current.paused=false;f.env.playing=false;
+  project(attribute(playbackButton,'onClick').initializer.expression,f.env)();
+  assert.equal(f.env.audio.current.paused,true);assert.equal(f.calls.pauses,1);assert.equal(resumes.length,0);
+  f.env.playing=true;
+  project(attribute(playbackButton,'onClick').initializer.expression,f.env)();
+  assert.equal(resumes.length,1);assert.equal(resumes[0][1],master.id);assert.equal(f.calls.pauses,1);
+});
 
 test('真实时间轴按memberIds定位单句和组，间隙书签进入下一单元且后续单句清组高亮',()=>{
   const f=fixture();f.time(.5);assert.equal(f.env.currentSegment,'single');assert.deepEqual(f.env.currentMembers,[]);f.scroll();

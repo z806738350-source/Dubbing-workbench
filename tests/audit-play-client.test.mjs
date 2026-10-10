@@ -7,11 +7,13 @@ const source=readFileSync(new URL('../src/App.tsx',import.meta.url),'utf8');
 const file=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 function callback(name,env){let found;function visit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(file)===name)found=node.initializer;ts.forEachChild(node,visit);}visit(file);assert.ok(found);const code=ts.transpileModule('const projected=('+found.getText(file)+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;return new Function(...Object.keys(env),code+';return projected;')(...Object.values(env));}
 const defer=()=>{let resolve;return {promise:new Promise(r=>resolve=r),resolve:value=>resolve(value)}};
-const chapter={id:'chapter',title:'夹具',revision:1,arrangement:1,playbackItems:[],units:[],masters:[{id:'A',arrangement:1,renderSignature:null,sampleRate:48000,mapping:[]}]};
-const state={jobs:[],chapters:[{id:chapter.id,revision:chapter.revision,arrangement:chapter.arrangement}]};
+const chapter={id:'chapter',title:'夹具',workspaceIdentity:'workspace',revision:1,arrangement:1,segments:[],playbackItems:[],units:[],masters:[{id:'A',arrangement:1,renderSignature:null,sampleRate:48000,mapping:[]}]};
+const state={settings:{workspaceIdentity:'workspace'},jobs:[],chapters:[{id:chapter.id,revision:chapter.revision,arrangement:chapter.arrangement}]};
+const playbackStatus=(detail=chapter,changes={})=>({chapterId:detail.id,workspaceIdentity:detail.workspaceIdentity||'workspace',revision:detail.revision,arrangement:detail.arrangement,renderRevision:detail.renderRevision||0,renderSignature:detail.renderSignature??null,activeJobs:[],...changes});
 function fixture(){
-  const players=[],errors=[],env={useCallback:fn=>fn,playIntent:{current:0},playbackPreparation:{current:null},rangeResume:{current:null},pendingPlay:{current:null},pendingPlaySnapshot:{current:null},connectionReady:true,chapter,chapterId:'chapter',chapterRef:{current:'chapter'},stateRef:{current:state},api:async path=>path==='/state'?state:chapter,active:()=>false,refresh:async()=>{},playerRef:{current:null},audio:{current:{pause(){},paused:true,ended:false,currentTime:0,duration:45,readyState:4,play:async()=>{}}},bookmarks:{current:{}},playbackIdentity:items=>JSON.stringify(items),setError:e=>errors.push(e),setNotice(){},setPosition(){},setDuration(){},setTransitioning(){},setPlaying(){},setPlayPreparing:value=>{env.playPreparing=value;},setChapter:c=>{env.chapter=c;},setPlayer:p=>{players.push(p);env.playerRef.current=p;}};
+  const players=[],errors=[],env={useCallback:fn=>fn,playIntent:{current:0},playbackPreparation:{current:null},pendingPlaybackRead:{current:null},rangeResume:{current:null},pendingPlay:{current:null},pendingPlaySnapshot:{current:null},connectionReady:true,connectionMessage:'本机连接不可用',chapter,chapterId:'chapter',chapterRef:{current:'chapter'},stateRef:{current:state},api:async path=>path==='/state'?state:path.endsWith('/playback-status')?playbackStatus():chapter,active:()=>false,refresh:async()=>{},playerRef:{current:null},audio:{current:{pause(){},paused:true,ended:false,currentTime:0,duration:45,readyState:4,play:async()=>{}}},bookmarks:{current:{}},playbackIdentity:items=>JSON.stringify(items),setError:e=>errors.push(e),setNotice(){},setPosition(){},setDuration(){},setTransitioning(){},setPlaying(){},setPendingPlaybackTarget(){},setPlayPreparing:value=>{env.playPreparing=value;},setChapter:c=>{env.chapter=c;},setPlayer:p=>{players.push(p);env.playerRef.current=p;}};
   env.beginPlayback=callback('beginPlayback',env);env.finishPlayback=callback('finishPlayback',env);
+  env.draftWorkspace=()=>env.workspace||'workspace';env.readPlaybackChapter=(...args)=>callback('readPlaybackChapter',env)(...args);env.acceptPlaybackChapter=context=>{env.chapter=context.chapter;return true;};env.rememberPlaybackJob=()=>{};
   return {env,players,errors,start:()=>callback('startPlay',env)};
 }
 test('实际播放回调：慢A不能抢回后选B或参考的播放意图',async()=>{for(const kind of ['audios','voices']){const f=fixture(),read=defer();f.env.api=async path=>path==='/state'?state:read.promise;const a=f.start()('audios','A','A');await f.start()(kind,'B','B',undefined,true);read.resolve(chapter);await a;assert.deepEqual(f.players.map(p=>p.id),['B']);}});
@@ -83,12 +85,12 @@ test('慢整章续播：同一来源连续点三次只核验一次并保留原37
   const master={id:'A',sampleRate:48000,mapping:[]};
   f.env.playerRef.current={kind:'masters',id:'A',title:'整章',chapterId:chapter.id,arrangement:1,playbackItems:chapter.playbackItems,master};
   f.env.audio.current.currentTime=37.5;
-  f.env.api=async path=>{if(path==='/state'){stateReads++;return state;}chapterReads++;return read.promise;};
+  let statusReads=0;f.env.api=async path=>{if(path==='/state'){stateReads++;return state;}if(path.endsWith('/playback-status')){statusReads++;return playbackStatus();}chapterReads++;return read.promise;};
   const first=f.start()('masters','A','整章');
   await f.start()('masters','A','整章');await f.start()('masters','A','整章');
-  assert.equal(chapterReads,1);assert.equal(stateReads,0);assert.equal(f.env.playIntent.current,1);
+  assert.equal(chapterReads,1);assert.equal(statusReads,0);assert.equal(stateReads,0);assert.equal(f.env.playIntent.current,1);
   read.resolve(chapter);await first;
-  assert.equal(stateReads,1);assert.equal(f.players.length,1);assert.equal(f.players[0].resumeAt,37.5);assert.equal(f.players[0].master,master);
+  assert.equal(stateReads,0);assert.equal(statusReads,1);assert.equal(f.players.length,1);assert.equal(f.players[0].resumeAt,37.5);assert.equal(f.players[0].master,master);
 });
 
 test('续播媒体尚未加载metadata时，临时currentTime为0不覆盖已记录的37.5秒',async()=>{
@@ -130,7 +132,7 @@ test('正式新母版handoff可跨React旧章revision，非当前母版与普通
     ['普通声音保留旧章保护',currentMaster,'audios',undefined,false],
   ]){
     const f=fixture();f.env.bookmarks.current.chapter='one';
-    f.env.api=async path=>path==='/state'?{...state,chapters:[{...state.chapters[0],revision:2,arrangement:2,renderRevision:latestRenderRevision}]}:{...fresh,masters:[registered]};
+    f.env.api=async path=>path==='/state'?{...state,chapters:[{...state.chapters[0],revision:2,arrangement:2,renderRevision:latestRenderRevision}]}:path.endsWith('/playback-status')?playbackStatus(fresh,{renderRevision:latestRenderRevision}):{...fresh,masters:[registered]};
     await f.start()(kind,kind==='masters'?currentMaster.id:'new-audio',label,provided);
     if(accepted){
       assert.equal(f.players.at(-1)?.id,currentMaster.id,label);assert.equal(f.players.at(-1)?.arrangement,2);assert.equal(f.players.at(-1)?.master,currentMaster);assert.equal(f.players.at(-1)?.resumeAt,2);assert.deepEqual(f.errors,[]);
@@ -140,16 +142,36 @@ test('正式新母版handoff可跨React旧章revision，非当前母版与普通
   }
 });
 
+test('保存屏障后的整章handoff复用已读章节，只取一次详情；随后版本/范围/任务变化仍拒绝',async()=>{
+  for(const changed of ['none','revision','range','job']){
+    const f=fixture(),reads=[];f.env.active=status=>['queued','running'].includes(status);
+    Object.assign(f.env,{run:work=>work(),withSavedDrafts:(_scope,_ids,work)=>work(),flushAudioRanges:async()=>{},startPlay:(...args)=>f.start()(...args)});
+    f.env.api=async path=>{reads.push(path);assert.ok(path==='/chapters/chapter/playback-status'||path==='/chapters/chapter','不会读取全工作区、提交任务或调用模型');return path.endsWith('/playback-status')?playbackStatus(chapter,{revision:changed==='revision'?2:1,renderRevision:changed==='range'?1:0,activeJobs:changed==='job'?[{id:'busy',chapterId:'chapter',status:'running'}]:[]}):chapter;};
+    await callback('playChapter',f.env)();assert.deepEqual(reads,['/chapters/chapter','/chapters/chapter/playback-status']);
+    if(changed==='none'){assert.equal(f.players.at(-1)?.id,'A');assert.deepEqual(f.errors,[]);}
+    else{assert.ok(f.players.every(player=>player===null),changed);assert.match(f.errors[0],/版本或任务状态已变化/,changed);assert.equal(f.env.playbackPreparation.current,null);}
+  }
+});
+
+test('跨章节的handoff上下文不复用，普通声音仍读取实际章节核验',async()=>{
+  for(const kind of ['masters','audios']){
+    const f=fixture(),reads=[];f.env.api=async path=>{reads.push(path);return path==='/state'?state:path.endsWith('/playback-status')?playbackStatus():chapter;};
+    await f.start()(kind,'A','声音',kind==='masters'?chapter.masters[0]:undefined,false,undefined,undefined,{...chapter,id:'other-chapter'});
+    assert.deepEqual(reads,['/chapters/chapter',kind==='masters'?'/chapters/chapter/playback-status':'/state']);assert.equal(f.players.at(-1)?.id,'A');
+  }
+});
+
 test('重生成后暂停旧母版的一次续播转交当前整章，已有新母版或需要本机准备均不要求再点',async()=>{
   for(const prepared of [false,true])for(const rendered of [false,true]){
     const f=fixture(),master={id:'new-master',arrangement:2,sampleRate:48000,mapping:[{unitId:'two',startFrame:240000}]};
     const fresh={...chapter,revision:2,arrangement:2,playbackItems:[{id:'two',unitId:'two',audioId:'new-audio',validity:'matched'}],masters:prepared?[master]:[]};
     let jobs=0;
+    f.env.bookmarks.current.chapter='two';
     f.env.playerRef.current={kind:'masters',id:'A',chapterId:'chapter',arrangement:1,playbackItems:[],master:chapter.masters[0]};
     if(rendered)f.env.chapter=fresh;
     Object.assign(f.env,{flushAudioRanges:async()=>{},crypto:{randomUUID:()=> 'new-master-command'},run:fn=>fn(),withSavedDrafts:(_key,_target,fn)=>fn(),
       refresh:async()=>{f.env.chapter=fresh;f.env.bookmarks.current.chapter='two';},
-      api:async(path,body)=>{if(body){jobs++;assert.equal(body.kind,'master');return {id:'local-job'};}return path==='/state'?{jobs:[],chapters:[{id:'chapter',revision:2,arrangement:2}]}:fresh;},
+      api:async(path,body)=>{if(body){jobs++;assert.equal(body.kind,'master');return {id:'local-job'};}return path==='/state'?{jobs:[],chapters:[{id:'chapter',revision:2,arrangement:2}]}:path.endsWith('/playback-status')?playbackStatus(fresh):fresh;},
       playChapter:intent=>callback('playChapter',f.env)(intent),startPlay:(...args)=>f.start()(...args)});
     await f.start()('masters','A','旧整章');
     assert.deepEqual(f.errors,[]);assert.equal(f.env.playIntent.current,1);assert.equal(jobs,prepared?0:1);
@@ -161,12 +183,41 @@ test('重生成后暂停旧母版的一次续播转交当前整章，已有新�
 
 test('重生成续播仍拒绝正在变化的版本，等待期间切章或换播放意图不继续交接',async()=>{
   for(const cancel of ['superseded','running','chapter','intent']){
-    const f=fixture(),fresh={...chapter,revision:2,arrangement:2,playbackItems:[{validity:'matched'}],masters:[]};let handoffs=0;
+    const f=fixture(),fresh={...chapter,revision:2,arrangement:2,playbackItems:[{validity:'matched'}],masters:[]},read=defer();let handoffs=0;
     f.env.playerRef.current={kind:'masters',id:'A',chapterId:'chapter',arrangement:1,playbackItems:[],master:chapter.masters[0]};
     f.env.active=status=>status==='running';
-    f.env.api=async path=>path==='/state'?{jobs:cancel==='running'?[{chapterId:'chapter',status:'running'}]:[],chapters:[{id:'chapter',revision:cancel==='superseded'?3:2,arrangement:2}]}:fresh;
-    f.env.refresh=async()=>{if(cancel==='chapter')f.env.chapterRef.current='other';if(cancel==='intent')f.env.playIntent.current++;};
+    f.env.api=async path=>path==='/state'?{jobs:cancel==='running'?[{chapterId:'chapter',status:'running'}]:[],chapters:[{id:'chapter',revision:cancel==='superseded'?3:2,arrangement:2}]}:path.endsWith('/playback-status')?playbackStatus(fresh,{revision:cancel==='superseded'?3:2,activeJobs:cancel==='running'?[{id:'busy',chapterId:'chapter',status:'running'}]:[]}):['chapter','intent'].includes(cancel)?read.promise:fresh;
     f.env.playChapter=async()=>{handoffs++;};
-    await f.start()('masters','A','旧整章');assert.equal(handoffs,0,cancel);assert.ok(f.players.every(player=>player===null),cancel);
+    const pending=f.start()('masters','A','旧整章');if(['chapter','intent'].includes(cancel)){await new Promise(resolve=>setImmediate(resolve));if(cancel==='chapter')f.env.chapterRef.current='other';else f.env.playIntent.current++;read.resolve(fresh);}await pending;assert.equal(handoffs,0,cancel);assert.ok(f.players.every(player=>player===null),cancel);
   }
+});
+
+test('整章定向状态仍拒绝断线、错章/工作区、版本/范围/签名变化与活动任务，不读取全工作区',async()=>{
+  for(const changed of ['disconnected','read-failed','chapter','workspace','revision','arrangement','range','signature','job','wrong-job-scope','observed-revision']) {
+    const f=fixture(),reads=[];let refreshed=0;f.env.refresh=async()=>{refreshed++;};f.env.active=value=>['queued','running'].includes(value);
+    if(changed==='disconnected')f.env.connectionReady=false;
+    if(changed==='observed-revision')f.env.stateRef.current={...state,chapters:[{...state.chapters[0],revision:2}]};
+    f.env.api=async path=>{
+      reads.push(path);assert.notEqual(path,'/state','master不能为了核验读取全工作区');if(!path.endsWith('/playback-status'))return chapter;
+      if(changed==='read-failed')throw Error('定向核验断线');
+      return playbackStatus(chapter,{chapterId:changed==='chapter'?'other':chapter.id,workspaceIdentity:changed==='workspace'?'other':'workspace',revision:changed==='revision'?2:1,arrangement:changed==='arrangement'?2:1,renderRevision:changed==='range'?1:0,renderSignature:changed==='signature'?'changed':null,activeJobs:['job','wrong-job-scope'].includes(changed)?[{id:'busy',chapterId:changed==='wrong-job-scope'?'other':chapter.id,status:'running'}]:[]});
+    };
+    await f.start()('masters','A','整章',chapter.masters[0]);assert.ok(f.players.every(player=>player===null),changed);assert.equal(f.env.playbackPreparation.current,null,changed);assert.ok(f.errors.length>0,changed);assert.equal(refreshed,changed==='disconnected'?0:1,changed);assert.deepEqual(reads,changed==='disconnected'?[]:['/chapters/chapter','/chapters/chapter/playback-status'],changed);
+  }
+});
+
+test('章节读完前取消整章意图或换工作区，不再发第二次状态GET，也不播放迟到结果',async()=>{
+  for(const changed of ['intent','workspace','chapter']) {
+    const f=fixture(),read=defer(),reads=[];f.env.api=async path=>{reads.push(path);assert.equal(path,'/chapters/chapter');return read.promise;};
+    const pending=f.start()('masters','A','整章',chapter.masters[0]);await new Promise(resolve=>setImmediate(resolve));if(changed==='intent')f.env.playIntent.current++;else if(changed==='workspace')f.env.workspace='other';else f.env.chapterRef.current='other';read.resolve(chapter);await pending;
+    assert.deepEqual(reads,['/chapters/chapter']);assert.deepEqual(f.players,[]);assert.deepEqual(f.errors,[]);
+  }
+});
+
+test('定向状态等待期间观察到更晚版本，不用迟到章快照回滚；先核对章的handoff只读取状态',async()=>{
+  const f=fixture(),read=defer(),reads=[];let refreshed=0;f.env.refresh=async()=>{refreshed++;};
+  f.env.api=async path=>{reads.push(path);return path.endsWith('/playback-status')?read.promise:chapter;};const pending=f.start()('masters','A','整章',chapter.masters[0]);await new Promise(resolve=>setImmediate(resolve));f.env.stateRef.current={...state,chapters:[{...state.chapters[0],renderRevision:1}]};read.resolve(playbackStatus());await pending;
+  assert.ok(f.players.every(player=>player===null));assert.equal(refreshed,1);assert.match(f.errors[0],/版本或任务状态已变化/);
+  const checked=fixture(),checkedReads=[];checked.env.api=async path=>{checkedReads.push(path);assert.equal(path,'/chapters/chapter/playback-status');return playbackStatus();};
+  await checked.start()('masters','A','整章',chapter.masters[0],false,undefined,undefined,chapter);assert.deepEqual(checkedReads,['/chapters/chapter/playback-status']);assert.equal(checked.players.at(-1).id,'A');
 });

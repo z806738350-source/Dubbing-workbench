@@ -4,6 +4,7 @@ import { api } from "./api";
 import { Field, Form, Select } from "./components";
 import { submitOperation } from "./taskOperations";
 import { draftScopeRevision, withSavedDrafts } from "./autosave";
+import { FidelitySummary } from "./WorkspaceExperience";
 import type { ChapterDetail, ExperiencePolicy, ExperienceState, Job, PerformanceCoverage, PerformanceReceipt, Role } from "./types";
 interface TextPlan { chapterId:string;revision:number;kind:string;memberIds:string[];textRequests:number;repairRequests?:number;maxTextRequests?:number }
 interface DraftItem {
@@ -195,6 +196,7 @@ export default function AnalysisDialog({
   const affectedPendingCount=draft?.performanceReceipt?.affectedUnitIds?.filter(id=>!chapter.playbackItems?.some(item=>(item.unitId||item.id)===id&&item.validity==="matched")).length||0;
   return (
     <section className="analysis-panel" aria-label="AI 剧本整理">
+      <FidelitySummary audit={chapter.fidelity}/>
       <div className="analysis-prepare">
         <h3>{performanceMode==="initial"?"AI 整理这一章":"逐段表演指导"}</h3>
         <p className="hint">{performanceMode==="initial"?"同时分段并安排表演，保留原文和已有人工指导。":includeHumanPerformance?"只重写所选台词的表演指导，包含人工内容；原值可查看与撤销，正文、角色和声音不变。":performanceMode==="fillMissing"?"补齐有效台词的缺失指导，保留已有指导；不重新分段或生成音频。":"重新安排所选台词的 AI 表演指导，保留人工内容；不修改正文或生成音频。"}</p>
